@@ -1,0 +1,1482 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SecurePark — Campus Gate & Vehicle Administration</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+  
+  <script>
+    // Suppress Tailwind CDN non-production console warning
+    const _origWarn = console.warn;
+    console.warn = function(...args) {
+      if (args[0] && typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com should not be used in production')) return;
+      _origWarn.apply(console, args);
+    };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="js/chart.min.js"></script>
+  <script src="js/aes.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ncst: {
+              navy: '#1B3676',       /* Academic Navy from badge NCST text & quadrants */
+              navyDark: '#112552',   /* Deep Shadow Navy */
+              navyLight: '#264EA8',  /* Vivid Royal Blue */
+              gold: '#F5B800',       /* Academic Gold from badge header, gear & ribbon */
+              goldDark: '#D49B00',   /* Rich Gold Border */
+              goldLight: '#FEF08A',  /* Soft Gold Tint */
+              crimson: '#D62828',    /* Academic Red from atom, lightning & torch */
+              crimsonLight: '#FEE2E2',
+              green: '#16A34A',
+              greenLight: '#DCFCE7',
+              slate50: '#F8FAFC',
+              slate100: '#F1F5F9',
+              slate200: '#E2E8F0',
+              slate300: '#CBD5E1',
+              slate400: '#94A3B8',
+              slate600: '#475569',
+              slate700: '#334155',
+              slate800: '#1E293B',
+              slate900: '#0F172A',
+            }
+          },
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .view-panel { display: none; }
+    .view-panel.active { display: block; }
+    
+    /* Smooth Sidebar Hide/Show Transition */
+    #appSidebar {
+      transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+    }
+    #appSidebar.collapsed {
+      margin-left: -16rem; /* Fully hides 64 width */
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Print: Only output the official NCST QR Decal (Navy Top Banner + Centered QR Code) */
+    @media print {
+      body * { visibility: hidden !important; }
+      #officialPrintDecal, #officialPrintDecal * { visibility: visible !important; }
+      #officialPrintDecal {
+        display: block !important;
+        position: fixed !important;
+        left: 50% !important;
+        top: 30px !important;
+        transform: translateX(-50%) !important;
+        width: 380px !important;
+        max-width: 90vw !important;
+        border: 2px solid #1B3676 !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        background: #ffffff !important;
+        box-shadow: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        text-align: center !important;
+      }
+      .official-print-header {
+        background-color: #1B3676 !important;
+        color: #ffffff !important;
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+        font-weight: 800 !important;
+        font-size: 13px !important;
+        text-align: center !important;
+        padding: 12px 14px !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        border-bottom: 2px solid #F5B800 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      .official-print-body {
+        padding: 24px 20px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: #ffffff !important;
+      }
+      #officialPrintQrContainer {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 260px !important;
+        height: 260px !important;
+        margin: 0 auto !important;
+      }
+      #officialPrintQrContainer img,
+      #officialPrintQrContainer canvas {
+        width: 260px !important;
+        height: 260px !important;
+        display: block !important;
+        margin: 0 auto !important;
+      }
+    }
+  </style>
+</head>
+<body class="h-full font-sans text-slate-900 antialiased bg-slate-50 overflow-x-hidden">
+
+  <div class="flex h-full min-h-screen">
+    
+    <!-- ==================== SIDEBAR (WHITE THEME, COLLAPSIBLE) ==================== -->
+    <aside id="appSidebar" class="w-64 flex-shrink-0 bg-white text-slate-800 flex flex-col border-r border-slate-200 select-none relative z-30 shadow-xs">
+      
+      <!-- Institutional Branding Header with Collapse Button -->
+      <div class="p-3.5 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <!-- Official NCST Crest SVG -->
+          <div class="w-9 h-10 flex-shrink-0 flex items-center justify-center">
+            <svg class="w-9 h-10 flex-shrink-0" viewBox="0 0 100 115" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="18" y="2" width="64" height="18" rx="2" fill="#F5B800" stroke="#1B3676" stroke-width="2"/>
+              <text x="50" y="16" font-family="'Plus Jakarta Sans', sans-serif" font-weight="900" font-size="14" fill="#1B3676" text-anchor="middle">NCST</text>
+              <path d="M18 22 H82 V66 C82 92 50 104 50 104 C50 104 18 92 18 66 Z" fill="#FFFFFF" stroke="#1B3676" stroke-width="2"/>
+              <rect x="20" y="24" width="29" height="34" fill="#F5B800"/>
+              <ellipse cx="34.5" cy="41" rx="10" ry="4" transform="rotate(-30 34.5 41)" stroke="#D62828" stroke-width="1.3" fill="none"/>
+              <ellipse cx="34.5" cy="41" rx="10" ry="4" transform="rotate(30 34.5 41)" stroke="#D62828" stroke-width="1.3" fill="none"/>
+              <circle cx="34.5" cy="41" r="2.5" fill="#D62828"/>
+              <rect x="51" y="24" width="29" height="34" fill="#1B3676"/>
+              <circle cx="65.5" cy="41" r="8" fill="#F5B800"/>
+              <circle cx="65.5" cy="41" r="4.5" fill="#1B3676"/>
+              <polygon points="65,34 68,40 66,41 68,48 63,42 65,41" fill="#D62828"/>
+              <path d="M20 60 H49 V86 C40 82 28 75 20 68 Z" fill="#1B3676"/>
+              <rect x="28" y="65" width="13" height="9" rx="1" fill="#FFFFFF"/>
+              <rect x="26" y="77" width="17" height="3.5" rx="0.5" fill="#FFFFFF"/>
+              <path d="M51 60 H80 V68 C72 75 60 82 51 86 Z" fill="#F5B800"/>
+              <path d="M56 73 Q65 71 75 73 V79 Q65 77 56 79 Z" fill="#FFFFFF"/>
+              <path d="M65.5 64 V74" stroke="#D62828" stroke-width="1.5"/>
+              <circle cx="65.5" cy="62" r="2" fill="#D62828"/>
+              <line x1="18" y1="59" x2="82" y2="59" stroke="#FFFFFF" stroke-width="2.5"/>
+              <line x1="50" y1="22" x2="50" y2="98" stroke="#FFFFFF" stroke-width="2.5"/>
+              <path d="M12 94 Q50 114 88 94 L84 88 Q50 106 16 88 Z" fill="#F5B800" stroke="#1B3676" stroke-width="1.2"/>
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <div class="text-xs font-bold text-ncst-navy leading-tight">SecurePark</div>
+            <div class="text-[10px] text-slate-500 font-medium">Campus Gate Admin</div>
+          </div>
+        </div>
+        
+        <!-- Collapse Button to Hide Sidebar -->
+        <button type="button" id="sidebarCollapseBtn" class="p-1.5 rounded-md text-slate-400 hover:text-ncst-navy hover:bg-slate-100 transition-colors cursor-pointer flex items-center justify-center flex-shrink-0" title="Hide Sidebar">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="11 17 6 12 11 7"></polyline>
+            <polyline points="18 17 13 12 18 7"></polyline>
+          </svg>
+        </button>
+      </div>
+
+      <!-- User Officer Profile Card -->
+      <div class="p-3 bg-slate-50/80 border-b border-slate-200">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-full bg-ncst-navy text-ncst-gold font-bold text-xs flex items-center justify-center border border-ncst-gold/40 shadow-2xs flex-shrink-0">
+            RM
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-bold text-slate-800 truncate">Roberto Mendoza</div>
+            <div class="text-[10px] text-slate-500 truncate flex items-center gap-1.5 font-medium">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span>Gate Officer • Main</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grouped Navigation Menu (White Sidebar Theme) -->
+      <nav class="flex-1 p-3 space-y-4 overflow-y-auto">
+        
+        <!-- Group: Overview -->
+        <div>
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Overview
+          </div>
+          <button type="button" id="navDashboardBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-ncst-navy bg-blue-50/80 border-l-4 border-ncst-navy shadow-2xs transition-colors text-left cursor-pointer">
+            <svg class="w-4 h-4 text-ncst-navy flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+            </svg>
+            <span>Dashboard</span>
+          </button>
+        </div>
+
+        <!-- Group: Vehicle Management -->
+        <div>
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Vehicle Management
+          </div>
+          <div class="space-y-1">
+            <button type="button" id="navVehiclesBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"/>
+                <circle cx="7" cy="17" r="2"/>
+                <circle cx="17" cy="17" r="2"/>
+              </svg>
+              <span>Vehicle Directory</span>
+            </button>
+
+            <button type="button" id="navAccountBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <line x1="19" y1="8" x2="19" y2="14"/>
+                <line x1="16" y1="11" x2="22" y2="11"/>
+              </svg>
+              <span>Register Vehicle</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Group: Security Operations -->
+        <div>
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Security Operations
+          </div>
+          <div class="space-y-1">
+            <button type="button" id="navAuditBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+              <span>Audit Logs</span>
+            </button>
+
+            <button type="button" id="navFlaggedBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-ncst-crimson flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <span class="flex-1">Flagged & Blocked</span>
+              <span id="flaggedSidebarCount" class="text-[10px] px-1.5 py-0.2 rounded font-bold bg-rose-50 text-ncst-crimson border border-rose-200">
+                1
+              </span>
+            </button>
+          </div>
+        </div>
+
+      </nav>
+
+      <!-- Sidebar Bottom Brand -->
+      <div class="p-3 border-t border-slate-200 text-xs font-bold text-slate-500 flex items-center justify-between bg-slate-50/50">
+        <span class="text-slate-600 font-bold">SecurePark</span>
+        <span class="text-[10px] text-ncst-navy font-extrabold px-1.5 py-0.5 rounded bg-amber-50 border border-amber-300">NCST</span>
+      </div>
+    </aside>
+
+    <!-- ==================== MAIN WORKSPACE ==================== -->
+    <main class="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-slate-50">
+      
+      <!-- Top Utility Header -->
+      <header class="bg-white border-b border-slate-200 px-5 py-2.5 flex items-center justify-between flex-shrink-0 z-20 shadow-2xs">
+        <div class="flex items-center gap-3">
+          <!-- Expand Sidebar Button (Only visible when sidebar is collapsed) -->
+          <button type="button" id="sidebarExpandBtn" class="hidden p-1.5 rounded-md text-slate-500 hover:text-ncst-navy hover:bg-slate-100 border border-slate-200 shadow-2xs transition-colors cursor-pointer items-center justify-center flex-shrink-0" title="Show Sidebar">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="13 17 18 12 13 7"></polyline>
+              <polyline points="6 17 11 12 6 7"></polyline>
+            </svg>
+          </button>
+
+          <div class="flex items-center gap-2 text-xs">
+            <span class="text-slate-700 font-bold text-xs tracking-tight">National College of Science and Technology</span>
+            <span class="text-slate-400 hidden md:inline">•</span>
+            <span class="text-slate-500 hidden md:inline text-[11px] font-medium">Campus Gate Administration</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Scrollable Main Panels Area -->
+      <div class="flex-1 overflow-y-auto p-6">
+      
+      <!-- ==================== VIEW 1: DASHBOARD ==================== -->
+      <section id="dashboardView" class="view-panel active space-y-4">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between pb-3.5 border-b border-slate-200">
+          <div>
+            <h1 class="text-xl font-bold text-slate-900">Dashboard</h1>
+            <p class="text-xs text-slate-500 mt-0.5">Gate activity and campus security overview</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="quickFlaggedBtn" class="px-3 py-1.5 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors">
+              Review Incidents
+            </button>
+            <button id="quickNewAccBtn" class="px-3 py-1.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold transition-colors">
+              Register Vehicle
+            </button>
+          </div>
+        </div>
+
+        <!-- 4 Purposeful Operational KPIs -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+          
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5">
+            <div class="text-xs font-medium text-slate-500">Vehicles Inside</div>
+            <div id="kpiInside" class="text-2xl font-bold text-emerald-700 mt-1 font-mono">0</div>
+            <div class="text-[11px] text-emerald-600 mt-0.5 font-medium">Currently on campus</div>
+          </div>
+
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5">
+            <div class="text-xs font-medium text-slate-500">Flagged / Blocked</div>
+            <div id="kpiBlocked" class="text-2xl font-bold text-rose-700 mt-1 font-mono">0</div>
+            <div class="text-[11px] text-rose-600 mt-0.5 font-medium">Requires review</div>
+          </div>
+
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5">
+            <div class="text-xs font-medium text-slate-500">Today's Gate Entries</div>
+            <div id="kpiTotalLogs" class="text-2xl font-bold text-slate-900 mt-1 font-mono">0</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">Recorded today</div>
+          </div>
+
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5">
+            <div class="text-xs font-medium text-slate-500">Registered Fleet</div>
+            <div id="kpiRegistered" class="text-2xl font-bold text-slate-900 mt-1 font-mono">0</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">Authorized vehicles</div>
+          </div>
+
+        </div>
+
+        <!-- Analytics Row 1: Gate Activity & Current Vehicles on Campus -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          
+          <!-- Gate Activity Chart (2 cols) -->
+          <div class="lg:col-span-2 bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col justify-between">
+            <div class="flex items-center justify-between pb-2.5 border-b border-slate-100">
+              <div>
+                <h2 class="text-sm font-bold text-slate-900">Gate Activity</h2>
+                <p class="text-[11px] text-slate-500">Vehicle passages recorded today</p>
+              </div>
+              <div class="flex items-center gap-1 bg-slate-100 p-0.5 rounded text-xs">
+                <button type="button" id="activityTrendHourlyBtn" class="px-2.5 py-1 rounded text-xs font-semibold bg-white text-slate-900 shadow-xs transition-colors">
+                  Hourly
+                </button>
+                <button type="button" id="activityTrendGateBtn" class="px-2.5 py-1 rounded text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors">
+                  By Gate
+                </button>
+              </div>
+            </div>
+            <div class="relative h-48 w-full pt-2">
+              <canvas id="gateActivityChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Current Vehicles on Campus Donut (1 col) -->
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col justify-between">
+            <div class="pb-2.5 border-b border-slate-100">
+              <h2 class="text-sm font-bold text-slate-900">Current Vehicles on Campus</h2>
+              <p class="text-[11px] text-slate-500">Active custody breakdown</p>
+            </div>
+            <div class="relative h-36 w-full flex items-center justify-center">
+              <canvas id="gateStatusChart"></canvas>
+              <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span id="donutCenterTotal" class="text-xl font-bold font-mono text-slate-900 leading-none">0</span>
+                <span class="text-[10px] text-slate-500 font-medium mt-0.5">On Campus</span>
+              </div>
+            </div>
+            <!-- Status Metric Legend Cards -->
+            <div class="grid grid-cols-3 gap-1.5 pt-2 border-t border-slate-100 text-center text-xs">
+              <div class="p-1 rounded bg-emerald-50 border border-emerald-100">
+                <div class="text-[10px] font-semibold text-emerald-800 uppercase">Inside</div>
+                <div id="legendInsideCount" class="text-xs font-bold font-mono text-emerald-700">0</div>
+              </div>
+              <div class="p-1 rounded bg-slate-100 border border-slate-200">
+                <div class="text-[10px] font-semibold text-slate-700 uppercase">Exited</div>
+                <div id="legendExitedCount" class="text-xs font-bold font-mono text-slate-800">0</div>
+              </div>
+              <div class="p-1 rounded bg-rose-50 border border-rose-100">
+                <div class="text-[10px] font-semibold text-rose-800 uppercase">Blocked</div>
+                <div id="legendBlockedCount" class="text-xs font-bold font-mono text-rose-700">0</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Analytics Row 2: Fleet Composition & Security Alerts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          
+          <!-- Fleet Composition Bar Chart -->
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col justify-between">
+            <div class="pb-2.5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 class="text-sm font-bold text-slate-900">Fleet Composition</h2>
+                <p class="text-[11px] text-slate-500">Registered vehicles by category</p>
+              </div>
+              <span class="text-[11px] font-mono text-slate-400">Total: <span id="fleetTotalBadge" class="font-bold text-slate-700">0</span></span>
+            </div>
+            <div class="relative h-44 w-full pt-2">
+              <canvas id="fleetTypesChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Security Alerts Panel -->
+          <div class="bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col">
+            <div class="pb-2.5 border-b border-slate-100 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <h2 class="text-sm font-bold text-slate-900">Security Alerts</h2>
+                <span id="attentionCountBadge" class="text-[10px] px-1.5 py-0.5 rounded font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                  0 Active
+                </span>
+              </div>
+              <button id="viewAllIncidentsLink" class="text-xs font-semibold text-ncst-navy hover:underline">
+                View Queue →
+              </button>
+            </div>
+            
+            <div id="attentionPanelContent" class="flex-1 pt-2 space-y-2 overflow-y-auto max-h-44">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Recent Gate Activity Card -->
+        <div class="bg-white rounded-lg border border-slate-200">
+          <div class="p-3.5 border-b border-slate-200 flex items-center justify-between">
+            <div>
+              <h2 class="text-sm font-bold text-slate-900">Recent Gate Passages</h2>
+              <p class="text-[11px] text-slate-500 mt-0.5">Chronological log of gate passages</p>
+            </div>
+            <button id="viewAllAuditBtn" class="text-xs font-semibold text-ncst-navy hover:underline">
+              View Full Audit Log →
+            </button>
+          </div>
+
+          <!-- Data Table -->
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+                <tr>
+                  <th class="py-2 px-3.5">Status</th>
+                  <th class="py-2 px-3.5">Plate</th>
+                  <th class="py-2 px-3.5">Driver</th>
+                  <th class="py-2 px-3.5">Owner</th>
+                  <th class="py-2 px-3.5">Gate</th>
+                  <th class="py-2 px-3.5 text-right">Time</th>
+                  <th class="py-2 px-3.5 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody id="dashboardActivityBody" class="divide-y divide-slate-100">
+                <!-- Rendered by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== VIEW 2: VEHICLE DIRECTORY ==================== -->
+      <section id="vehiclesView" class="view-panel space-y-6">
+        
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+          <div>
+            <h1 class="text-xl font-bold text-slate-900">Vehicle Directory</h1>
+            <p class="text-xs text-slate-500 mt-0.5">Manage registered vehicles, custody status, and authorized drivers</p>
+          </div>
+          <button id="directoryNewAccBtn" class="px-3 py-1.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold transition-colors self-start sm:self-auto">
+            + Register Vehicle
+          </button>
+        </div>
+
+        <!-- Vehicle Controls (Search & Filters) -->
+        <div class="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
+          
+          <div class="grid grid-cols-1 sm:grid-cols-5 gap-3">
+            
+            <!-- Search -->
+            <div class="sm:col-span-1">
+              <label class="block text-[11px] font-medium text-slate-500 mb-1">Search Fleet</label>
+              <input type="text" id="vehicleSearchInput" placeholder="Plate, owner, or ID..." class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+            </div>
+
+            <!-- Role Filter -->
+            <div>
+              <label class="block text-[11px] font-medium text-slate-500 mb-1">Affiliation</label>
+              <select id="vehicleRoleFilter" class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+                <option value="All">All Roles</option>
+                <option value="Faculty">Faculty</option>
+                <option value="Staff">Staff</option>
+                <option value="Student">Student</option>
+                <option value="Visitor">Visitor</option>
+              </select>
+            </div>
+
+            <!-- Category Filter -->
+            <div>
+              <label class="block text-[11px] font-medium text-slate-500 mb-1">Category</label>
+              <select id="vehicleCategoryFilter" class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+                <option value="All">All Categories</option>
+                <option value="4-Wheel">4-Wheel</option>
+                <option value="Motorcycle">Motorcycle</option>
+                <option value="Bicycle">Bicycle / Non-Plated</option>
+                <option value="Campus Fleet">Campus Fleet</option>
+              </select>
+            </div>
+
+            <!-- Registration Status Filter -->
+            <div>
+              <label class="block text-[11px] font-medium text-slate-500 mb-1">Pass Status</label>
+              <select id="vehicleStatusFilter" class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+                <option value="All">All Statuses</option>
+                <option value="Active">Active</option>
+                <option value="Suspended">Suspended</option>
+              </select>
+            </div>
+
+            <!-- Reset Filters -->
+            <div class="flex items-end">
+              <button type="button" id="resetVehicleFiltersBtn" class="w-full px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-xs transition-colors">
+                Reset Filters
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+
+        <!-- Vehicles Table -->
+        <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+                <tr>
+                  <th class="py-2.5 px-4">Status</th>
+                  <th class="py-2.5 px-4">Plate / Pass ID</th>
+                  <th class="py-2.5 px-4">Vehicle Details</th>
+                  <th class="py-2.5 px-4">Owner</th>
+                  <th class="py-2.5 px-4">Affiliation</th>
+                  <th class="py-2.5 px-4">Drivers</th>
+                  <th class="py-2.5 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="vehiclesTableBody" class="divide-y divide-slate-100">
+                <!-- Rendered by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== VIEW 3: FLAGGED & BLOCKED ==================== -->
+      <section id="flaggedView" class="view-panel space-y-6">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between pb-4 border-b border-slate-200">
+          <div>
+            <h1 class="text-xl font-bold text-slate-900">Flagged & Blocked Incidents</h1>
+            <p class="text-xs text-slate-500 mt-0.5">Campus gate discrepancies, unauthorized operators, and access stops</p>
+          </div>
+        </div>
+
+        <!-- Incidents Table -->
+        <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+            <h2 class="text-sm font-bold text-slate-900">Incident Queue</h2>
+            <span id="incidentQueueBadge" class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200">
+              1 Active Case
+            </span>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+                <tr>
+                  <th class="py-2.5 px-4">Status</th>
+                  <th class="py-2.5 px-4">Plate</th>
+                  <th class="py-2.5 px-4">Vehicle</th>
+                  <th class="py-2.5 px-4">Driver Involved</th>
+                  <th class="py-2.5 px-4">Reason for Stop</th>
+                  <th class="py-2.5 px-4">Gate & Officer</th>
+                  <th class="py-2.5 px-4">Timestamp</th>
+                  <th class="py-2.5 px-4 text-right">Investigation</th>
+                </tr>
+              </thead>
+              <tbody id="incidentsTableBody" class="divide-y divide-slate-100">
+                <!-- Rendered by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ==================== VIEW 4: AUDIT LOGS ==================== -->
+      <section id="auditView" class="view-panel space-y-4">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between pb-3.5 border-b border-slate-200">
+          <div>
+            <h1 class="text-xl font-bold text-slate-900">Audit Logs</h1>
+            <p class="text-xs text-slate-500 mt-0.5">Chronological record of all campus vehicle movements and security events</p>
+          </div>
+          <button id="exportCsvBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1.5 transition-colors">
+            <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>Export CSV</span>
+          </button>
+        </div>
+
+        <!-- Audit Summary Ledger Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
+            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Total Passages</div>
+            <div id="auditSummaryTotal" class="text-xl font-bold font-mono text-slate-900 mt-0.5">0</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Logged movements</div>
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
+            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Ingresses</div>
+            <div id="auditSummaryInside" class="text-xl font-bold font-mono text-emerald-700 mt-0.5">0</div>
+            <div class="text-[10px] text-emerald-600 mt-0.5">Currently inside campus</div>
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
+            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Egresses</div>
+            <div id="auditSummaryExited" class="text-xl font-bold font-mono text-slate-800 mt-0.5">0</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Recorded departures</div>
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
+            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Security Actions</div>
+            <div id="auditSummaryBlocked" class="text-xl font-bold font-mono text-rose-700 mt-0.5">0</div>
+            <div class="text-[10px] text-rose-600 mt-0.5">Holds & stops</div>
+          </div>
+        </div>
+
+        <!-- Controls: Filters & Search with high contrast -->
+        <div class="bg-white rounded-lg border border-slate-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          
+          <div class="flex items-center gap-1.5 flex-wrap" id="auditPillsContainer">
+            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors" data-filter="All">All Events <span id="auditPillCountAll" class="ml-1 opacity-80">(0)</span></button>
+            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors" data-filter="Inside">Inside Campus <span id="auditPillCountInside" class="ml-1 opacity-80">(0)</span></button>
+            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors" data-filter="Exited">Exited <span id="auditPillCountExited" class="ml-1 opacity-80">(0)</span></button>
+            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors" data-filter="Blocked">Security Holds <span id="auditPillCountBlocked" class="ml-1 opacity-80">(0)</span></button>
+          </div>
+
+          <div class="w-full sm:w-80 relative">
+            <input type="text" id="fullAuditSearchInput" placeholder="Search plate, driver, owner, gate, officer..." class="w-full pl-8 pr-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy shadow-2xs">
+            <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </div>
+
+        </div>
+
+        <!-- Full Audit Table with Dark High-Contrast Header -->
+        <div class="bg-white rounded-lg border border-slate-300 overflow-hidden shadow-xs">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-900 text-slate-200 border-b border-slate-800 font-semibold uppercase tracking-wider text-[11px]">
+                <tr>
+                  <th class="py-3 px-4">Status</th>
+                  <th class="py-3 px-4">Plate</th>
+                  <th class="py-3 px-4">Event / Action</th>
+                  <th class="py-3 px-4">Driver</th>
+                  <th class="py-3 px-4">Owner</th>
+                  <th class="py-3 px-4">Gate</th>
+                  <th class="py-3 px-4">Officer</th>
+                  <th class="py-3 px-4 text-right">Time</th>
+                  <th class="py-3 px-4 text-right">Details</th>
+                </tr>
+              </thead>
+              <tbody id="fullAuditTableBody" class="divide-y divide-slate-200">
+                <!-- Rendered by JS -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination Bar -->
+          <div class="p-3 border-t border-slate-200 bg-slate-50/80 flex items-center justify-between text-xs text-slate-700">
+            <span id="auditPaginationInfo" class="font-medium">Showing 1 to 7 of 7 entries</span>
+            <div class="flex items-center gap-1.5">
+              <button id="auditPrevBtn" class="px-3 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 font-medium disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs transition-colors" disabled>Previous</button>
+              <button id="auditNextBtn" class="px-3 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 font-medium disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs transition-colors" disabled>Next</button>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ==================== VIEW 5: REGISTER VEHICLE FORM ==================== -->
+      <section id="accountView" class="view-panel space-y-6">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between pb-4 border-b border-slate-200">
+          <div>
+            <h1 class="text-xl font-bold text-slate-900">Register Vehicle & Issue Pass</h1>
+            <p class="text-xs text-slate-500 mt-0.5">Enroll new vehicle, record affiliation, and assign authorized drivers</p>
+          </div>
+          <button type="button" id="resetFormBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-xs transition-colors">
+            Reset Form
+          </button>
+        </div>
+
+        <!-- 2-Column Responsive Layout: Form on Left, Live QR Pass Technology on Right -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          
+          <!-- Form Layout -->
+          <form id="vehicleRegistrationForm" class="lg:col-span-7 bg-white rounded-lg border border-slate-200 p-6 space-y-6 shadow-xs">
+          
+          <!-- Owner Information -->
+          <div>
+            <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Section 1</div>
+            <h2 class="text-sm font-bold text-slate-900 mb-3">Owner & Campus Affiliation</h2>
+            
+            <!-- Owner 1x1 Photo Attachment -->
+            <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-start sm:items-center gap-3.5 mb-4">
+              <div class="relative w-20 h-20 rounded-md border-2 border-dashed border-slate-300 bg-white flex items-center justify-center overflow-hidden flex-shrink-0" id="ownerPhotoPreviewContainer">
+                <img id="ownerPhotoPreview" src="" alt="Owner 1x1 Photo" class="w-full h-full object-cover hidden">
+                <div id="ownerPhotoPlaceholder" class="text-center p-1">
+                  <svg class="w-6 h-6 mx-auto text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                  <span class="text-[9px] font-semibold text-slate-500 block leading-tight mt-0.5">1x1 Photo</span>
+                </div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-bold text-slate-900">Owner ID Picture (1x1 Photo)</div>
+                <div class="text-[11px] text-slate-500 mt-0.5">Upload a formal 1x1 or 2x2 picture of the vehicle owner for campus gate identification and pass issuance.</div>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="file" id="ownerPhotoInput" accept="image/*" class="hidden">
+                  <button type="button" id="ownerPhotoBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1.5 transition-colors">
+                    <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="17 8 12 3 7 8"></polyline>
+                      <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <span>Attach 1x1 Picture</span>
+                  </button>
+                  <button type="button" id="removeOwnerPhotoBtn" class="px-2.5 py-1.5 rounded-md text-xs font-medium text-rose-600 hover:bg-rose-50 hidden transition-colors">
+                    Remove
+                  </button>
+                  <span id="ownerPhotoFileName" class="text-[11px] text-slate-500 truncate max-w-xs font-mono"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label for="ownerRole" class="block text-xs font-medium text-slate-700 mb-1">Affiliation <span class="text-rose-500">*</span></label>
+                <select id="ownerRole" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+                  <option value="Faculty">Faculty</option>
+                  <option value="Staff">Staff</option>
+                  <option value="Student" selected>Student</option>
+                  <option value="Visitor">Visitor</option>
+                </select>
+              </div>
+
+              <div>
+                <label for="ownerIdNumber" class="block text-xs font-medium text-slate-700 mb-1">Institutional ID <span class="text-rose-500">*</span></label>
+                <input type="text" id="ownerIdNumber" placeholder="NCST-2024-05182" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" required>
+              </div>
+
+              <div>
+                <label for="ownerFullName" class="block text-xs font-medium text-slate-700 mb-1">Full Name <span class="text-rose-500">*</span></label>
+                <input type="text" id="ownerFullName" placeholder="Juan C. Dela Cruz" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+              </div>
+
+              <div>
+                <label for="department" class="block text-xs font-medium text-slate-700 mb-1">Department / Course <span class="text-rose-500">*</span></label>
+                <input type="text" id="department" placeholder="BS Information Technology" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+              </div>
+
+              <div>
+                <label for="ownerContact" class="block text-xs font-medium text-slate-700 mb-1">Contact Phone</label>
+                <input type="text" id="ownerContact" placeholder="+63 9XX XXX XXXX" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono">
+              </div>
+
+              <div>
+                <label for="ownerEmail" class="block text-xs font-medium text-slate-700 mb-1">Email Address</label>
+                <input type="email" id="ownerEmail" placeholder="user@ncst.edu.ph" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+              </div>
+            </div>
+          </div>
+
+          <hr class="border-slate-200">
+
+          <!-- Vehicle Details -->
+          <div>
+            <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Section 2</div>
+            <h2 class="text-sm font-bold text-slate-900 mb-3">Vehicle Specifications & Pass Info</h2>
+            
+            <!-- Vehicle Photo Attachment -->
+            <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-start sm:items-center gap-3.5 mb-4">
+              <div class="relative w-28 h-20 rounded-md border-2 border-dashed border-slate-300 bg-white flex items-center justify-center overflow-hidden flex-shrink-0" id="vehiclePhotoPreviewContainer">
+                <img id="vehiclePhotoPreview" src="" alt="Vehicle Photo" class="w-full h-full object-cover hidden">
+                <div id="vehiclePhotoPlaceholder" class="text-center p-1">
+                  <svg class="w-6 h-6 mx-auto text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"></path>
+                    <circle cx="7" cy="17" r="2"></circle>
+                    <circle cx="17" cy="17" r="2"></circle>
+                  </svg>
+                  <span class="text-[9px] font-semibold text-slate-500 block leading-tight mt-0.5">Vehicle Photo</span>
+                </div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-bold text-slate-900">Vehicle Picture Attachment</div>
+                <div class="text-[11px] text-slate-500 mt-0.5">Attach a photo of the vehicle (front angle or license plate view) for campus security records and visual gate matching.</div>
+                <div class="flex items-center gap-2 mt-2">
+                  <input type="file" id="vehiclePhotoInput" accept="image/*" class="hidden">
+                  <button type="button" id="vehiclePhotoBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1.5 transition-colors">
+                    <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                      <circle cx="12" cy="13" r="4"></circle>
+                    </svg>
+                    <span>Attach Vehicle Picture</span>
+                  </button>
+                  <button type="button" id="removeVehiclePhotoBtn" class="px-2.5 py-1.5 rounded-md text-xs font-medium text-rose-600 hover:bg-rose-50 hidden transition-colors">
+                    Remove
+                  </button>
+                  <span id="vehiclePhotoFileName" class="text-[11px] text-slate-500 truncate max-w-xs font-mono"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label for="vehicleCategory" class="block text-xs font-medium text-slate-700 mb-1">Vehicle Category <span class="text-rose-500">*</span></label>
+                <select id="vehicleCategory" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+                  <option value="4-Wheel">4-Wheel (Car / SUV / Van)</option>
+                  <option value="Motorcycle">Motorcycle / Scooter</option>
+                  <option value="Bicycle">Bicycle / Non-Plated</option>
+                  <option value="Campus Fleet">Campus Fleet / Shuttle</option>
+                </select>
+              </div>
+
+              <div>
+                <label for="plateNumber" class="block text-xs font-medium text-slate-700 mb-1">Plate Number / Campus Pass ID <span class="text-rose-500">*</span></label>
+                <input type="text" id="plateNumber" placeholder="NDK-4821" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono uppercase font-bold" required>
+                <span id="plateValidationMsg" class="text-[11px] text-rose-600 hidden font-medium mt-1"></span>
+              </div>
+
+              <div>
+                <label for="makeModelColor" class="block text-xs font-medium text-slate-700 mb-1">Make / Model / Color <span class="text-rose-500">*</span></label>
+                <input type="text" id="makeModelColor" placeholder="White Toyota Vios" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+              </div>
+
+              <div>
+                <label for="stickerYear" class="block text-xs font-medium text-slate-700 mb-1">Sticker Year <span class="text-rose-500">*</span></label>
+                <input type="text" id="stickerYear" value="2026" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" required>
+              </div>
+            </div>
+          </div>
+
+          <hr class="border-slate-200">
+
+          <!-- Authorized Drivers -->
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <div>
+                <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Section 3</div>
+                <h2 class="text-sm font-bold text-slate-900">Authorized Drivers Roster</h2>
+                <p class="text-[11px] text-slate-500">Designated drivers authorized to operate this vehicle on campus</p>
+              </div>
+              <button type="button" id="addDriverBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors">
+                + Add Driver
+              </button>
+            </div>
+
+            <div id="driversContainer" class="space-y-3">
+              
+              <!-- Default Driver Card -->
+              <div class="driver-entry-card p-3.5 rounded-md border border-slate-200 bg-slate-50 space-y-3" data-index="0">
+                <div class="flex items-center justify-between">
+                  <span class="driver-num-label text-xs font-bold text-slate-700">Driver #1</span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-rose-500">*</span></label>
+                    <input type="text" class="driver-name w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="Driver name" required>
+                  </div>
+
+                  <div>
+                    <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-rose-500">*</span></label>
+                    <select class="driver-rel w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+                      <option value="Self (Owner)" selected>Self (Owner)</option>
+                      <option value="Spouse">Spouse</option>
+                      <option value="Parent">Parent</option>
+                      <option value="Child">Child</option>
+                      <option value="Sibling">Sibling</option>
+                      <option value="Designated Driver">Designated Driver</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-rose-500">*</span></label>
+                    <input type="text" class="driver-license w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="N01-22-849201" required>
+                  </div>
+
+                  <div>
+                    <label class="block text-[11px] font-medium text-slate-600 mb-1">Phone</label>
+                    <input type="text" class="driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="+63 9XX XXX XXXX">
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Submit -->
+          <div class="flex justify-end pt-2">
+            <button type="submit" id="submitVehicleBtn" class="px-5 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold transition-colors">
+              Save & Issue Pass
+            </button>
+          </div>
+
+        </form>
+
+        <!-- RIGHT: Digital Gate Pass & QR Creation Technology Panel -->
+        <div class="lg:col-span-5 space-y-4 lg:sticky lg:top-4">
+          
+          <!-- Pass Hologram Decal Container -->
+          <div id="printableGatePass" class="bg-white rounded-xl border border-slate-300 shadow-sm overflow-hidden transition-all">
+            
+            <!-- Institutional Header Ribbon -->
+            <div class="bg-ncst-navy text-white px-4 py-3 border-b-2 border-ncst-gold flex items-center justify-center">
+              <div class="text-xs sm:text-sm font-bold tracking-wider uppercase text-white text-center">
+                National College of Science and Technology
+              </div>
+              <span id="qrStickerYearBadge" class="hidden">2026</span>
+            </div>
+
+            <div class="p-4 space-y-3.5">
+              
+              <!-- Vehicle Plate & Affiliation Banner -->
+              <div class="bg-slate-50 rounded-lg p-3 border border-slate-200 flex items-center justify-between">
+                <div class="min-w-0 pr-2">
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Registered Plate</div>
+                  <div id="qrPreviewPlate" class="text-lg font-mono font-extrabold text-slate-900 tracking-wider">NDK-4821</div>
+                  <div id="qrPreviewVehicle" class="text-[11px] text-slate-600 truncate font-medium">White Toyota Vios (4-Wheel)</div>
+                </div>
+                <div class="text-right flex-shrink-0">
+                  <span id="qrPreviewRole" class="inline-block px-2.5 py-1 rounded text-[11px] font-bold bg-blue-100 text-ncst-navy border border-blue-200 shadow-2xs">
+                    STUDENT
+                  </span>
+                  <div id="qrPreviewId" class="text-[10px] font-mono text-slate-500 mt-1 font-semibold">NCST-2024-05182</div>
+                </div>
+              </div>
+
+              <!-- QR Code (Direct, Sized Up with Zoom Control) -->
+              <div class="flex flex-col items-center justify-center py-2">
+                <div id="qrCodeContainer" class="w-[220px] h-[220px] flex items-center justify-center overflow-hidden cursor-pointer rounded-lg border border-transparent hover:border-ncst-navy/30 transition-all p-1" title="Click to enlarge QR code">
+                  <!-- Rendered by QRCode library -->
+                </div>
+                <button type="button" id="zoomPreviewQrBtn" class="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white hover:bg-ncst-navy hover:text-white text-slate-700 text-xs font-semibold border border-slate-300 transition-all shadow-2xs cursor-pointer">
+                  <svg class="w-3.5 h-3.5 text-ncst-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    <line x1="11" y1="8" x2="11" y2="14"></line>
+                    <line x1="8" y1="11" x2="14" y2="11"></line>
+                  </svg>
+                  <span>Zoom / Enlarge QR Code</span>
+                </button>
+              </div>
+
+              <!-- Attached Personnel Thumbnails -->
+              <div class="grid grid-cols-2 gap-2 text-xs border border-slate-200 rounded-lg p-2.5 bg-slate-50">
+                <div class="flex items-center gap-2">
+                  <div class="w-10 h-10 rounded border border-slate-300 bg-white overflow-hidden flex-shrink-0 flex items-center justify-center" id="qrOwnerThumbContainer">
+                    <img id="qrOwnerThumb" src="" alt="Owner" class="w-full h-full object-cover hidden">
+                    <svg id="qrOwnerPlaceholder" class="w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-[10px] text-slate-400 font-semibold uppercase">Owner</div>
+                    <div id="qrPreviewOwnerName" class="font-bold text-slate-800 text-[11px] truncate">Juan C. Dela Cruz</div>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <div class="w-10 h-10 rounded border border-slate-300 bg-white overflow-hidden flex-shrink-0 flex items-center justify-center" id="qrVehicleThumbContainer">
+                    <img id="qrVehicleThumb" src="" alt="Vehicle" class="w-full h-full object-cover hidden">
+                    <svg id="qrVehiclePlaceholder" class="w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                      <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"></path>
+                      <circle cx="7" cy="17" r="2"></circle>
+                      <circle cx="17" cy="17" r="2"></circle>
+                    </svg>
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-[10px] text-slate-400 font-semibold uppercase">Primary Driver</div>
+                    <div id="qrPreviewDriverName" class="font-bold text-slate-800 text-[11px] truncate">Self (Owner)</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Authorized Drivers Saved in QR Pass Roster -->
+              <div class="border border-slate-200 rounded-lg p-2.5 bg-slate-50">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-[10px] text-slate-700 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-ncst-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="9" cy="7" r="4"></circle>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    Authorized Drivers in QR
+                  </span>
+                  <span id="qrDriversCountBadge" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-navy text-white">
+                    1 Driver
+                  </span>
+                </div>
+                <div id="qrPreviewDriversList" class="space-y-1.5 max-h-24 overflow-y-auto pr-0.5">
+                  <!-- Dynamically rendered -->
+                </div>
+              </div>
+
+              <!-- Gate Pass Action Buttons -->
+              <div class="space-y-2 pt-1">
+                <!-- Primary Action: Save Full Pass Badge with Attached Photo & QR -->
+                <button type="button" id="downloadPassBadgeBtn" class="w-full px-3.5 py-2.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-xs font-bold text-white shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer">
+                  <svg class="w-4 h-4 text-ncst-gold flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                  <span>Save Gate Pass with Photo (PNG)</span>
+                </button>
+
+                <div class="flex items-center gap-2">
+                  <button type="button" id="downloadQrBtn" class="flex-1 px-3 py-1.5 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-[11px] font-semibold text-slate-700 shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer">
+                    <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    <span>Save QR Only</span>
+                  </button>
+                  
+                  <button type="button" id="printGatePassBtn" class="flex-1 px-3 py-1.5 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-[11px] font-semibold text-slate-700 shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer">
+                    <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                      <rect x="6" y="14" width="12" height="8"></rect>
+                    </svg>
+                    <span>Print Permit</span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      </section>
+
+      </div> <!-- /scrollable main panels area -->
+
+    </main>
+
+  </div>
+
+  <!-- ==================== CENTERED INSPECTION MODAL ==================== -->
+  <div id="drawerOverlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4 transition-opacity">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      
+      <!-- Inspection Modal Header -->
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-ncst-gold">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <div>
+            <h3 id="drawerTitle" class="text-sm font-bold text-white tracking-wide">Vehicle Dossier & Permit Inspection</h3>
+            <p id="drawerSubtitle" class="text-[11px] text-slate-300 font-mono">Verified Campus Security Record</p>
+          </div>
+        </div>
+        <button id="closeDrawerBtn" class="p-1 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Scrollable Inspection Content Body -->
+      <div id="drawerContent" class="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5 bg-slate-50/50">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Inspection Footer Actions (Print Pass, Edit, Close) -->
+      <div id="drawerFooter" class="p-4 border-t border-slate-200 bg-white flex items-center justify-end gap-2.5">
+        <button id="drawerCancelBtn" class="px-3.5 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700">
+          Close
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==================== EDIT VEHICLE MODAL (FULL 3-SECTION REGISTER STYLE) ==================== -->
+  <div id="editModalOverlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4 transition-opacity">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      
+      <!-- Modal Header -->
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-ncst-gold">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white tracking-wide">Edit Vehicle & Pass Record</h3>
+            <p id="editModalPlate" class="text-[11px] text-slate-300 font-mono">Update owner identity, vehicle specs, and authorized drivers</p>
+          </div>
+        </div>
+        <button id="closeEditModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Scrollable Form Body (Mirroring Register Vehicle 3-Section Architecture) -->
+      <form id="editVehicleForm" class="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
+        <input type="hidden" id="editVehicleId">
+
+        <!-- Section 1: Owner & Campus Affiliation -->
+        <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-2xs space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+            <div>
+              <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Section 1</div>
+              <h4 class="text-xs font-bold text-slate-900">Owner & Campus Affiliation</h4>
+            </div>
+            <span class="text-[11px] text-slate-500 font-medium">Primary Permit Holder</span>
+          </div>
+
+          <!-- Owner 1x1 Photo Attachment -->
+          <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-start sm:items-center gap-3.5">
+            <div class="relative w-20 h-20 rounded-md border-2 border-dashed border-slate-300 bg-white flex items-center justify-center overflow-hidden flex-shrink-0" id="editOwnerPhotoPreviewContainer">
+              <img id="editOwnerPhotoPreview" src="" alt="Owner 1x1 Photo" class="w-full h-full object-cover hidden">
+              <div id="editOwnerPhotoPlaceholder" class="text-center p-1">
+                <svg class="w-6 h-6 mx-auto text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+                <span class="text-[9px] font-semibold text-slate-500 block leading-tight mt-0.5">1x1 Photo</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs font-bold text-slate-900">Owner ID Picture (1x1 Photo)</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">Formal picture of vehicle owner for campus gate identification and pass issuance.</div>
+              <div class="flex items-center gap-2 mt-2">
+                <input type="file" id="editOwnerPhotoInput" accept="image/*" class="hidden">
+                <button type="button" id="editOwnerPhotoBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
+                  <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                  <span>Upload Photo</span>
+                </button>
+                <button type="button" id="removeEditOwnerPhotoBtn" class="px-2.5 py-1.5 rounded-md text-xs font-medium text-rose-600 hover:bg-rose-50 hidden transition-colors cursor-pointer">
+                  Remove
+                </button>
+                <span id="editOwnerPhotoFileName" class="text-[11px] text-slate-500 truncate max-w-xs font-mono"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+            <div>
+              <label for="editOwnerRole" class="block font-medium text-slate-700 mb-1">Affiliation <span class="text-rose-500">*</span></label>
+              <select id="editOwnerRole" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+                <option value="Faculty">Faculty</option>
+                <option value="Staff">Staff</option>
+                <option value="Student">Student</option>
+                <option value="Visitor">Visitor</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="editOwnerIdNumber" class="block font-medium text-slate-700 mb-1">Institutional ID <span class="text-rose-500">*</span></label>
+              <input type="text" id="editOwnerIdNumber" placeholder="NCST-2024-05182" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+            </div>
+
+            <div>
+              <label for="editOwnerFullName" class="block font-medium text-slate-700 mb-1">Full Name <span class="text-rose-500">*</span></label>
+              <input type="text" id="editOwnerFullName" placeholder="Juan C. Dela Cruz" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+            </div>
+
+            <div>
+              <label for="editDepartment" class="block font-medium text-slate-700 mb-1">Department / Course <span class="text-rose-500">*</span></label>
+              <input type="text" id="editDepartment" placeholder="BS Information Technology" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+            </div>
+
+            <div>
+              <label for="editOwnerPhone" class="block font-medium text-slate-700 mb-1">Contact Phone</label>
+              <input type="text" id="editOwnerPhone" placeholder="+63 9XX XXX XXXX" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+            </div>
+
+            <div>
+              <label for="editOwnerEmail" class="block font-medium text-slate-700 mb-1">Email Address</label>
+              <input type="email" id="editOwnerEmail" placeholder="user@ncst.edu.ph" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 2: Vehicle Specifications & Pass Info -->
+        <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-2xs space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+            <div>
+              <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Section 2</div>
+              <h4 class="text-xs font-bold text-slate-900">Vehicle Specifications & Pass Info</h4>
+            </div>
+            <span class="text-[11px] text-slate-500 font-medium">Physical Asset & Pass Status</span>
+          </div>
+
+          <!-- Vehicle Photo Attachment -->
+          <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-start sm:items-center gap-3.5">
+            <div class="relative w-28 h-20 rounded-md border-2 border-dashed border-slate-300 bg-white flex items-center justify-center overflow-hidden flex-shrink-0" id="editVehiclePhotoPreviewContainer">
+              <img id="editVehiclePhotoPreview" src="" alt="Vehicle Photo" class="w-full h-full object-cover hidden">
+              <div id="editVehiclePhotoPlaceholder" class="text-center p-1">
+                <svg class="w-6 h-6 mx-auto text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"></path>
+                  <circle cx="7" cy="17" r="2"></circle>
+                  <circle cx="17" cy="17" r="2"></circle>
+                </svg>
+                <span class="text-[9px] font-semibold text-slate-500 block leading-tight mt-0.5">Vehicle Photo</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs font-bold text-slate-900">Vehicle Picture Attachment</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">Vehicle photo for visual gate verification and campus security logs.</div>
+              <div class="flex items-center gap-2 mt-2">
+                <input type="file" id="editVehiclePhotoInput" accept="image/*" class="hidden">
+                <button type="button" id="editVehiclePhotoBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
+                  <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                  </svg>
+                  <span>Upload Vehicle Pic</span>
+                </button>
+                <button type="button" id="removeEditVehiclePhotoBtn" class="px-2.5 py-1.5 rounded-md text-xs font-medium text-rose-600 hover:bg-rose-50 hidden transition-colors cursor-pointer">
+                  Remove
+                </button>
+                <span id="editVehiclePhotoFileName" class="text-[11px] text-slate-500 truncate max-w-xs font-mono"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+            <div>
+              <label for="editVehicleCategory" class="block font-medium text-slate-700 mb-1">Vehicle Category <span class="text-rose-500">*</span></label>
+              <select id="editVehicleCategory" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+                <option value="4-Wheel">4-Wheel (Car / SUV / Van)</option>
+                <option value="Motorcycle">Motorcycle / Scooter</option>
+                <option value="Bicycle">Bicycle / Non-Plated</option>
+                <option value="Campus Fleet">Campus Fleet / Shuttle</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="editPlateNumber" class="block font-medium text-slate-700 mb-1">Plate Number / Campus Pass ID <span class="text-rose-500">*</span></label>
+              <input type="text" id="editPlateNumber" placeholder="NDK-4821" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 font-mono uppercase font-bold focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+            </div>
+
+            <div>
+              <label for="editMakeModel" class="block font-medium text-slate-700 mb-1">Make / Model / Color <span class="text-rose-500">*</span></label>
+              <input type="text" id="editMakeModel" placeholder="White Toyota Vios" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+            </div>
+
+            <div>
+              <label for="editStickerYear" class="block font-medium text-slate-700 mb-1">Sticker Year <span class="text-rose-500">*</span></label>
+              <input type="text" id="editStickerYear" value="2026" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
+            </div>
+
+            <div>
+              <label for="editRegStatus" class="block font-medium text-slate-700 mb-1">Registration Status <span class="text-rose-500">*</span></label>
+              <select id="editRegStatus" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+                <option value="Active">Active (Permitted on Campus)</option>
+                <option value="Suspended">Suspended (Access Blocked)</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="editCampusStatus" class="block font-medium text-slate-700 mb-1">Current Gate Location</label>
+              <select id="editCampusStatus" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+                <option value="Outside">Outside Campus</option>
+                <option value="Inside">Inside Campus (Parked)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 3: Authorized Drivers Roster -->
+        <div class="bg-white rounded-lg border border-slate-200 p-5 shadow-2xs space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+            <div>
+              <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Section 3</div>
+              <h4 class="text-xs font-bold text-slate-900">Authorized Drivers Roster</h4>
+              <p class="text-[11px] text-slate-500 mt-0.5">Designated drivers permitted to operate this vehicle on campus</p>
+            </div>
+            <button type="button" id="editAddDriverBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1 transition-colors cursor-pointer">
+              <svg class="w-3.5 h-3.5 text-ncst-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              <span>+ Add Driver</span>
+            </button>
+          </div>
+
+          <div id="editDriversContainer" class="space-y-3">
+            <!-- Dynamically populated driver cards -->
+          </div>
+        </div>
+
+        <!-- Sticky Modal Footer Actions -->
+        <div class="pt-4 border-t border-slate-200 flex items-center justify-end gap-2.5 bg-white -mx-6 -mb-6 p-4">
+          <button type="button" id="cancelEditModalBtn" class="px-4 py-2 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer">
+            Cancel
+          </button>
+          <button type="submit" id="saveEditVehicleBtn" class="px-5 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs transition-colors cursor-pointer">
+            Save Record Changes
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== ZOOM QR MODAL ==================== -->
+  <div id="zoomQrModalOverlay" class="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+      
+      <!-- Modal Header -->
+      <div class="p-4 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-md bg-white/10 flex items-center justify-center text-ncst-gold">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              <line x1="11" y1="8" x2="11" y2="14"></line>
+              <line x1="8" y1="11" x2="14" y2="11"></line>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white tracking-wide">High-Resolution QR Pass</h3>
+            <p class="text-[11px] text-slate-300 font-mono">Optimized for mobile gate reader scanning</p>
+          </div>
+        </div>
+        <button id="closeZoomQrModalBtn" class="p-1 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="p-6 flex flex-col items-center justify-center bg-slate-50">
+        <!-- Vehicle Badge Info -->
+        <div class="w-full bg-white border border-slate-200 rounded-lg p-3 mb-4 flex items-center justify-between shadow-2xs">
+          <div>
+            <div class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Plate Number</div>
+            <div id="zoomQrPlate" class="text-base font-black text-slate-900 font-mono tracking-wider">—</div>
+            <div id="zoomQrOwner" class="text-[11px] text-slate-600 font-medium truncate max-w-[200px]">—</div>
+          </div>
+          <div class="text-right">
+            <span id="zoomQrYear" class="inline-block px-2.5 py-1 rounded text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+              2026
+            </span>
+            <div id="zoomQrCategory" class="text-[10px] text-slate-500 mt-1 uppercase font-semibold">4-Wheel</div>
+          </div>
+        </div>
+
+        <!-- Zoomable QR Canvas Frame -->
+        <div class="p-4 bg-white rounded-xl border-2 border-ncst-navy/20 shadow-md flex items-center justify-center transition-all duration-200" id="zoomQrFrame">
+          <div id="zoomQrContainer" class="flex items-center justify-center overflow-hidden">
+            <!-- Rendered dynamically by QRCode library -->
+          </div>
+        </div>
+
+        <!-- Size Controls (+ / - / Standard / Large / Max) -->
+        <div class="flex items-center justify-center gap-1.5 mt-4">
+          <span class="text-xs text-slate-500 font-medium mr-1">Size:</span>
+          <button type="button" class="zoom-size-btn px-2.5 py-1 rounded text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 transition-colors" data-size="260">
+            Compact (260px)
+          </button>
+          <button type="button" class="zoom-size-btn active-size px-2.5 py-1 rounded text-xs font-semibold border border-ncst-navy bg-ncst-navy text-white transition-colors" data-size="340">
+            Large (340px)
+          </button>
+          <button type="button" class="zoom-size-btn px-2.5 py-1 rounded text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 transition-colors" data-size="420">
+            Max (420px)
+          </button>
+        </div>
+
+        <p class="text-[11px] text-slate-500 text-center mt-3 flex items-center gap-1">
+          <svg class="w-3.5 h-3.5 text-emerald-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          <span>Point your mobile gate scanner camera directly at this QR code.</span>
+        </p>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="p-3 bg-white border-t border-slate-200 flex justify-end gap-2">
+        <button type="button" id="zoomQrDoneBtn" class="px-4 py-1.5 rounded-md bg-ncst-navy text-white text-xs font-semibold hover:bg-ncst-navyDark transition-colors">
+          Close
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==================== OFFICIAL PRINT DECAL (PRINT-ONLY) ==================== -->
+  <div id="officialPrintDecal" class="hidden">
+    <div class="official-print-header">
+      NATIONAL COLLEGE OF SCIENCE AND TECHNOLOGY
+    </div>
+    <div class="official-print-body">
+      <div id="officialPrintQrContainer"></div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Hub -->
+  <div id="toastHub" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- Scripts -->
+  <script src="js/qrcode.min.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
