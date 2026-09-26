@@ -33,10 +33,11 @@ sendResponse(200, [
         'connected' => $dbConnected,
         'driver' => $activeDriver,
         'tables_count' => count($tablesFound),
-        'tables' => $tablesFound,
-        'configured_host' => $db_host ?? 'unknown',
-        'configured_db' => $db_name ?? 'unknown',
-        'error' => $errorMsg
+        'tables' => SP_DEBUG ? $tablesFound : null,
+        // Connection details are only exposed while debugging locally
+        'configured_host' => SP_DEBUG ? ($db_host ?? 'unknown') : null,
+        'configured_db' => SP_DEBUG ? ($db_name ?? 'unknown') : null,
+        'error' => SP_DEBUG ? $errorMsg : ($errorMsg ? 'Database query failed' : null)
     ],
     'server_time' => date('Y-m-d H:i:s')
 ], 'API status operational');

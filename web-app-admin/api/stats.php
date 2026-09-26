@@ -5,10 +5,13 @@
  */
 
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../lib/auth.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendResponse(405, null, "Method not allowed");
 }
+
+requireStaff($pdo);
 
 try {
     // 1. Vehicles Currently Inside Campus

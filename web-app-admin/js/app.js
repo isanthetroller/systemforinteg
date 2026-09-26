@@ -240,8 +240,13 @@ document.addEventListener('DOMContentLoaded', () => {
     flaggedView: navBtns.flagged
   };
 
+  // Feature modules (users.js, gate.js, ...) register extra views through window.SP.registerView
+  const viewHooks = {};
+
   function switchView(targetViewId) {
     if (!views[targetViewId]) return;
+    // Views hidden for the current role cannot be opened
+    if (views[targetViewId].classList.contains('admin-only') && window.SPAuth && !SPAuth.hasRole('admin')) return;
 
     state.currentView = targetViewId;
 
@@ -264,12 +269,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const btn = navMap[key];
       if (!btn) return;
       const svg = btn.querySelector('svg');
+      const roleClass = btn.classList.contains('admin-only') ? 'admin-only ' : '';
 
       if (key === targetViewId) {
-        btn.className = activeClass;
+        btn.className = roleClass + activeClass;
         if (svg) svg.className = "w-4 h-4 text-ncst-navy flex-shrink-0";
       } else {
-        btn.className = inactiveClass;
+        btn.className = roleClass + inactiveClass;
         if (svg) {
           if (key === 'flaggedView') {
             svg.className = "w-4 h-4 text-ncst-crimson flex-shrink-0";
@@ -281,7 +287,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // View-specific initialization
-    if (targetViewId === 'dashboardView') {
+    if (viewHooks[targetViewId]) {
+      viewHooks[targetViewId]();
+    } else if (targetViewId === 'dashboardView') {
       renderDashboard();
     } else if (targetViewId === 'vehiclesView') {
       renderVehiclesTable();
@@ -900,7 +908,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </td>
         <td class="py-2.5 px-4">
-          <div class="font-mono font-bold text-slate-900">${escapeHtml(vehicle.plateNumber)}</div>
+          <div class="font-mono font-bold text-slate-900 flex items-center gap-1.5">${escapeHtml(vehicle.plateNumber)}${strikeChip(vehicle)}</div>
           <div class="inline-flex items-center gap-1.5 text-[11px] text-slate-500 font-mono mt-0.5">
             <span class="px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-semibold">PASS</span>
             <span>${escapeHtml(formatPassId(vehicle))}</span>
@@ -948,10 +956,10 @@ document.addEventListener('DOMContentLoaded', () => {
             <button type="button" class="inspect-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors cursor-pointer" title="Inspect vehicle dossier">
               Inspect
             </button>
-            <button type="button" class="edit-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors cursor-pointer" title="Edit vehicle record">
+            <button type="button" class="edit-btn admin-only px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors cursor-pointer" title="Edit vehicle record">
               Edit
             </button>
-            <button type="button" class="toggle-status-btn px-2.5 py-1 rounded border text-xs font-semibold shadow-xs transition-colors cursor-pointer ${vehicle.registrationStatus === 'Active' ? 'border-amber-200 bg-amber-50/60 hover:bg-amber-100 text-amber-800' : 'border-emerald-200 bg-emerald-50/60 hover:bg-emerald-100 text-emerald-800'}" title="Toggle registration status">
+            <button type="button" class="toggle-status-btn admin-only px-2.5 py-1 rounded border text-xs font-semibold shadow-xs transition-colors cursor-pointer ${vehicle.registrationStatus === 'Active' ? 'border-amber-200 bg-amber-50/60 hover:bg-amber-100 text-amber-800' : 'border-emerald-200 bg-emerald-50/60 hover:bg-emerald-100 text-emerald-800'}" title="Toggle registration status">
               ${vehicle.registrationStatus === 'Active' ? 'Suspend' : 'Activate'}
             </button>
           </div>
@@ -961,23 +969,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // Event Listeners for Row Actions
       tr.querySelector('.print-row-btn').addEventListener('click', () => printVehiclePass(vehicle));
       tr.querySelector('.zoom-qr-row-btn').addEventListener('click', () => {
-        const qrData = (vehicle.qrPassCode && vehicle.qrPassCode.startsWith('{')) ? vehicle.qrPassCode : JSON.stringify({
-          ownerStudentId: vehicle.ownerIdNumber,
-          ownerFullName: vehicle.ownerName,
-          plateNumber: vehicle.plateNumber,
-          stickerYear: vehicle.stickerYear || '2026',
-          authorizedDrivers: (vehicle.authorizedDrivers && vehicle.authorizedDrivers.length > 0) ? vehicle.authorizedDrivers.map(d => ({
-            fullName: d.fullName,
-            relationship: d.relationship,
-            licenseNo: d.licenseNo
-          })) : [{
-            fullName: vehicle.ownerName,
-            relationship: 'Self (Owner)',
-            licenseNo: 'N/A'
-          }],
-          vehicleCategory: vehicle.vehicleType,
-          makeModelColor: vehicle.makeModelColor
-        });
+        const qrData = passPayloadFor(vehicle);
+        if (!qrData) return showToast(PASS_UNAVAILABLE_MSG);
         openZoomQrModal({
           payload: qrData,
           plate: vehicle.plateNumber,
@@ -995,6 +988,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function toggleVehicleRegistrationStatus(vehicle) {
+    if (vehicle.isBanned) {
+      showToast(`${vehicle.plateNumber} is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.`);
+      return;
+    }
     const nextStatus = vehicle.registrationStatus === 'Active' ? 'Suspended' : 'Active';
     const actionDesc = nextStatus === 'Active' ? 'activated' : 'suspended';
 
@@ -1124,7 +1121,7 @@ document.addEventListener('DOMContentLoaded', () => {
               Investigate
             </button>
             ${isHeld ? `
-              <button type="button" class="resolve-btn px-2.5 py-1 rounded text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 shadow-xs transition-colors">
+              <button type="button" class="resolve-btn admin-only px-2.5 py-1 rounded text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 shadow-xs transition-colors">
                 Clear & Unblock
               </button>
             ` : ''}
@@ -1149,7 +1146,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (resolutionNotes === null) return;
 
     inc.status = 'Resolved';
-    inc.notes += ` [Resolved by Admin: ${resolutionNotes}]`;
+    const resolverLabel = (window.SPAuth && SPAuth.label()) || 'Security Administrator';
+    inc.notes += ` [Resolved by ${resolverLabel}: ${resolutionNotes}]`;
 
     // Unblock vehicle
     const vehicle = state.vehicles.find(v => v.plateNumber === inc.plateNumber);
@@ -1172,7 +1170,7 @@ document.addEventListener('DOMContentLoaded', () => {
       gatePoint: inc.gatePoint,
       action: "Security Stop Cleared",
       status: "Inside Campus",
-      guardName: "Security Administrator",
+      guardName: resolverLabel,
       notes: `Incident ${inc.caseNumber} resolved: ${resolutionNotes}`
     });
 
@@ -1184,7 +1182,7 @@ document.addEventListener('DOMContentLoaded', () => {
     closeDrawer();
 
     if (window.ApiClient && inc.id) {
-      ApiClient.resolveIncident(inc.id).catch(err => {
+      ApiClient.resolveIncident(inc.id, resolutionNotes).catch(err => {
         console.warn('[App] API incident resolution notice:', err.message);
       });
     }
@@ -1456,23 +1454,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!container) return;
     container.innerHTML = '';
 
-    const qrData = (v.qrPassCode && v.qrPassCode.startsWith('{')) ? v.qrPassCode : JSON.stringify({
-      ownerStudentId: v.ownerIdNumber,
-      ownerFullName: v.ownerName,
-      plateNumber: v.plateNumber,
-      stickerYear: v.stickerYear || '2026',
-      authorizedDrivers: (v.authorizedDrivers && v.authorizedDrivers.length > 0) ? v.authorizedDrivers.map(d => ({
-        fullName: d.fullName,
-        relationship: d.relationship,
-        licenseNo: d.licenseNo
-      })) : [{
-        fullName: v.ownerName,
-        relationship: 'Self (Owner)',
-        licenseNo: 'N/A'
-      }],
-      vehicleCategory: v.vehicleType,
-      makeModelColor: v.makeModelColor
-    });
+    const qrData = passPayloadFor(v);
+    if (!qrData) {
+      showToast(PASS_UNAVAILABLE_MSG);
+      return;
+    }
 
     if (typeof QRCode !== 'undefined') {
       try {
@@ -1599,6 +1585,11 @@ document.addEventListener('DOMContentLoaded', () => {
       status: status,
       qrPassCode: qrCode,
       qr_pass_code: qrCode,
+      qrPayload: v.qrPayload || null,
+      passId: v.passId || null,
+      passValidUntil: v.passValidUntil || null,
+      warningCount: v.warningCount || 0,
+      isBanned: !!v.isBanned,
       entryTime: entryTime,
       gatePoint: gatePoint,
       authorizedDrivers: drivers
@@ -1784,7 +1775,16 @@ document.addEventListener('DOMContentLoaded', () => {
           </svg>
           <span>Print Pass</span>
         </button>
-        <button id="drawerEditBtn" class="px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
+<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
+          Flag Violation / Warning
+        </button>
+        <button id="drawerStudentLoginBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="Create or reset the owner's student portal login">
+          Student Login
+        </button>
+        <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-800 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
+          Reissue Pass
+        </button>
+        <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
           <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
@@ -1802,24 +1802,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Render Scaled-Up 200px Drawer QR Code
     const drawerQrContainer = drawerContent.querySelector('#drawerQrContainer');
     if (drawerQrContainer && typeof QRCode !== 'undefined') {
-      const qrData = (v.qrPassCode && v.qrPassCode.startsWith('{')) ? v.qrPassCode : JSON.stringify({
-        ownerStudentId: v.ownerIdNumber,
-        ownerFullName: v.ownerName,
-        plateNumber: v.plateNumber,
-        stickerYear: v.stickerYear || '2026',
-        authorizedDrivers: (v.authorizedDrivers && v.authorizedDrivers.length > 0) ? v.authorizedDrivers.map(d => ({
-          fullName: d.fullName,
-          relationship: d.relationship,
-          licenseNo: d.licenseNo
-        })) : [{
-          fullName: v.ownerName,
-          relationship: 'Self (Owner)',
-          licenseNo: 'N/A'
-        }],
-        vehicleCategory: v.vehicleType,
-        makeModelColor: v.makeModelColor
-      });
-      try {
+      const qrData = passPayloadFor(v);
+      if (!qrData) {
+        drawerQrContainer.innerHTML = `<div class="w-[200px] h-[200px] flex items-center justify-center text-center text-[11px] text-slate-500 border border-dashed border-slate-300 rounded p-3">${PASS_UNAVAILABLE_MSG}</div>`;
+      } else try {
         drawerQrContainer.innerHTML = '';
         new QRCode(drawerQrContainer, {
           text: qrData,
@@ -1856,6 +1842,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (printBtn) {
       printBtn.addEventListener('click', () => printVehiclePass(v));
     }
+    const flagBtn = drawerFooter.querySelector('#drawerFlagBtn');
+    if (flagBtn) flagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(v));
+    const studentLoginBtn = drawerFooter.querySelector('#drawerStudentLoginBtn');
+    if (studentLoginBtn) studentLoginBtn.addEventListener('click', async () => {
+      if (!v.ownerIdNumber) return showToast('This vehicle has no owner ID number.');
+      if (!confirm(`Issue a student portal login for owner ID ${v.ownerIdNumber}?
+
+If the owner already has one, the password is reset and they are signed out everywhere.`)) return;
+      try {
+        const res = await ApiClient.issueStudentLogin(v.ownerIdNumber);
+        if (window.SPTempPassword) SPTempPassword(`Student portal login for owner ID ${res.ownerIdNumber}`, res.tempPassword);
+      } catch (err) {
+        showToast(`Could not issue login: ${err.message}`);
+      }
+    });
+    const reissueBtn = drawerFooter.querySelector('#drawerReissueBtn');
+    if (reissueBtn) reissueBtn.addEventListener('click', () => reissueVehiclePass(v));
     const editBtn = drawerFooter.querySelector('#drawerEditBtn');
     if (editBtn) {
       editBtn.addEventListener('click', () => {
@@ -1920,7 +1923,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let footerHtml = '';
     if (isHeld) {
       footerHtml = `
-        <button id="drawerResolveBtn" class="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+        <button id="drawerResolveBtn" class="admin-only px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
           Clear & Unblock
         </button>
         <button id="drawerCancelBtnInner" class="px-3 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700">
@@ -2000,7 +2003,19 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `;
 
-    openDrawer(`Gate Passage Audit — ${log.plateNumber}`, log.timestamp, html);
+    const auditVehicle = state.vehicles.find(x => (x.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() === (log.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase());
+    const auditFooter = auditVehicle ? `
+      <div class="flex items-center justify-end gap-2 w-full">
+        <button id="auditFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
+          Flag Violation / Warning
+        </button>
+        <button id="drawerCancelBtnInner" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">
+          Close
+        </button>
+      </div>` : '';
+    openDrawer(`Gate Passage Audit — ${log.plateNumber}`, log.timestamp, html, auditFooter);
+    const auditFlagBtn = document.getElementById('auditFlagBtn');
+    if (auditFlagBtn) auditFlagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(auditVehicle, { context: `Gate log: ${log.action} at ${log.gatePoint}, ${log.timestamp}` }));
   }
 
   /* ==========================================================================
@@ -2313,20 +2328,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
-      const updatedQrPayload = JSON.stringify({
-        ownerStudentId: ownerIdNumber,
-        ownerFullName: ownerFullName,
-        plateNumber: plateNumber,
-        stickerYear: stickerYear,
-        authorizedDrivers: authorizedDrivers.map(d => ({
-          fullName: d.fullName,
-          relationship: d.relationship,
-          licenseNo: d.licenseNo
-        })),
-        vehicleCategory: vehicleCategory,
-        makeModelColor: makeModelColor
-      });
-
       // Update in-memory vehicle record
       v.plateNumber = plateNumber;
       v.plate_number = plateNumber;
@@ -2356,8 +2357,6 @@ document.addEventListener('DOMContentLoaded', () => {
       v.vehiclePhoto = editVehiclePhotoDataUrl;
       v.vehicle_photo = editVehiclePhotoDataUrl;
       v.authorizedDrivers = authorizedDrivers;
-      v.qrPassCode = updatedQrPayload;
-      v.qr_pass_code = updatedQrPayload;
 
       closeEditModal();
       renderVehiclesTable();
@@ -2384,9 +2383,10 @@ document.addEventListener('DOMContentLoaded', () => {
           status: v.status,
           ownerPhoto: v.ownerPhoto,
           vehiclePhoto: v.vehiclePhoto,
-          qrPassCode: v.qrPassCode,
           authorizedDrivers: v.authorizedDrivers
-        }).then(() => {
+        }).then((saved) => {
+          if (saved) applyServerPass(v, saved);
+          renderVehiclesTable();
           console.log('[App] Vehicle updated on server:', v.plateNumber);
         }).catch(err => {
           console.warn('[App] Update API sync notice:', err.message);
@@ -2831,21 +2831,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
-      const qrPayload = JSON.stringify({
-        ownerStudentId: ownerIdNumber,
-        ownerFullName: ownerFullName,
-        plateNumber: plateNumber,
-        stickerYear: stickerYear,
-        authorizedDrivers: authorizedDrivers.map(d => ({
-          fullName: d.fullName,
-          relationship: d.relationship,
-          licenseNo: d.licenseNo
-        })),
-        vehiclePicture: vehiclePhotoMicroDataUrl || (vehiclePhotoFileName ? vehiclePhotoFileName.textContent : null),
-        vehicleCategory: vehicleCategory,
-        makeModelColor: makeModelColor
-      });
-
       const newVehicle = {
         id: `veh-${Date.now()}`,
         plateNumber,
@@ -2858,7 +2843,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ownerIdNumber,
         ownerPhone: ownerContact,
         ownerEmail,
-        qrPassCode: qrPayload,
+        qrPayload: null,
         status: 'Outside',
         registrationStatus: 'Active',
         entryTime: null,
@@ -2890,14 +2875,21 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerIdNumber,
           ownerPhone: ownerContact,
           ownerEmail,
-          qrPassCode: qrPayload,
           stickerYear,
           ownerPhoto: ownerPhotoDataUrl,
           vehiclePhoto: vehiclePhotoDataUrl,
           authorizedDrivers
         }).then(res => {
           if (res && res.id) newVehicle.id = res.id;
+          if (res) applyServerPass(newVehicle, res);
           console.log('[App] Vehicle enrolled on backend:', res);
+          showToast(`Signed pass issued for ${plateNumber}.`);
+          switchView('vehiclesView');
+          openVehicleDrawer(newVehicle);
+          const acct = res && res.studentAccount;
+          if (acct && acct.tempPassword && window.SPTempPassword) {
+            SPTempPassword(`Student portal login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
+          }
         }).catch(err => {
           console.warn('[App] Local cache saved, API sync notice:', err.message);
           showToast(`Notice: Saved locally, server sync error: ${err.message}`);
@@ -2912,12 +2904,6 @@ document.addEventListener('DOMContentLoaded', () => {
       plateValidationMsg.classList.add('hidden');
       plateInput.classList.remove('border-rose-400');
 
-      // Prompt navigation
-      setTimeout(() => {
-        if (confirm(`Vehicle ${plateNumber} registered! Would you like to view it in the Vehicle Directory?`)) {
-          switchView('vehiclesView');
-        }
-      }, 300);
     });
   }
 
@@ -3030,23 +3016,8 @@ document.addEventListener('DOMContentLoaded', () => {
       `).join('');
     }
 
-    // Only necessary vehicle, driver, and pass information encoded into the QR code
-    const payloadObj = {
-      ownerStudentId: idNum,
-      ownerFullName: owner,
-      plateNumber: plate,
-      stickerYear: year,
-      authorizedDrivers: authorizedDriversList.map(d => ({
-        fullName: d.fullName,
-        relationship: d.relationship,
-        licenseNo: d.licenseNo
-      })),
-      vehiclePicture: vehiclePhotoMicroDataUrl || (vehiclePhotoFileName && vehiclePhotoFileName.textContent ? vehiclePhotoFileName.textContent : null),
-      vehicleCategory: category,
-      makeModelColor: makeModel
-    };
-
-    let payloadString = JSON.stringify(payloadObj);
+    // The live preview is never a valid pass: passes are signed by the server on save
+    let payloadString = `SECUREPARK PREVIEW - NOT A VALID PASS - ${plate}`;
 
     // Update Photo Thumbnails in the Pass Card
     if (ownerPhotoDataUrl && qrOwnerThumb) {
@@ -3088,12 +3059,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (err) {
         console.warn('QRCode generation fallback notice:', err);
-        if (payloadObj.vehiclePicture && payloadObj.vehiclePicture.startsWith('data:')) {
-          payloadObj.vehiclePicture = vehiclePhotoFileName ? vehiclePhotoFileName.textContent : "vehicle_photo.jpg";
-          payloadString = JSON.stringify(payloadObj);
-          qrCodeInstance.clear();
-          qrCodeInstance.makeCode(payloadString);
-        }
       }
     }
 
@@ -3406,6 +3371,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // QR Technology Action Button Handlers
   if (downloadPassBadgeBtn) {
     downloadPassBadgeBtn.addEventListener('click', () => {
+      showToast('Register the vehicle first. The signed pass opens automatically after saving (Print Pass in the dossier).');
+      return;
+      // eslint-disable-next-line no-unreachable
       if (!qrCodeContainer) return;
       const qrEl = qrCodeContainer.querySelector('canvas') || qrCodeContainer.querySelector('img');
       if (!qrEl) {
@@ -3496,6 +3464,43 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       printVehiclePass(currentPass);
     });
+  }
+
+  /* ==========================================================================
+     9.2 Signed Pass Helpers (payloads are signed by the server, never here)
+     ========================================================================== */
+  const PASS_UNAVAILABLE_MSG = 'Signed pass not available yet. Save the vehicle online, then reload.';
+
+  function strikeChip(v) {
+    if (v.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[9px] font-extrabold tracking-wide">BANNED</span>';
+    const n = Number(v.warningCount || 0);
+    return n > 0 ? `<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-extrabold">STRIKE ${n}/3</span>` : '';
+  }
+
+  function passPayloadFor(v) {
+    return v && typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{') ? v.qrPayload : null;
+  }
+
+  function applyServerPass(target, serverVehicle) {
+    target.qrPayload = serverVehicle.qrPayload || target.qrPayload || null;
+    target.passId = serverVehicle.passId || target.passId || null;
+    target.passValidUntil = serverVehicle.passValidUntil || target.passValidUntil || null;
+    if (serverVehicle.plateNumber) target.plateNumber = serverVehicle.plateNumber;
+  }
+
+  async function reissueVehiclePass(v) {
+    if (!v || !v.id) return;
+    if (!confirm(`Issue a new pass for ${v.plateNumber}?\n\nEvery previously printed QR code for this vehicle will stop working immediately.`)) return;
+    try {
+      const saved = await ApiClient.reissuePass(v.id);
+      const target = state.vehicles.find(x => x.id === v.id) || v;
+      applyServerPass(target, saved);
+      showToast(`New pass issued for ${v.plateNumber}. Old QR codes are revoked.`);
+      renderVehiclesTable();
+      openVehicleDrawer(target);
+    } catch (err) {
+      showToast(`Reissue failed: ${err.message}`);
+    }
   }
 
   /* ==========================================================================
@@ -3602,7 +3607,45 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       console.warn('[App] Backend sync note:', err.message);
     }
+    // Feature modules (gate monitor, violations, ...) refresh their panels on this
+    document.dispatchEvent(new CustomEvent('sp:data-loaded'));
   }
 
-  loadInitialDataFromApi();
+  /* ==========================================================================
+     Bridge for feature modules (auth.js, users.js, ...)
+     ========================================================================== */
+  window.SP = {
+    state,
+    switchView,
+    showToast,
+    escapeHtml,
+    openDrawer,
+    closeDrawer,
+    reload: loadInitialDataFromApi,
+    openVehicle(id) {
+      const v = state.vehicles.find(x => x.id === id);
+      if (v) openVehicleDrawer(v);
+      return !!v;
+    },
+    registerView(viewId, navBtn, onShow) {
+      views[viewId] = document.getElementById(viewId);
+      if (navBtn) {
+        navMap[viewId] = navBtn;
+        navBtn.addEventListener('click', () => switchView(viewId));
+      }
+      if (onShow) viewHooks[viewId] = onShow;
+    }
+  };
+  document.dispatchEvent(new CustomEvent('sp:app-ready'));
+
+  // Data is only loaded once a staff member is signed in
+  if (window.SPAuth) {
+    SPAuth.whenAuthenticated(() => {
+      loadInitialDataFromApi();
+      // Admins land on the dashboard, guards on the Gate Monitor
+      switchView(SPAuth.hasRole('admin') ? 'dashboardView' : 'gateView');
+    });
+  } else {
+    loadInitialDataFromApi();
+  }
 });

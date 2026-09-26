@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1B3676">
+  <title>SecurePark Student Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- ==================== SIGN IN ==================== -->
+  <main id="screenLogin" class="screen auth-screen" hidden>
+    <div class="auth-card">
+      <div class="crest" aria-hidden="true">NCST</div>
+      <h1>SecurePark</h1>
+      <p class="muted">Student &amp; Employee Vehicle Portal</p>
+      <form id="loginForm" novalidate autocomplete="on">
+        <label for="loginId">Student / Employee ID</label>
+        <input id="loginId" name="username" type="text" autocomplete="username" inputmode="text" placeholder="e.g. NCST-2024-05182" required>
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        <p id="loginError" class="form-error" role="alert" hidden></p>
+        <button id="loginBtn" type="submit" class="btn btn-primary btn-block">Sign In</button>
+      </form>
+      <p class="fine">Your login is created when your vehicle is registered. Forgot your password? Visit the Campus Security Office with your ID.</p>
+    </div>
+  </main>
+
+  <!-- ==================== FIRST SIGN-IN: CHANGE PASSWORD ==================== -->
+  <main id="screenPassword" class="screen auth-screen" hidden>
+    <div class="auth-card">
+      <div class="crest" aria-hidden="true">NCST</div>
+      <h1>Set your password</h1>
+      <p class="muted">You signed in with a temporary password. Choose a new one to continue.</p>
+      <form id="firstPasswordForm" novalidate>
+        <label for="fpCurrent">Temporary password</label>
+        <input id="fpCurrent" type="password" autocomplete="current-password" required>
+        <label for="fpNew">New password</label>
+        <input id="fpNew" type="password" autocomplete="new-password" required>
+        <label for="fpConfirm">Confirm new password</label>
+        <input id="fpConfirm" type="password" autocomplete="new-password" required>
+        <p class="hint">At least 8 characters with letters and numbers.</p>
+        <p id="firstPasswordError" class="form-error" role="alert" hidden></p>
+        <button id="firstPasswordBtn" type="submit" class="btn btn-primary btn-block">Save and Continue</button>
+      </form>
+      <button type="button" class="btn btn-link" data-action="logout">Sign out</button>
+    </div>
+  </main>
+
+  <!-- ==================== APP ==================== -->
+  <div id="screenApp" class="screen app" hidden>
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="crest crest-sm" aria-hidden="true">NCST</span>
+        <div>
+          <div class="topbar-title">SecurePark</div>
+          <div id="topbarName" class="topbar-sub"></div>
+        </div>
+      </div>
+      <button type="button" class="btn btn-ghost" data-action="logout">Sign out</button>
+    </header>
+
+    <main class="content">
+      <section id="tabPass" class="tab" aria-labelledby="navPass"></section>
+      <section id="tabStrikes" class="tab" aria-labelledby="navStrikes" hidden></section>
+      <section id="tabAccount" class="tab" aria-labelledby="navAccount" hidden>
+        <div class="card">
+          <h2 class="card-title">My account</h2>
+          <dl id="accountDetails" class="details"></dl>
+        </div>
+        <div class="card">
+          <h2 class="card-title">Change password</h2>
+          <form id="passwordForm" novalidate>
+            <label for="pwCurrent">Current password</label>
+            <input id="pwCurrent" type="password" autocomplete="current-password" required>
+            <label for="pwNew">New password</label>
+            <input id="pwNew" type="password" autocomplete="new-password" required>
+            <label for="pwConfirm">Confirm new password</label>
+            <input id="pwConfirm" type="password" autocomplete="new-password" required>
+            <p id="passwordError" class="form-error" role="alert" hidden></p>
+            <p id="passwordOk" class="form-ok" role="status" hidden></p>
+            <button id="passwordBtn" type="submit" class="btn btn-primary">Update Password</button>
+          </form>
+        </div>
+        <div class="card">
+          <h2 class="card-title">How your pass works</h2>
+          <ul class="bullets">
+            <li>Show the QR on the <strong>My Pass</strong> tab at the gate when entering and leaving campus.</li>
+            <li>The guard confirms that the driver is on your authorized drivers list.</li>
+            <li>Each warning is one strike. At <strong>3 strikes</strong> your vehicle is banned until the Security Office resolves it.</li>
+            <li>Parking overnight or past curfew (22:00) adds a strike.</li>
+            <li>Changes to your vehicle or drivers are done at the Security Office. A new pass replaces the old one.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="Sections">
+      <button type="button" id="navPass" class="tabbar-btn" data-tab="tabPass" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM14 20h2M20 14v2"/></svg>
+        <span>My Pass</span>
+      </button>
+      <button type="button" id="navStrikes" class="tabbar-btn" data-tab="tabStrikes">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <span>Strikes</span>
+        <span id="strikesBadge" class="tabbar-badge" hidden></span>
+      </button>
+      <button type="button" id="navAccount" class="tabbar-btn" data-tab="tabAccount">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+        <span>Account</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Full-screen QR for scanning -->
+  <div id="qrZoom" class="qr-zoom" hidden role="dialog" aria-modal="true" aria-label="Pass QR code">
+    <div class="qr-zoom-inner">
+      <div id="qrZoomPlate" class="qr-zoom-plate"></div>
+      <div id="qrZoomCode" class="qr-zoom-code"></div>
+      <p class="qr-zoom-tip">Turn your screen brightness up. Tap anywhere to close.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="js/config.js"></script>
+  <script src="js/aes.js"></script>
+  <script src="js/qrcode.min.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

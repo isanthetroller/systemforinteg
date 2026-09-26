@@ -1,0 +1,87 @@
+<?php
+/**
+ * SecurePark API - Vehicles currently on campus
+ *
+ * GET /api/oncampus.php   (staff)
+ *
+ * Registered vehicles with status "Inside Campus" and visitors who entered on a day pass
+ * but have not exited, with how long they have been inside, who drove in, owner contact,
+ * strike standing and any items the visitor brought in.
+ */
+
+require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/vehicles.php';
+require_once __DIR__ . '/../lib/campus.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    sendResponse(405, null, 'Method not allowed');
+}
+requireStaff($pdo);
+
+$now = spNow();
+$nightStart = currentNightStart($now);
+$today = date('Y-m-d', $now);
+
+/* ---------- Registered vehicles ---------- */
+$vehicles = [];
+foreach ($pdo->query("SELECT * FROM `vehicles` WHERE `status` = 'Inside Campus' ORDER BY `plate_number`")->fetchAll() as $v) {
+    $entry = lastEntryLog($pdo, $v);
+    $hours = $entry ? round(max(0, $now - $entry['time']) / 3600, 1) : null;
+    $overnight = $entry && $entry['time'] < $nightStart && $now >= $nightStart;
+    $vehicles[] = [
+        'vehicleId' => (int)$v['id'],
+        'plateNumber' => $v['plate_number'],
+        'vehicleType' => $v['vehicle_type'],
+        'makeModelColor' => $v['make_model_color'],
+        'ownerName' => $v['owner_name'],
+        'ownerRole' => $v['owner_role'],
+        'department' => $v['department'],
+        'ownerPhone' => $v['owner_phone'],
+        'entryTime' => $entry ? date('Y-m-d H:i:s', $entry['time']) : null,
+        'enteredBy' => $entry['driver'] ?? null,
+        'entryGate' => $entry['gatePoint'] ?? null,
+        'admittedBy' => $entry['guard'] ?? null,
+        'hoursInside' => $hours,
+        'timeFlag' => $overnight ? 'overnight' : ($hours !== null && $hours >= SP_OVERTIME_HOURS ? 'overtime' : null),
+        'warningCount' => (int)$v['warning_count'],
+        'isBanned' => (int)$v['is_banned'] === 1,
+        'registrationStatus' => $v['registration_status'],
+    ];
+}
+usort($vehicles, fn($a, $b) => ($b['hoursInside'] ?? -1) <=> ($a['hoursInside'] ?? -1));
+
+/* ---------- Visitors on day passes ---------- */
+$visitors = [];
+$stmt = $pdo->query("SELECT * FROM `visitor_passes` WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` = 'Active' ORDER BY `entry_time` ASC");
+foreach ($stmt->fetchAll() as $p) {
+    $entryTs = strtotime($p['entry_time']);
+    $visitors[] = [
+        'passId' => (int)$p['id'],
+        'passCode' => $p['pass_code'],
+        'plateNumber' => $p['plate_number'],
+        'vehicleModel' => $p['vehicle_model'],
+        'visitorName' => $p['visitor_name'],
+        'contactNumber' => $p['contact_number'],
+        'personToVisit' => $p['person_to_visit'],
+        'purposeOfVisit' => $p['purpose_of_visit'],
+        'validDate' => $p['valid_date'],
+        'overstayed' => $p['valid_date'] < $today,
+        'entryTime' => $p['entry_time'],
+        'hoursInside' => round(max(0, $now - $entryTs) / 3600, 1),
+        'items' => visitorPassItems($pdo, $p['id']),
+    ];
+}
+
+sendResponse(200, [
+    'now' => date('Y-m-d H:i:s', $now),
+    'counts' => [
+        'total' => count($vehicles) + count($visitors),
+        'registered' => count($vehicles),
+        'visitors' => count($visitors),
+        'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null)) + count(array_filter($visitors, fn($v) => $v['overstayed'])),
+        'withStrikes' => count(array_filter($vehicles, fn($v) => $v['warningCount'] > 0 || $v['isBanned'])),
+    ],
+    'vehicles' => $vehicles,
+    'visitors' => $visitors,
+]);

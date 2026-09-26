@@ -4,10 +4,14 @@
  * Configured for InfinityFree Free Hosting with Automatic SQLite Fallback
  */
 
-// Allow CORS for Web Admin and Mobile Application
+// All dates and times operate in Philippine Standard Time (UTC+8)
+date_default_timezone_set('Asia/Manila');
+
+// Allow CORS for Web Admin, Student Portal and Mobile Application
+// (auth uses bearer tokens in headers, never cookies, so a wildcard origin is safe)
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Api-Key, Cache-Control, Accept, Origin");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Auth-Token, X-Requested-With, X-Api-Key, Cache-Control, Accept, Origin");
 
 // Respond immediately to preflight OPTIONS requests
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -16,24 +20,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 // -----------------------------------------------------------------------------
+// Secrets (QR signing key, scanner device key, policy settings)
+// -----------------------------------------------------------------------------
+$secretPath = __DIR__ . '/secret.php';
+if (!file_exists($secretPath)) {
+    http_response_code(500);
+    header("Content-Type: application/json; charset=UTF-8");
+    echo json_encode([
+        'status' => 'error',
+        'success' => false,
+        'message' => 'Server not configured: copy config/secret.example.php to config/secret.php and set its values.'
+    ]);
+    exit;
+}
+require_once $secretPath;
+
+// Never leak PHP errors (file paths, SQL) to clients outside local debugging
+ini_set('display_errors', SP_DEBUG ? '1' : '0');
+error_reporting(E_ALL);
+
+// -----------------------------------------------------------------------------
 // Primary: InfinityFree / Local MySQL Database Configuration
 // -----------------------------------------------------------------------------
-$db_host = getenv('DB_HOST') ?: 'sql200.infinityfree.com';
-$db_name = getenv('DB_NAME') ?: 'if0_42971238_securepark';
-$db_user = getenv('DB_USER') ?: 'if0_42971238';
-$db_pass = getenv('DB_PASS') !== false ? getenv('DB_PASS') : '';
+// Environment variables win (local tools); otherwise secret.php (InfinityFree has no env vars)
+$db_host = getenv('DB_HOST') ?: (defined('SP_DB_HOST') ? SP_DB_HOST : 'sql200.infinityfree.com');
+$db_name = getenv('DB_NAME') ?: (defined('SP_DB_NAME') ? SP_DB_NAME : 'if0_42971238_securepark');
+$db_user = getenv('DB_USER') ?: (defined('SP_DB_USER') ? SP_DB_USER : 'if0_42971238');
+$db_pass = getenv('DB_PASS') !== false ? getenv('DB_PASS') : (defined('SP_DB_PASS') ? SP_DB_PASS : '');
 
 $pdo = null;
 $db_driver = 'mysql';
 
 try {
+    // Local development: DB_DRIVER=sqlite (env) or SP_FORCE_SQLITE (secret.php) skips MySQL entirely
+    if (getenv('DB_DRIVER') === 'sqlite' || (defined('SP_FORCE_SQLITE') && SP_FORCE_SQLITE)) {
+        throw new PDOException('MySQL skipped (DB_DRIVER=sqlite)');
+    }
     $dsn = "mysql:host={$db_host};dbname={$db_name};charset=utf8mb4";
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
         PDO::ATTR_TIMEOUT            => 3,
-        PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
+        PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci, time_zone = '+08:00'"
     ];
     $pdo = new PDO($dsn, $db_user, $db_pass, $options);
 } catch (PDOException $e) {
@@ -64,6 +93,13 @@ try {
         $pdo->sqliteCreateFunction('CURDATE', function() { return date('Y-m-d'); });
         $pdo->sqliteCreateFunction('DATE', function($val) { return date('Y-m-d', strtotime($val)); });
         $pdo->sqliteCreateFunction('HOUR', function($val) { return (int)date('G', strtotime($val)); });
+        $pdo->sqliteCreateFunction('DATE_FORMAT', function($val, $fmt) {
+            if ($val === null || $val === '') return null;
+            $map = ['%Y' => 'Y', '%y' => 'y', '%m' => 'm', '%d' => 'd', '%b' => 'M', '%M' => 'F',
+                    '%H' => 'H', '%h' => 'h', '%i' => 'i', '%s' => 's', '%p' => 'A', '%e' => 'j'];
+            return date(strtr($fmt, $map), strtotime($val));
+        }, 2);
+        $pdo->exec('PRAGMA foreign_keys = ON');
 
         // Ensure database tables exist
         initializeSqliteSchema($pdo);
@@ -149,7 +185,7 @@ function initializeSqliteSchema($pdo) {
             `driver_relationship` TEXT NULL,
             `reason` TEXT NOT NULL,
             `gate_point` TEXT NOT NULL DEFAULT 'Gate 1 (Main Ingress)',
-            `officer` TEXT NOT NULL DEFAULT 'Sgt. R. Mendoza',
+            `officer` TEXT NOT NULL DEFAULT 'Gate Officer',
             `status` TEXT NOT NULL DEFAULT 'Held',
             `notes` TEXT NULL,
             `reported_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -161,13 +197,132 @@ function initializeSqliteSchema($pdo) {
             `username` TEXT NOT NULL UNIQUE,
             `password_hash` TEXT NOT NULL,
             `full_name` TEXT NOT NULL,
-            `role` TEXT NOT NULL DEFAULT 'Gate Officer',
+            `role` TEXT NOT NULL DEFAULT 'guard',
             `badge_number` TEXT NULL,
             `gate_assigned` TEXT NULL DEFAULT 'Gate 1 (Main Ingress)',
             `status` TEXT NOT NULL DEFAULT 'Active',
             `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS `student_accounts` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `owner_id_number` TEXT NOT NULL UNIQUE,
+            `full_name` TEXT NOT NULL,
+            `email` TEXT NULL,
+            `password_hash` TEXT NOT NULL,
+            `must_change_password` INTEGER NOT NULL DEFAULT 1,
+            `status` TEXT NOT NULL DEFAULT 'Active',
+            `failed_attempts` INTEGER NOT NULL DEFAULT 0,
+            `locked_until` TEXT NULL,
+            `last_login` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS `auth_tokens` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `token_hash` TEXT NOT NULL UNIQUE,
+            `user_type` TEXT NOT NULL,
+            `user_id` INTEGER NOT NULL,
+            `expires_at` TEXT NOT NULL,
+            `revoked` INTEGER NOT NULL DEFAULT 0,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS `vehicle_violations` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `vehicle_id` INTEGER NOT NULL,
+            `plate_number` TEXT NOT NULL,
+            `violation_type` TEXT NOT NULL,
+            `description` TEXT NULL,
+            `severity` TEXT NOT NULL DEFAULT 'Warning',
+            `logged_by` TEXT NOT NULL,
+            `logged_by_user_id` INTEGER NULL,
+            `status` TEXT NOT NULL DEFAULT 'Pending',
+            `counts_as_strike` INTEGER NOT NULL DEFAULT 0,
+            `cleared_by_violation_id` INTEGER NULL,
+            `incident_id` INTEGER NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `resolved_at` TEXT NULL,
+            `resolved_by` TEXT NULL,
+            `resolution_notes` TEXT NULL,
+            FOREIGN KEY (`vehicle_id`) REFERENCES `vehicles`(`id`) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS `visitor_passes` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `pass_code` TEXT NOT NULL UNIQUE,
+            `visitor_name` TEXT NOT NULL,
+            `contact_number` TEXT NOT NULL,
+            `plate_number` TEXT NOT NULL,
+            `vehicle_model` TEXT NULL,
+            `purpose_of_visit` TEXT NOT NULL,
+            `person_to_visit` TEXT NOT NULL,
+            `valid_date` TEXT NOT NULL,
+            `entry_time` TEXT NULL,
+            `exit_time` TEXT NULL,
+            `status` TEXT NOT NULL DEFAULT 'Active',
+            `created_by` TEXT NULL,
+            `created_by_user_id` INTEGER NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS `visitor_pass_items` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `visitor_pass_id` INTEGER NOT NULL,
+            `item_name` TEXT NOT NULL,
+            `quantity` INTEGER NOT NULL DEFAULT 1,
+            `description` TEXT NULL,
+            FOREIGN KEY (`visitor_pass_id`) REFERENCES `visitor_passes`(`id`) ON DELETE CASCADE
+        );
     ");
+
+    // Bring older SQLite databases up to the v2 structure
+    ensureColumn($pdo, 'system_users', 'last_login', 'TEXT NULL');
+    ensureColumn($pdo, 'system_users', 'failed_attempts', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'system_users', 'locked_until', 'TEXT NULL');
+    ensureColumn($pdo, 'system_users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'warning_count', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'is_banned', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'pass_id', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'pass_valid_until', 'TEXT NULL');
+    ensureColumn($pdo, 'gate_logs', 'verified_driver_name', 'TEXT NULL');
+    ensureColumn($pdo, 'gate_logs', 'gate_type', "TEXT NOT NULL DEFAULT 'Ingress'");
+    ensureColumn($pdo, 'gate_logs', 'logged_by_user_id', 'INTEGER NULL');
+    ensureColumn($pdo, 'security_incidents', 'logged_by_user_id', 'INTEGER NULL');
+
+    // Normalize legacy values (mirrors migrations/001_v2.sql)
+    $pdo->exec("UPDATE `system_users` SET `role` = 'admin' WHERE `role` NOT IN ('admin', 'guard') AND (LOWER(`role`) LIKE '%admin%')");
+    $pdo->exec("UPDATE `system_users` SET `role` = 'guard' WHERE `role` NOT IN ('admin', 'guard')");
+    $pdo->exec("UPDATE `gate_logs` SET `action` = 'Entry Denied' WHERE `action` NOT IN ('Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied')");
+
+    // Seed the first administrator (must change password on first login)
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM `system_users`")->fetchColumn();
+    if ($count === 0) {
+        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 1)");
+        $stmt->execute(['admin', password_hash('Password123!', PASSWORD_BCRYPT), 'System Administrator', 'NCST-SEC-01']);
+    }
+}
+
+/**
+ * Adds a column to a SQLite table if it does not exist yet
+ */
+function ensureColumn($pdo, $table, $column, $definition) {
+    $cols = $pdo->query("PRAGMA table_info(`{$table}`)")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($cols as $c) {
+        if ($c['name'] === $column) return;
+    }
+    $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
+}
+
+/**
+ * Current Manila time, overridable with ?now= only when SP_DEBUG is enabled (for testing time rules)
+ */
+function spNow() {
+    if (defined('SP_DEBUG') && SP_DEBUG && !empty($_GET['now'])) {
+        $ts = strtotime($_GET['now']);
+        if ($ts !== false) return $ts;
+    }
+    return time();
 }
 
 /**
@@ -176,8 +331,11 @@ function initializeSqliteSchema($pdo) {
 function sendResponse($statusCode, $data = null, $message = '') {
     http_response_code($statusCode);
     header("Content-Type: application/json; charset=UTF-8");
+    $ok = ($statusCode >= 200 && $statusCode < 300);
+    // `status` is kept for the mobile app; `success` is the v2 response contract
     $response = [
-        'status' => ($statusCode >= 200 && $statusCode < 300) ? 'success' : 'error'
+        'status' => $ok ? 'success' : 'error',
+        'success' => $ok
     ];
     if ($message !== '') {
         $response['message'] = $message;

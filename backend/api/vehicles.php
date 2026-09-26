@@ -1,7 +1,7 @@
 <?php
 /**
  * SecurePark API - Vehicles Endpoint
- * GET    /api/vehicles.php                - List all vehicles with authorized drivers
+ * GET    /api/vehicles.php                - List all vehicles with authorized drivers (staff; admins also get signed qrPayload)
  * GET    /api/vehicles.php?plate=XYZ      - Lookup vehicle by plate
  * GET    /api/vehicles.php?qr=CODE        - Lookup vehicle by QR code
  * POST   /api/vehicles.php                - Register new vehicle + drivers
@@ -10,114 +10,51 @@
  */
 
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/vehicles.php';
+require_once __DIR__ . '/../lib/students.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
-        handleGetVehicles($pdo);
+        // Single lookups (plate / QR) are open to the mobile scanner; the full
+        // registry (owner personal data) requires a signed-in staff member.
+        $isLookup = (isset($_GET['plate']) && trim($_GET['plate']) !== '') || (isset($_GET['qr']) && trim($_GET['qr']) !== '');
+        $actor = $isLookup ? requireStaffOrScanner($pdo) : requireStaff($pdo);
+        handleGetVehicles($pdo, $actor);
         break;
     case 'POST':
+        requireStaff($pdo, ['admin']);
         handleRegisterVehicle($pdo);
         break;
     case 'PUT':
+        requireStaff($pdo, ['admin']);
         handleUpdateVehicle($pdo);
         break;
     case 'DELETE':
+        requireStaff($pdo, ['admin']);
         handleDeleteVehicle($pdo);
         break;
     default:
         sendResponse(405, null, "Method {$method} not allowed");
 }
 
-function handleGetVehicles($pdo) {
+function handleGetVehicles($pdo, $actor) {
     $plate = isset($_GET['plate']) ? trim($_GET['plate']) : '';
     $qr = isset($_GET['qr']) ? trim($_GET['qr']) : '';
     $query = isset($_GET['q']) ? trim($_GET['q']) : '';
 
-    if ($plate !== '') {
-        $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `plate_number` = ? LIMIT 1");
-        $stmt->execute([$plate]);
-        $veh = $stmt->fetch();
+    // Signed QR payloads are only handed to administrators (to print / reissue passes)
+    $includeQr = ($actor['role'] ?? '') === 'admin';
 
-        // Fallback: normalized plate (ignoring hyphens and spaces)
+    if ($plate !== '' || $qr !== '') {
+        $needle = $plate !== '' ? $plate : $qr;
+        $veh = lookupVehicleByAnyCode($pdo, $needle);
         if (!$veh) {
-            $norm = strtoupper(preg_replace('/[^A-Z0-9]/', '', $plate));
-            $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? LIMIT 1");
-            $stmt->execute([$norm]);
-            $veh = $stmt->fetch();
+            sendResponse(404, null, $plate !== '' ? "Vehicle with plate {$plate} not found" : "Pass code not found");
         }
-
-        // Fallback: check qr_pass_code or owner_id_number
-        if (!$veh) {
-            $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `qr_pass_code` = ? OR `owner_id_number` = ? LIMIT 1");
-            $stmt->execute([$plate, $plate]);
-            $veh = $stmt->fetch();
-        }
-
-        // Fallback: If plate parameter is actually a JSON QR payload
-        if (!$veh && (strpos($plate, '{') === 0 || strpos($plate, 'plateNumber') !== false || strpos($plate, 'plate') !== false)) {
-            $decoded = json_decode($plate, true);
-            if ($decoded) {
-                $targetPlate = trim($decoded['plateNumber'] ?? $decoded['plate_number'] ?? $decoded['plate'] ?? '');
-                if ($targetPlate !== '') {
-                    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `plate_number` = ? LIMIT 1");
-                    $stmt->execute([$targetPlate]);
-                    $veh = $stmt->fetch();
-                    if (!$veh) {
-                        $norm = strtoupper(preg_replace('/[^A-Z0-9]/', '', $targetPlate));
-                        $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? LIMIT 1");
-                        $stmt->execute([$norm]);
-                        $veh = $stmt->fetch();
-                    }
-                }
-            }
-        }
-
-        if (!$veh) {
-            sendResponse(404, null, "Vehicle with plate {$plate} not found");
-        }
-        $veh['authorizedDrivers'] = getDriversForVehicle($pdo, $veh['id']);
-        sendResponse(200, formatVehicleRow($veh));
-    }
-
-    if ($qr !== '') {
-        $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `qr_pass_code` = ? LIMIT 1");
-        $stmt->execute([$qr]);
-        $veh = $stmt->fetch();
-
-        // Fallback: If QR is a direct plate number
-        if (!$veh) {
-            $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `plate_number` = ? LIMIT 1");
-            $stmt->execute([$qr]);
-            $veh = $stmt->fetch();
-        }
-
-        // Fallback: If QR is JSON, parse plate or owner ID
-        if (!$veh && (strpos($qr, '{') === 0 || strpos($qr, 'plateNumber') !== false || strpos($qr, 'plate') !== false)) {
-            $decoded = json_decode($qr, true);
-            if ($decoded) {
-                $targetPlate = trim($decoded['plateNumber'] ?? $decoded['plate_number'] ?? $decoded['plate'] ?? '');
-                if ($targetPlate !== '') {
-                    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `plate_number` = ? LIMIT 1");
-                    $stmt->execute([$targetPlate]);
-                    $veh = $stmt->fetch();
-
-                    if (!$veh) {
-                        $norm = strtoupper(preg_replace('/[^A-Z0-9]/', '', $targetPlate));
-                        $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? LIMIT 1");
-                        $stmt->execute([$norm]);
-                        $veh = $stmt->fetch();
-                    }
-                }
-            }
-        }
-
-        if (!$veh) {
-            sendResponse(404, null, "Pass code not found");
-        }
-        $veh['authorizedDrivers'] = getDriversForVehicle($pdo, $veh['id']);
-        sendResponse(200, formatVehicleRow($veh));
+        sendResponse(200, vehicleForOutput($pdo, $veh, $includeQr));
     }
 
     // Search or list all
@@ -133,68 +70,35 @@ function handleGetVehicles($pdo) {
         $stmt = $pdo->query("SELECT * FROM `vehicles` ORDER BY `id` DESC");
     }
 
-    $vehicles = $stmt->fetchAll();
-
-    // Map authorized drivers and normalized format for all vehicles
     $result = [];
-    foreach ($vehicles as $v) {
-        $v['authorizedDrivers'] = getDriversForVehicle($pdo, $v['id']);
-        $result[] = formatVehicleRow($v);
+    foreach ($stmt->fetchAll() as $v) {
+        $result[] = vehicleForOutput($pdo, $v, $includeQr);
     }
-
     sendResponse(200, $result);
 }
 
-function formatVehicleRow($v) {
-    if (!$v) return null;
-    $drivers = isset($v['authorizedDrivers']) ? $v['authorizedDrivers'] : [];
-    return [
-        'id' => (int)$v['id'],
-        'plateNumber' => $v['plate_number'] ?? '',
-        'plate_number' => $v['plate_number'] ?? '',
-        'vehicleType' => $v['vehicle_type'] ?? '4-Wheel',
-        'vehicle_type' => $v['vehicle_type'] ?? '4-Wheel',
-        'category' => $v['category'] ?? 'plated',
-        'makeModelColor' => $v['make_model_color'] ?? '',
-        'make_model_color' => $v['make_model_color'] ?? '',
-        'ownerName' => $v['owner_name'] ?? '',
-        'owner_name' => $v['owner_name'] ?? '',
-        'ownerRole' => $v['owner_role'] ?? 'Student',
-        'owner_role' => $v['owner_role'] ?? 'Student',
-        'department' => $v['department'] ?? '',
-        'ownerIdNumber' => $v['owner_id_number'] ?? '',
-        'owner_id_number' => $v['owner_id_number'] ?? '',
-        'ownerPhone' => $v['owner_phone'] ?? '',
-        'owner_phone' => $v['owner_phone'] ?? '',
-        'ownerEmail' => $v['owner_email'] ?? '',
-        'owner_email' => $v['owner_email'] ?? '',
-        'ownerPhoto' => $v['owner_photo'] ?? null,
-        'owner_photo' => $v['owner_photo'] ?? null,
-        'ownerPhotoUrl' => $v['owner_photo'] ?? null,
-        'vehiclePhoto' => $v['vehicle_photo'] ?? null,
-        'vehicle_photo' => $v['vehicle_photo'] ?? null,
-        'vehiclePicture' => $v['vehicle_photo'] ?? null,
-        'qrPassCode' => $v['qr_pass_code'] ?? '',
-        'qr_pass_code' => $v['qr_pass_code'] ?? '',
-        'status' => $v['status'] ?? 'Outside',
-        'registrationStatus' => $v['registration_status'] ?? 'Active',
-        'registration_status' => $v['registration_status'] ?? 'Active',
-        'stickerYear' => $v['sticker_year'] ?? '2026',
-        'sticker_year' => $v['sticker_year'] ?? '2026',
-        'lastEntryTime' => $v['last_entry_time'] ?? null,
-        'last_entry_time' => $v['last_entry_time'] ?? null,
-        'lastGatePoint' => $v['last_gate_point'] ?? null,
-        'last_gate_point' => $v['last_gate_point'] ?? null,
-        'entryTime' => $v['last_entry_time'] ?? null,
-        'gatePoint' => $v['last_gate_point'] ?? '—',
-        'authorizedDrivers' => $drivers
-    ];
-}
+/**
+ * Lookup used by the mobile scanner and manual search: plate (any formatting),
+ * signed pass payload, legacy JSON pass, legacy pass code or owner ID.
+ * This is a lookup only; gate decisions are made by verify.php.
+ */
+function lookupVehicleByAnyCode($pdo, $needle) {
+    $veh = findVehicleByPlate($pdo, $needle);
+    if ($veh) return $veh;
 
-function getDriversForVehicle($pdo, $vehicleId) {
-    $stmt = $pdo->prepare("SELECT id, full_name AS fullName, full_name, relationship, license_no AS licenseNo, license_no, phone, photo_url AS photoUrl, photo_url FROM `authorized_drivers` WHERE `vehicle_id` = ? ORDER BY `id` ASC");
-    $stmt->execute([$vehicleId]);
-    return $stmt->fetchAll();
+    $parsed = parseScannedQr($needle);
+    if ($parsed['kind'] === 'signed' && $parsed['sigValid']) {
+        $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `pass_id` = ? LIMIT 1");
+        $stmt->execute([$parsed['pass']['pid']]);
+        if ($row = $stmt->fetch()) return $row;
+    }
+    if ($parsed['kind'] === 'legacy' && $parsed['plate'] !== '') {
+        if ($row = findVehicleByPlate($pdo, $parsed['plate'])) return $row;
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `qr_pass_code` = ? OR `owner_id_number` = ? LIMIT 1");
+    $stmt->execute([$needle, $needle]);
+    return $stmt->fetch() ?: null;
 }
 
 function handleRegisterVehicle($pdo) {
@@ -225,21 +129,23 @@ function handleRegisterVehicle($pdo) {
     $ownerPhoto = isset($data['ownerPhoto']) ? $data['ownerPhoto'] : (isset($data['owner_photo']) ? $data['owner_photo'] : null);
     $vehiclePhoto = isset($data['vehiclePhoto']) ? $data['vehiclePhoto'] : (isset($data['vehicle_photo']) ? $data['vehicle_photo'] : null);
     $stickerYear = isset($data['stickerYear']) ? $data['stickerYear'] : (isset($data['sticker_year']) ? $data['sticker_year'] : '2026');
-    $qrPassCode = isset($data['qrPassCode']) ? $data['qrPassCode'] : (isset($data['qr_pass_code']) ? $data['qr_pass_code'] : ('NCST-QR-' . preg_replace('/[^A-Z0-9]/', '', $plateNumber)));
+    // v2: passes are signed server-side; clients can no longer supply the QR content
+    $passId = newPassId();
+    $passValidUntil = isValidDate($data['passValidUntil'] ?? '') ? $data['passValidUntil'] : defaultPassValidUntil($stickerYear);
 
     $pdo->beginTransaction();
     try {
         $sql = "INSERT INTO `vehicles` (
             `plate_number`, `vehicle_type`, `category`, `make_model_color`, `owner_name`, 
             `owner_role`, `department`, `owner_id_number`, `owner_phone`, `owner_email`, 
-            `owner_photo`, `vehicle_photo`, `qr_pass_code`, `status`, `registration_status`, `sticker_year`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Outside', 'Active', ?)";
+            `owner_photo`, `vehicle_photo`, `pass_id`, `pass_valid_until`, `status`, `registration_status`, `sticker_year`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Outside', 'Active', ?)";
 
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             $plateNumber, $vehicleType, $category, $makeModelColor, $ownerName,
             $ownerRole, $department, $ownerIdNumber, $ownerPhone, $ownerEmail,
-            $ownerPhoto, $vehiclePhoto, $qrPassCode, $stickerYear
+            $ownerPhoto, $vehiclePhoto, $passId, $passValidUntil, $stickerYear
         ]);
         $newVehicleId = $pdo->lastInsertId();
 
@@ -277,27 +183,16 @@ function handleRegisterVehicle($pdo) {
 
         $pdo->commit();
 
-        // Fetch newly created vehicle with drivers
-        $newVeh = formatVehicleRow([
-            'id' => (int)$newVehicleId,
-            'plate_number' => $plateNumber,
-            'vehicle_type' => $vehicleType,
-            'category' => $category,
-            'make_model_color' => $makeModelColor,
-            'owner_name' => $ownerName,
-            'owner_role' => $ownerRole,
-            'department' => $department,
-            'owner_id_number' => $ownerIdNumber,
-            'owner_phone' => $ownerPhone,
-            'owner_email' => $ownerEmail,
-            'owner_photo' => $ownerPhoto,
-            'vehicle_photo' => $vehiclePhoto,
-            'status' => 'Outside',
-            'registration_status' => 'Active',
-            'sticker_year' => $stickerYear,
-            'qr_pass_code' => $qrPassCode,
-            'authorizedDrivers' => getDriversForVehicle($pdo, $newVehicleId)
-        ]);
+        $newVeh = vehicleForOutput($pdo, findVehicleById($pdo, $newVehicleId), true);
+
+        // Student portal login for the owner (created once per owner ID; the temporary
+        // password is returned only in this response and shown to the admin once)
+        try {
+            $newVeh['studentAccount'] = ensureStudentAccount($pdo, $ownerIdNumber, $ownerName, $ownerEmail);
+        } catch (Exception $e) {
+            // The vehicle is saved; the admin can issue the login later from the dossier
+            $newVeh['studentAccount'] = ['ownerIdNumber' => $ownerIdNumber, 'created' => false, 'tempPassword' => null, 'error' => 'Portal account could not be created.'];
+        }
 
         sendResponse(201, $newVeh, "Vehicle {$plateNumber} registered successfully");
     } catch (Exception $e) {
@@ -315,10 +210,13 @@ function handleUpdateVehicle($pdo) {
 
     // Check if toggling registration status
     if (isset($data['action']) && $data['action'] === 'toggle_status') {
-        $stmt = $pdo->prepare("SELECT `registration_status` FROM `vehicles` WHERE `id` = ?");
+        $stmt = $pdo->prepare("SELECT `registration_status`, `is_banned` FROM `vehicles` WHERE `id` = ?");
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if (!$row) sendResponse(404, null, "Vehicle not found");
+        if ((int)$row['is_banned'] === 1) {
+            sendResponse(409, ['code' => 'VEHICLE_BANNED'], "This vehicle is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.");
+        }
 
         $nextStatus = $row['registration_status'] === 'Active' ? 'Suspended' : 'Active';
         $upd = $pdo->prepare("UPDATE `vehicles` SET `registration_status` = ? WHERE `id` = ?");
@@ -346,18 +244,45 @@ function handleUpdateVehicle($pdo) {
         'owner_email' => ['ownerEmail', 'owner_email'],
         'owner_photo' => ['ownerPhoto', 'owner_photo', 'ownerPhotoUrl'],
         'vehicle_photo' => ['vehiclePhoto', 'vehicle_photo', 'vehiclePicture'],
-        'status' => ['status'],
-        'qr_pass_code' => ['qrPassCode', 'qr_pass_code']
+        'status' => ['status']
     ];
 
     foreach ($updatable as $col => $keys) {
         foreach ($keys as $key) {
             if (array_key_exists($key, $data)) {
                 $fields[] = "`{$col}` = ?";
-                $params[] = $data[$key];
+                $params[] = $col === 'plate_number' ? strtoupper(trim($data[$key])) : $data[$key];
                 break;
             }
         }
+    }
+
+    $current = findVehicleById($pdo, $id);
+    if (!$current) {
+        sendResponse(404, null, "Vehicle not found");
+    }
+
+    // A ban can only be lifted through the violations workflow
+    $requestedReg = $data['registrationStatus'] ?? $data['registration_status'] ?? null;
+    if ((int)$current['is_banned'] === 1 && $requestedReg !== null && $requestedReg !== 'Suspended') {
+        sendResponse(409, ['code' => 'VEHICLE_BANNED'], "This vehicle is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.");
+    }
+
+    if (array_key_exists('passValidUntil', $data)) {
+        if (!isValidDate($data['passValidUntil'])) {
+            sendResponse(400, null, "passValidUntil must be a date in YYYY-MM-DD format");
+        }
+        $fields[] = "`pass_valid_until` = ?";
+        $params[] = $data['passValidUntil'];
+    }
+
+    // The plate is part of the signature: a plate change reissues the pass and
+    // retires any legacy (pre-v2) QR code for this vehicle.
+    $newPlate = $data['plateNumber'] ?? $data['plate_number'] ?? null;
+    if ($newPlate !== null && normalizePlate($newPlate) !== normalizePlate($current['plate_number'])) {
+        $fields[] = "`pass_id` = ?";
+        $params[] = newPassId();
+        $fields[] = "`qr_pass_code` = NULL";
     }
 
     $drivers = isset($data['authorizedDrivers']) && is_array($data['authorizedDrivers'])
@@ -418,16 +343,7 @@ function handleUpdateVehicle($pdo) {
 
         $pdo->commit();
 
-        // Fetch updated vehicle
-        $fetchStmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `id` = ?");
-        $fetchStmt->execute([$id]);
-        $updatedVeh = $fetchStmt->fetch();
-        if ($updatedVeh) {
-            $updatedVeh['authorizedDrivers'] = getDriversForVehicle($pdo, $id);
-            sendResponse(200, formatVehicleRow($updatedVeh), "Vehicle record updated successfully");
-        } else {
-            sendResponse(200, ['id' => $id], "Vehicle record updated");
-        }
+        sendResponse(200, vehicleForOutput($pdo, findVehicleById($pdo, $id), true), "Vehicle record updated successfully");
     } catch (Exception $e) {
         $pdo->rollBack();
         sendResponse(500, null, "Failed to update vehicle: " . $e->getMessage());
@@ -442,4 +358,10 @@ function handleDeleteVehicle($pdo) {
     $stmt = $pdo->prepare("DELETE FROM `vehicles` WHERE `id` = ?");
     $stmt->execute([$id]);
     sendResponse(200, ['id' => $id], "Vehicle deleted successfully");
+}
+
+function isValidDate($value) {
+    if (!is_string($value) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) return false;
+    [$y, $m, $d] = array_map('intval', explode('-', $value));
+    return checkdate($m, $d, $y);
 }

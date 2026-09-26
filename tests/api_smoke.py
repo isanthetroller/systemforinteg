@@ -1,0 +1,729 @@
+"""
+SecurePark v2 - API smoke test (standard library only).
+
+Runs against a LOCAL dev server using the SQLite fallback, never production:
+
+    # terminal 1 (repo root) - DB_DRIVER=sqlite uses the local SQLite fallback only
+    DB_DRIVER=sqlite php -S localhost:8000 -t .
+
+    # terminal 2
+    python tests/api_smoke.py            # uses http://localhost:8000/web-app-admin/api
+    python tests/api_smoke.py --fresh    # delete the local SQLite DB first
+
+The script refuses to run against a non-localhost URL.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+BASE = os.environ.get('SP_API', 'http://localhost:8000/web-app-admin/api')
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SQLITE_DB = os.path.join(ROOT, 'web-app-admin', 'data', 'securepark.sqlite')
+ADMIN_PASSWORD = 'Admin-Pass-2026'
+
+if not BASE.startswith(('http://localhost', 'http://127.0.0.1')):
+    sys.exit(f'Refusing to run against non-local API: {BASE}')
+
+passed = 0
+failed = 0
+
+
+def call(method, path, body=None, token=None, headers=None):
+    req = urllib.request.Request(f'{BASE}/{path}', method=method)
+    req.add_header('Accept', 'application/json')
+    if body is not None:
+        req.add_header('Content-Type', 'application/json')
+        req.data = json.dumps(body).encode()
+    if token:
+        req.add_header('Authorization', f'Bearer {token}')
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req) as res:
+            return res.status, json.loads(res.read().decode())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        try:
+            return e.code, json.loads(raw)
+        except json.JSONDecodeError:
+            return e.code, {'raw': raw}
+
+
+def check(name, condition, detail=''):
+    global passed, failed
+    if condition:
+        passed += 1
+        print(f'  PASS  {name}')
+    else:
+        failed += 1
+        print(f'  FAIL  {name}  {detail}')
+
+
+def section(title):
+    print(f'\n== {title}')
+
+
+def login(username, password, realm=None):
+    path = 'auth.php?action=login' + (f'&realm={realm}' if realm else '')
+    return call('POST', path, {'username': username, 'password': password})
+
+
+def test_auth():
+    section('Authentication & first-login password change')
+    code, res = call('GET', 'stats.php')
+    check('stats without token -> 401', code == 401, code)
+    check('response has v2 success flag and legacy status', res.get('success') is False and res.get('status') == 'error', res)
+
+    code, res = login('admin', 'wrong-password')
+    check('wrong password -> 401', code == 401, code)
+
+    code, res = login('admin', 'Password123!')
+    check('seed admin login -> 200', code == 200, res)
+    token = res['data']['token']
+    check('seed admin must change password', res['data']['user']['mustChangePassword'] is True, res)
+
+    code, _ = call('GET', 'stats.php', token=token)
+    check('pending password change blocks data -> 403', code == 403, code)
+
+    code, res = call('GET', 'auth.php?action=me', token=token)
+    check('me works while password change pending', code == 200 and res['data']['user']['username'] == 'admin', res)
+
+    code, res = call('POST', 'auth.php?action=change_password', {'current_password': 'Password123!', 'new_password': 'short'}, token)
+    check('weak password rejected', code == 400, res)
+
+    code, res = call('POST', 'auth.php?action=change_password', {'current_password': 'Password123!', 'new_password': ADMIN_PASSWORD}, token)
+    check('change password -> 200', code == 200, res)
+
+    code, _ = call('GET', 'stats.php', token=token)
+    check('stats with token after change -> 200', code == 200, code)
+
+    code, _ = call('POST', 'auth.php?action=logout', token=token)
+    code, _ = call('GET', 'stats.php', token=token)
+    check('token revoked after logout -> 401', code == 401, code)
+
+    code, res = login('admin', ADMIN_PASSWORD)
+    check('login with new password', code == 200, res)
+    return res['data']['token']
+
+
+def test_staff_accounts(admin):
+    section('Staff accounts & role enforcement')
+    code, res = call('POST', 'users.php', {'username': 'guard.one', 'full_name': 'Guard One', 'role': 'guard', 'badge_number': 'NCST-SEC-07'}, admin)
+    check('admin creates guard -> 201', code == 201 and res['data'].get('tempPassword'), res)
+    guard_id = res['data']['user']['id']
+    temp = res['data']['tempPassword']
+
+    code, _ = call('POST', 'users.php', {'username': 'guard.one', 'full_name': 'Dup', 'role': 'guard'}, admin)
+    check('duplicate username -> 409', code == 409, code)
+
+    code, res = login('guard.one', temp)
+    guard = res['data']['token']
+    call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Guard-Pass-2026'}, guard)
+
+    code, _ = call('GET', 'users.php', token=guard)
+    check('guard cannot list staff -> 403', code == 403, code)
+    code, _ = call('POST', 'vehicles.php', {'plateNumber': 'X', 'ownerName': 'Y', 'ownerIdNumber': 'Z'}, guard)
+    check('guard cannot register vehicle -> 403', code == 403, code)
+    code, _ = call('GET', 'vehicles.php', token=guard)
+    check('guard can read vehicles -> 200', code == 200, code)
+
+    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Recorded'}, guard)
+    check('staff cannot admit an unregistered plate -> 403', code == 403 and res['data']['code'] == 'UNREGISTERED', res)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Denied', 'guardName': 'Spoofed Name'}, guard)
+    check('guard gate log attributed to account, not body', code == 201 and res['data']['guardName'] == 'Guard One (NCST-SEC-07)', res)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Party Time'}, guard)
+    check('invalid gate action rejected -> 400', code == 400, res)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Flagged & Held'}, guard)
+    check('legacy action mapped to Entry Denied', code == 201 and res['data']['action'] == 'Entry Denied', res)
+
+    me = call('GET', 'auth.php?action=me', token=admin)[1]['data']['user']
+    code, res = call('PUT', 'users.php', {'id': me['id'], 'action': 'set_status', 'status': 'Inactive'}, admin)
+    check('admin cannot deactivate self', code == 400, res)
+    code, res = call('PUT', 'users.php', {'id': me['id'], 'action': 'update', 'role': 'guard'}, admin)
+    check('admin cannot demote self', code == 400, res)
+
+    code, _ = call('PUT', 'users.php', {'id': guard_id, 'action': 'set_status', 'status': 'Inactive'}, admin)
+    code2, _ = call('GET', 'vehicles.php', token=guard)
+    check('deactivated guard is signed out immediately', code == 200 and code2 == 401, (code, code2))
+    code, res = login('guard.one', 'Guard-Pass-2026')
+    check('deactivated guard cannot log in -> 403', code == 403, res)
+    call('PUT', 'users.php', {'id': guard_id, 'action': 'set_status', 'status': 'Active'}, admin)
+
+    code, res = call('PUT', 'users.php', {'id': guard_id, 'action': 'reset_password'}, admin)
+    check('reset password returns new temp password', code == 200 and res['data'].get('tempPassword'), res)
+
+
+def test_lockout():
+    section('Login lockout')
+    codes = [login('guard.one', 'nope')[0] for _ in range(5)]
+    check('5th failure locks the account -> 423', codes[-1] == 423, codes)
+    code, _ = login('guard.one', 'still-locked')
+    check('locked account stays locked', code == 423, code)
+
+
+def test_mobile_compat():
+    section('Mobile scanner compatibility (no token)')
+    code, res = call('GET', 'vehicles.php?plate=ABC1234', headers={'User-Agent': 'SecurePark-GateScanner/2.4'})
+    check('mobile vehicle lookup still allowed', code in (200, 404) and 'status' in res, (code, res))
+    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Recorded'})
+    check('mobile gate log still allowed, status=success', code == 201 and res.get('status') == 'success', res)
+    check('mobile log attributed to Mobile Scanner', res.get('data', {}).get('guardName', '').startswith('Mobile Scanner'), res)
+    code, _ = call('GET', 'logs.php')
+    check('audit log list still requires staff -> 401', code == 401, code)
+
+
+def verify(body, token=None, now=None):
+    path = 'verify.php' + (f'?now={urllib.parse.quote(now)}' if now else '')
+    code, res = call('POST', path, body, token)
+    return code, res.get('data', {}) if isinstance(res, dict) else {}
+
+
+def open_incidents_for(admin, plate):
+    _, res = call('GET', 'incidents.php?status=Held', token=admin)
+    return [i for i in res.get('data', []) if i['plateNumber'] == plate]
+
+
+def test_signed_passes(admin):
+    section('Signed QR passes & verification')
+    code, res = call('POST', 'vehicles.php', {
+        'plateNumber': 'NDK 4821', 'ownerName': 'Juan Dela Cruz', 'ownerIdNumber': 'NCST-2024-0001',
+        'ownerPhone': '09171234567', 'makeModelColor': 'White Toyota Vios', 'stickerYear': '2026',
+        'authorizedDrivers': [{'fullName': 'Juan Dela Cruz', 'relationship': 'Self (Owner)'},
+                              {'fullName': 'Pedro Dela Cruz', 'relationship': 'Brother'}]}, admin)
+    check('register vehicle -> 201 with signed payload', code == 201 and res['data'].get('qrPayload'), res)
+    veh = res['data']
+    payload = json.loads(veh['qrPayload'])
+    check('payload is compact (pid, plate, type, valid, sig only)',
+          set(payload) == {'v', 'pid', 'plate_number', 'type', 'valid', 'sig'} and payload['valid'] == '2026-12-31', payload)
+
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    _, res = call('GET', 'vehicles.php', token=guard)
+    check('guard vehicle list has no signed payloads', all('qrPayload' not in v for v in res['data']), res)
+    code, _ = call('GET', 'vehicles.php')
+    check('anonymous full vehicle list -> 401', code == 401, code)
+    code, res = call('GET', 'vehicles.php?plate=NDK-4821')
+    check('anonymous plate lookup OK, without payload', code == 200 and 'qrPayload' not in res['data'], res)
+
+    code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('valid pass -> VALID, accepted', v.get('result') == 'VALID' and v.get('accepted') is True, v)
+    check('verify returns drivers for confirmation', len(v['vehicle']['authorizedDrivers']) == 2, v)
+
+    tampered = dict(payload, plate_number='ABC1234')
+    code, v = verify({'qr_code': json.dumps(tampered), 'gate_type': 'Ingress'}, guard)
+    check('altered plate -> FORGED, denied, auto-logged', v.get('result') == 'FORGED' and not v['accepted'] and v['autoLogged'], v)
+    extended = dict(payload, valid='2030-12-31')
+    code, v = verify({'qr_code': json.dumps(extended), 'gate_type': 'Ingress'}, guard)
+    check('extended validity date -> FORGED', v.get('result') == 'FORGED', v)
+    check('forged scan opens "Revoked / Forged QR" incident', any(i['reason'] == 'Revoked / Forged QR' for i in open_incidents_for(admin, 'NDK 4821')), '')
+    code, v = verify({'qr_code': json.dumps(extended), 'gate_type': 'Ingress'}, guard)
+    check('repeat forged scan does not duplicate incident', len(open_incidents_for(admin, 'NDK 4821')) == 1, open_incidents_for(admin, 'NDK 4821'))
+
+    code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Ingress'}, guard, now='2027-01-05 08:00:00')
+    check('expired pass on entry -> EXPIRED, denied', v.get('result') == 'EXPIRED' and not v['accepted'], v)
+    code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Egress'}, guard, now='2027-01-05 08:00:00')
+    check('expired pass on exit -> allowed with hold alert', v.get('accepted') is True and any('HOLD' in w for w in v['warnings']), v)
+
+    code, res = call('POST', 'passes.php', {'vehicle_id': veh['id'], 'action': 'reissue'}, guard)
+    check('guard cannot reissue passes -> 403', code == 403, code)
+    code, res = call('POST', 'passes.php', {'vehicle_id': veh['id'], 'action': 'reissue'}, admin)
+    check('admin reissues pass', code == 200 and res['data']['qrPayload'] != veh['qrPayload'], res)
+    new_payload = res['data']['qrPayload']
+    code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('old pass after reissue -> REVOKED', v.get('result') == 'REVOKED' and not v['accepted'], v)
+    code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'}, guard)
+    check('new pass after reissue -> VALID', v.get('result') == 'VALID', v)
+
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'makeModelColor': 'Silver Toyota Vios'}, admin)
+    check('edit without plate change keeps the same pass', code == 200 and res['data']['qrPayload'] == new_payload, res)
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'plateNumber': 'NDK 4822'}, admin)
+    check('plate change reissues the pass', code == 200 and res['data']['qrPayload'] != new_payload, res)
+    code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'}, guard)
+    check('pass for the old plate -> REVOKED', v.get('result') == 'REVOKED', v)
+    new_payload = res['data']['qrPayload']
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'plateNumber': 'NDK 4821'}, admin)
+    new_payload = call('GET', 'vehicles.php?plate=NDK4821', token=admin)[1]['data']['qrPayload']
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passValidUntil': '2026-02-30'}, admin)
+    check('invalid validity date rejected -> 400', code == 400, res)
+
+    code, v = verify({'plate': 'ndk4821', 'gate_type': 'Ingress'}, guard)
+    check('manual plate lookup -> MANUAL with identity warning', v.get('result') == 'MANUAL' and v['accepted'] and v['warnings'], v)
+    code, v = verify({'plate': 'ZZZ 999', 'gate_type': 'Ingress'}, guard)
+    check('unknown plate -> NOT_FOUND, not logged', v.get('result') == 'NOT_FOUND' and not v['autoLogged'], v)
+
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
+    code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'}, guard)
+    check('suspended vehicle entry -> SUSPENDED, denied', v.get('result') == 'SUSPENDED' and not v['accepted'], v)
+    code, v = verify({'qr_code': new_payload, 'gate_type': 'Egress'}, guard)
+    check('suspended vehicle exit -> allowed with hold alert', v.get('accepted') is True, v)
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
+
+    code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'})
+    check('mobile scanner (no token) can verify', code == 200 and v.get('result') == 'VALID', v)
+
+
+def test_legacy_passes(admin):
+    section('Legacy (pre-v2) passes')
+    import sqlite3
+    legacy_json = json.dumps({'ownerStudentId': 'NCST-2023-0099', 'ownerFullName': 'Ana Reyes', 'plateNumber': 'LEG 1001',
+                              'stickerYear': '2026', 'authorizedDrivers': [{'fullName': 'Ana Reyes', 'relationship': 'Self (Owner)', 'licenseNo': 'N/A'}]})
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("INSERT INTO vehicles (plate_number, make_model_color, owner_name, owner_id_number, qr_pass_code) VALUES (?,?,?,?,?)",
+               ('LEG 1001', 'Red Honda City', 'Ana Reyes', 'NCST-2023-0099', legacy_json))
+    db.execute("INSERT INTO vehicles (plate_number, make_model_color, owner_name, owner_id_number, qr_pass_code) VALUES (?,?,?,?,?)",
+               ('LEG 2002', 'Blue Mio', 'Ben Cruz', 'NCST-2023-0100', 'NCST-QR-LEG2002'))
+    db.commit()
+    db.close()
+
+    code, v = verify({'qr_code': legacy_json, 'gate_type': 'Ingress'}, admin, now='2026-10-01 08:00:00')
+    check('exact legacy pass before cutoff -> LEGACY accepted with reissue warning',
+          v.get('result') == 'LEGACY' and v['accepted'] and any('Legacy' in w for w in v['warnings']), v)
+    edited = json.loads(legacy_json)
+    edited['authorizedDrivers'].append({'fullName': 'Stranger', 'relationship': 'Friend', 'licenseNo': 'N/A'})
+    code, v = verify({'qr_code': json.dumps(edited), 'gate_type': 'Ingress'}, admin, now='2026-10-01 08:00:00')
+    check('altered legacy pass -> REVOKED', v.get('result') == 'REVOKED' and not v['accepted'], v)
+    code, v = verify({'qr_code': json.dumps({'plateNumber': 'LEG 1001'}), 'gate_type': 'Ingress'}, admin, now='2026-10-01 08:00:00')
+    check('hand-made legacy JSON -> REVOKED', v.get('result') == 'REVOKED', v)
+    code, v = verify({'qr_code': legacy_json, 'gate_type': 'Ingress'}, admin, now='2027-01-02 08:00:00')
+    check('legacy pass after cutoff -> FORGED', v.get('result') == 'FORGED', v)
+    code, v = verify({'qr_code': 'NCST-QR-LEG2002', 'gate_type': 'Ingress'}, admin, now='2026-10-01 08:00:00')
+    check('old plain pass code -> LEGACY', v.get('result') == 'LEGACY', v)
+    _, res = call('GET', 'vehicles.php?plate=LEG1001', token=admin)
+    check('legacy vehicle gets a pass id + signed payload on first read', res['data'].get('passId') and res['data'].get('qrPayload'), res)
+
+
+def test_gate_flow(admin):
+    section('Gate flow: ingress / egress with driver confirmation')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    _, res = call('GET', 'vehicles.php?plate=NDK4821', token=admin)
+    veh = res['data']
+    drivers = {d['fullName']: int(d['id']) for d in veh['authorizedDrivers']}
+    _, res = call('GET', 'vehicles.php?plate=QAX1', token=admin)
+
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Recorded', 'gate_type': 'Ingress'}, guard)
+    check('approval without driver confirmation -> 400', code == 400 and res['data']['code'] == 'DRIVER_CONFIRMATION_REQUIRED', res)
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': 999999}, guard)
+    check('driver from another vehicle rejected -> 400', code == 400 and res['data']['code'] == 'DRIVER_NOT_AUTHORIZED', res)
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Ingress', 'driver_id': drivers['Pedro Dela Cruz']}, guard)
+    check('action / gate_type mismatch rejected -> 400', code == 400, res)
+
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': drivers['Pedro Dela Cruz']}, guard)
+    check('ingress with confirmed driver -> 201', code == 201 and res['data']['verifiedDriverName'] == 'Pedro Dela Cruz'
+          and res['data']['gateType'] == 'Ingress' and res['data']['driverRelationship'] == 'Brother', res)
+    _, res = call('GET', 'vehicles.php?plate=NDK4821', token=admin)
+    check('vehicle now Inside Campus', res['data']['status'] == 'Inside Campus', res['data']['status'])
+
+    code, v = verify({'qr_code': res['data']['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('second entry scan warns vehicle already inside', any('already recorded inside' in w for w in v['warnings']), v)
+
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
+    check('egress with confirmed driver -> 201', code == 201 and res['data']['status'] == 'Exited' and res['data']['gateType'] == 'Egress', res)
+    _, res = call('GET', 'vehicles.php?plate=NDK4821', token=admin)
+    check('vehicle now Exited', res['data']['status'] == 'Exited', res['data']['status'])
+
+    _, logs = call('GET', 'logs.php?plate=NDK%204821', token=admin)
+    latest = logs['data'][0]
+    check('gate log stores gate type, verified driver and server time', latest['gateType'] == 'Egress'
+          and latest['verifiedDriverName'] == 'Juan Dela Cruz' and len(latest['loggedAt']) == 19, latest)
+
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Denied', 'gate_type': 'Ingress', 'driverName': 'Unknown Person', 'notes': 'Unauthorized / Unregistered Driver'}, guard)
+    check('denial recorded without changing vehicle status', code == 201 and res['data']['status'] == 'Outside', res)
+    _, res = call('GET', 'vehicles.php?plate=NDK4821', token=admin)
+    check('vehicle status unchanged by denial', res['data']['status'] == 'Exited', res['data']['status'])
+
+    # Server-side ban / suspension re-check cannot be bypassed by the client
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
+    check('entry for suspended vehicle refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_SUSPENDED', res)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'NDK 4821', 'driverName': 'Juan', 'action': 'Entry Recorded'})
+    check('mobile entry for suspended vehicle also refused', code == 403, res)
+    code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
+    check('exit for suspended vehicle still allowed', code == 201, res)
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
+
+
+def test_violations(admin):
+    section('Violations & 3-strike policy')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'STR 3001', 'ownerName': 'Rico Santos', 'ownerIdNumber': 'NCST-2024-3001',
+                                             'authorizedDrivers': [{'fullName': 'Rico Santos', 'relationship': 'Self (Owner)'}]}, admin)
+    veh = res['data']
+    payload = veh['qrPayload']
+    driver_id = int(veh['authorizedDrivers'][0]['id'])
+
+    def warn(token, type_='Parking in Fire Lane / Restricted Zone', severity='Warning', notes='Observed by patrol'):
+        return call('POST', 'violations.php', {'vehicle_id': veh['id'], 'type': type_, 'severity': severity, 'notes': notes}, token)
+
+    code, res = warn(guard, severity='Violation')
+    check('guard cannot issue a Violation -> 403', code == 403, res)
+    code, res = warn(guard, type_='Speeding Wildly')
+    check('unknown violation type rejected -> 400', code == 400, res)
+    code, res = warn(guard, type_='Other', notes='')
+    check('"Other" requires notes -> 400', code == 400, res)
+
+    code, res = warn(guard)
+    check('1st warning -> strike 1, not banned', code == 201 and res['data']['strikes'] == 1 and not res['data']['banned'], res)
+    code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
+    check('verify shows "Strike 1 of 3"', any('Strike 1 of 3' in w for w in v['warnings']), v)
+    code, res = warn(guard, type_='Unauthorized Driver at Helm')
+    check('2nd warning -> strike 2', res['data']['strikes'] == 2 and not res['data']['banned'], res)
+    code, res = warn(admin, type_='Overnight / Unauthorized Overtime Parking')
+    check('3rd warning -> automatic violation + ban', res['data']['strikes'] == 3 and res['data']['banned'] and res['data']['autoViolationId'], res)
+    auto_id = res['data']['autoViolationId']
+    check('banned vehicle registration Suspended', res['data']['vehicle']['isBanned'] and res['data']['vehicle']['registrationStatus'] == 'Suspended', res['data']['vehicle'])
+    check('ban opens "3-Strike Policy Enforced" incident', any(i['reason'] == '3-Strike Policy Enforced' for i in open_incidents_for(admin, 'STR 3001')), '')
+
+    code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
+    check('banned vehicle entry -> BANNED, denied, logged', v.get('result') == 'BANNED' and not v['accepted'] and v['autoLogged'], v)
+    code, res = call('POST', 'logs.php', {'plate': 'STR 3001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver_id}, guard)
+    check('entry for banned vehicle refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_BANNED', res)
+
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
+    check('suspend/activate toggle cannot lift a ban -> 409', code == 409, res)
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'registrationStatus': 'Active'}, admin)
+    check('editing registration to Active cannot lift a ban -> 409', code == 409, res)
+    inc = [i for i in open_incidents_for(admin, 'STR 3001') if i['reason'] == '3-Strike Policy Enforced'][0]
+    code, res = call('PUT', 'incidents.php', {'id': inc['id'], 'notes': 'cleared'}, admin)
+    check('clearing the incident directly is refused -> 409', code == 409 and res['data']['code'] == 'VIOLATION_PENDING', res)
+
+    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': 'x'}, guard)
+    check('guard cannot resolve -> 403', code == 403, code)
+    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': ''}, admin)
+    check('resolution notes are mandatory -> 400', code == 400, res)
+    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': 'Fine paid / clearance signed (OR #1234)'}, admin)
+    check('resolving the violation lifts the ban and resets strikes', code == 200 and res['data']['banLifted']
+          and res['data']['vehicle']['warningCount'] == 0 and not res['data']['vehicle']['isBanned']
+          and res['data']['vehicle']['registrationStatus'] == 'Active', res)
+    _, res = call('GET', f"violations.php?vehicle_id={veh['id']}", token=admin)
+    warnings = [x for x in res['data'] if x['severity'] == 'Warning']
+    check('the 3 strike warnings are marked cleared by the violation',
+          len(warnings) == 3 and all(w['status'] == 'Resolved' and w['clearedByViolationId'] == auto_id for w in warnings), warnings)
+    check('3-strike incident closed with the violation', not any(i['reason'] == '3-Strike Policy Enforced' for i in open_incidents_for(admin, 'STR 3001')), '')
+    code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
+    check('vehicle can enter again after resolution', v.get('result') == 'VALID' and v['accepted'], v)
+    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': 'again'}, admin)
+    check('resolving twice -> 409', code == 409, res)
+
+    # Dismissing a mistaken warning gives the strike back
+    code, res = warn(guard)
+    wid = res['data']['violation']['id']
+    code, res = call('PUT', 'violations.php', {'violation_id': wid, 'action': 'resolve', 'notes': 'n/a'}, admin)
+    check('warnings cannot be resolved individually -> 400', code == 400, res)
+    code, res = call('PUT', 'violations.php', {'violation_id': wid, 'action': 'dismiss', 'notes': 'Wrong plate noted by patrol'}, admin)
+    check('dismissing a warning removes its strike', code == 200 and res['data']['vehicle']['warningCount'] == 0, res)
+
+    # Manual violation bans immediately
+    code, res = warn(admin, type_='Reckless / Prohibited Driving on Campus', severity='Violation', notes='Overspeeding near the chapel')
+    check('manual violation bans immediately', code == 201 and res['data']['banned'] and res['data']['vehicle']['isBanned'], res)
+    vid = res['data']['violation']['id']
+    code, res = call('PUT', 'violations.php', {'violation_id': vid, 'action': 'dismiss', 'notes': 'Issued to the wrong vehicle'}, admin)
+    check('dismissing a mistaken violation lifts the ban', code == 200 and res['data']['banLifted'] and not res['data']['vehicle']['isBanned'], res)
+
+    # Reset strikes
+    warn(guard)
+    warn(guard)
+    code, res = call('PUT', 'violations.php', {'vehicle_id': veh['id'], 'action': 'reset', 'notes': 'Clearance signed by the Dean of Students'}, admin)
+    check('reset strikes & lift suspension', code == 200 and res['data']['vehicle']['warningCount'] == 0 and not res['data']['vehicle']['isBanned'], res)
+    _, res = call('GET', 'violations.php?status=Pending&plate=STR3001', token=guard)
+    check('guard can list active violations; none pending after reset', isinstance(res['data'], list) and len(res['data']) == 0, res)
+
+def test_overnight(admin):
+    section('Overtime & overnight parking detection')
+    import sqlite3
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def seed(plate, owner, entered_at):
+        code, res = call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': owner, 'ownerIdNumber': 'ID-' + plate.replace(' ', ''),
+                                                 'ownerPhone': '0917 555 0000'}, admin)
+        db = sqlite3.connect(SQLITE_DB)
+        db.execute("UPDATE vehicles SET status = 'Inside Campus' WHERE id = ?", (res['data']['id'],))
+        db.execute("INSERT INTO gate_logs (plate_number, driver_name, action, gate_type, status, guard_name, logged_at) VALUES (?, ?, 'Entry Recorded', 'Ingress', 'Inside Campus', 'QA', ?)",
+                   (plate, owner, entered_at))
+        db.commit()
+        db.close()
+        return res['data']['id']
+
+    night_id = seed('OVN 1001', 'Nora Night', '2026-09-20 08:00:00')
+    over_id = seed('OVT 2002', 'Omar Overtime', '2026-09-20 06:00:00')
+
+    def report(now, method='GET', body=None, token=None):
+        path = 'overnight_check.php?now=' + urllib.parse.quote(now)
+        return call(method, path, body, token or guard)
+
+    code, res = report('2026-09-20 19:00:00')
+    items = {i['plateNumber']: i for i in res['data']['items']}
+    check('before curfew: long stay listed as overtime only', 'OVN 1001' not in items and items.get('OVT 2002', {}).get('category') == 'overtime', res['data'])
+    check('list includes owner phone and elapsed hours', items['OVT 2002']['ownerPhone'] == '0917 555 0000' and items['OVT 2002']['elapsedHours'] == 13.0, items)
+
+    code, res = report('2026-09-20 19:00:00', 'POST')
+    check('automatic run does not strike overtime vehicles', code == 200 and res['data']['flagged'] == [], res)
+
+    code, res = report('2026-09-20 19:00:00', 'POST', {'vehicle_id': over_id})
+    check('manual "Flag Overnight Strike" on overtime vehicle -> 201', code == 201 and res['data']['strikes'] == 1, res)
+    code, res = report('2026-09-20 19:30:00', 'POST', {'vehicle_id': over_id})
+    check('flagging the same stay twice -> 409', code == 409 and res['data']['code'] == 'ALREADY_FLAGGED', res)
+
+    code, res = report('2026-09-20 23:00:00', 'POST')
+    flagged = {f['plateNumber'] for f in res['data']['flagged']}
+    check('after curfew: both vehicles get an overnight strike', flagged == {'OVN 1001', 'OVT 2002'}, res['data'])
+    check('strike count shown as "Strike N of 3"', {i['plateNumber']: i['warningCount'] for i in res['data']['items']} == {'OVN 1001': 1, 'OVT 2002': 2}, res['data']['items'])
+
+    code, res = report('2026-09-20 23:30:00', 'POST')
+    check('running again the same night adds nothing (idempotent)', res['data']['flagged'] == [], res['data'])
+    code, res = report('2026-09-21 01:00:00', 'POST')
+    check('after midnight is still the same night', res['data']['flagged'] == [], res['data'])
+
+    code, res = report('2026-09-21 22:30:00', 'POST')
+    check('next night -> one more strike each', {f['plateNumber'] for f in res['data']['flagged']} == {'OVN 1001', 'OVT 2002'}, res['data'])
+    banned = {f['plateNumber']: f['banned'] for f in res['data']['flagged']}
+    check('3rd strike from overnight check bans the vehicle', banned.get('OVT 2002') is True and banned.get('OVN 1001') is False, banned)
+
+    _, res = call('GET', f'violations.php?vehicle_id={night_id}', token=admin)
+    check('overnight strikes are logged by "System (Overnight Check)"',
+          all(v['loggedBy'] == 'System (Overnight Check)' and v['violationType'].startswith('Overnight') for v in res['data']), res['data'])
+
+    # A vehicle that exits is no longer reported
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicles SET status = 'Exited' WHERE id = ?", (night_id,))
+    db.commit()
+    db.close()
+    code, res = report('2026-09-22 23:00:00', 'POST')
+    check('exited vehicle is not flagged again', 'OVN 1001' not in {f['plateNumber'] for f in res['data']['flagged']}, res['data'])
+
+    code, _ = call('GET', 'overnight_check.php')
+    check('overnight report requires sign-in -> 401', code == 401, code)
+
+def test_visitor_passes(admin):
+    section('Single-day visitor passes')
+    import datetime
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    today = datetime.date.today()
+    tomorrow = (today + datetime.timedelta(days=1)).isoformat() + ' 09:00:00'
+    base = {'visitor_name': 'Vicente Visitor', 'contact_number': '0918 123 4567', 'plate': 'vis 9001',
+            'vehicle_model': 'White Hilux', 'purpose': 'Thesis defense panel', 'person_to_visit': 'CCS Dean’s Office'}
+
+    code, res = call('POST', 'visitors.php', dict(base, contact_number=''), guard)
+    check('missing contact number -> 400', code == 400, res)
+    code, res = call('POST', 'visitors.php', dict(base, plate='NDK 4821'), guard)
+    check('registered plate cannot get a visitor pass -> 409', code == 409 and res['data']['code'] == 'PLATE_REGISTERED', res)
+
+    code, res = call('POST', 'visitors.php', base, guard)
+    check('guard issues a day pass -> 201', code == 201 and res['data']['passCode'].startswith('VP-'), res)
+    vp = res['data']
+    payload = json.loads(vp['qrPayload'])
+    check('pass valid only today, signed as visitor_temp', vp['validDate'] == today.isoformat()
+          and payload['type'] == 'visitor_temp' and payload['valid'] == today.isoformat() and payload['pid'] == vp['passCode'], vp)
+    code, res = call('POST', 'visitors.php', dict(base, visitor_name='Someone Else'), guard)
+    check('second active pass for the same plate today -> 409', code == 409 and res['data']['code'] == 'PASS_EXISTS', res)
+    code, res = call('POST', 'visitors.php', dict(base, plate='VIS 9002', valid_date='2030-01-01'), guard)
+    check('client cannot choose the validity date', code == 201 and res['data']['validDate'] == today.isoformat(), res)
+    other = res['data']
+
+    code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('visitor pass today -> VALID with visitor details', v.get('result') == 'VALID' and v['visitor']['visitorName'] == 'Vicente Visitor', v)
+    code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Ingress'}, guard, now=tomorrow)
+    check('visitor pass on another date -> EXPIRED_TEMP, denied, logged', v.get('result') == 'EXPIRED_TEMP' and not v['accepted']
+          and v['autoLogged'] and 'EXPIRED TEMPORARY PASS' in v['reason'], v)
+    forged = json.loads(vp['qrPayload'])
+    forged['valid'] = tomorrow[:10]
+    code, v = verify({'qr_code': json.dumps(forged), 'gate_type': 'Ingress'}, guard, now=tomorrow)
+    check('visitor pass with altered date -> FORGED', v.get('result') == 'FORGED', v)
+
+    code, res = call('POST', 'logs.php', {'plate': 'VIS 9001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': vp['id']}, guard)
+    check('visitor entry recorded -> 201, driver = visitor', code == 201 and res['data']['verifiedDriverName'] == 'Vicente Visitor', res)
+    code, v = verify({'plate': 'VIS9001', 'gate_type': 'Egress'}, guard)
+    check('manual plate lookup finds the visitor inside', v.get('result') == 'MANUAL' and v['visitor'] and v['currentlyInside'], v)
+    code, res = call('POST', 'logs.php', {'plate': 'VIS 9001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'visitor_pass_id': vp['id']}, guard)
+    check('visitor exit recorded -> 201', code == 201, res)
+    _, res = call('GET', f"visitors.php?id={vp['id']}", token=guard)
+    check('pass marked Used with entry and exit times', res['data']['status'] == 'Used' and res['data']['entryTime'] and res['data']['exitTime'], res)
+    code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('used pass cannot enter again -> REVOKED', v.get('result') == 'REVOKED', v)
+    code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Egress'}, guard)
+    check('used pass cannot exit again either', v.get('result') == 'REVOKED', v)
+    code, res = call('POST', 'logs.php', {'plate': 'VIS 9001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': vp['id']}, guard)
+    check('server refuses re-entry on a used pass -> 403', code == 403 and res['data']['code'] == 'PASS_USED', res)
+
+    # Visitor who entered and stays past the pass date can still leave
+    code, res = call('POST', 'logs.php', {'plate': 'VIS 9002', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': other['id']}, guard)
+    code, v = verify({'qr_code': other['qrPayload'], 'gate_type': 'Egress'}, guard, now=tomorrow)
+    check('overstaying visitor may exit the next day, with a warning', v.get('accepted') is True and v['warnings'], v)
+
+    # Revocation and listing
+    code, res = call('POST', 'visitors.php', dict(base, plate='VIS 9003', visitor_name='Rita Revoked'), guard)
+    rv = res['data']
+    code, res = call('PUT', 'visitors.php', {'id': rv['id'], 'action': 'revoke'}, guard)
+    check('guard cannot revoke -> 403', code == 403, code)
+    code, res = call('PUT', 'visitors.php', {'id': rv['id'], 'action': 'revoke'}, admin)
+    check('admin revokes a pass', code == 200 and res['data']['status'] == 'Revoked', res)
+    code, v = verify({'qr_code': rv['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('revoked visitor pass -> REVOKED', v.get('result') == 'REVOKED', v)
+
+    code, res = call('POST', 'visitors.php', dict(base, plate='VIS 9004', visitor_name='Nora No-show'), guard)
+    code, res = call('GET', 'visitors.php', token=guard)
+    check("today's list contains the passes", {'VIS9001', 'VIS9002', 'VIS9003', 'VIS9004'} <= {p['plateNumber'] for p in res['data']}, res['data'])
+    code, res = call('GET', 'visitors.php?now=' + urllib.parse.quote(tomorrow) + '&date=' + tomorrow[:10], token=guard)
+    plates = {p['plateNumber']: p for p in res['data']}
+    check('next day: unused pass expired, overstaying visitor still listed', 'VIS9004' not in plates and plates.get('VIS9002', {}).get('isInside') is True, res['data'])
+    _, res = call('GET', 'visitors.php?date=' + today.isoformat(), token=guard)
+    check('never-used pass shows as Expired afterwards', {p['plateNumber']: p['status'] for p in res['data']}.get('VIS9004') == 'Expired', res['data'])
+
+def test_student_portal(admin):
+    section('Student portal accounts & scoping')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    owner_id = 'NCST-2025-7777'
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'STU 7001', 'ownerName': 'Sam Student', 'ownerIdNumber': owner_id,
+                                             'authorizedDrivers': [{'fullName': 'Sam Student', 'relationship': 'Self (Owner)', 'licenseNo': 'N01-11-111111'}]}, admin)
+    acct = res['data']['studentAccount']
+    check('registering a vehicle creates the owner portal login', code == 201 and acct['created'] and acct['tempPassword'], acct)
+    temp = acct['tempPassword']
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'STU 7002', 'ownerName': 'Sam Student', 'ownerIdNumber': owner_id}, admin)
+    check('second vehicle of the same owner reuses the account (no new password)', res['data']['studentAccount']['created'] is False
+          and res['data']['studentAccount']['tempPassword'] is None, res['data']['studentAccount'])
+    stranger_payload = call('GET', 'vehicles.php?plate=NDK4821', token=admin)[1]['data']['qrPayload']
+
+    code, res = login(owner_id, temp)
+    check('student ID cannot sign in to the staff portal', code == 401, code)
+    code, res = login(owner_id, temp, realm='student')
+    check('student login with temp password', code == 200 and res['data']['student']['mustChangePassword'] is True, res)
+    tok = res['data']['token']
+    code, res = call('GET', 'student.php?action=vehicles', token=tok)
+    check('pending password change blocks portal data -> 403', code == 403 and res['data']['code'] == 'PASSWORD_CHANGE_REQUIRED', res)
+    code, res = call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Student-Pass-2026'}, tok)
+    check('student changes password', code == 200, res)
+
+    code, res = call('GET', 'student.php?action=me', token=tok)
+    check('me: profile + summary', code == 200 and res['data']['student']['ownerIdNumber'] == owner_id and res['data']['summary']['vehicles'] == 2, res)
+    code, res = call('GET', 'student.php?action=vehicles', token=tok)
+    plates = sorted(v['plateNumber'] for v in res['data'])
+    check('vehicles: only own vehicles', plates == ['STU 7001', 'STU 7002'], plates)
+    own = res['data'][0]
+    check('own vehicle includes signed QR, drivers, standing', own['qrPayload'] and own['authorizedDrivers'][0]['fullName'] == 'Sam Student'
+          and 'warningCount' in own and 'isBanned' in own and 'ownerPhone' not in own, own)
+    code, v = verify({'qr_code': own['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('pass shown in the student portal verifies at the gate', v.get('result') == 'VALID', v)
+    code, res = call('GET', 'student.php?action=vehicles&owner_id_number=NCST-2024-0001', token=tok)
+    check('client-supplied owner ID is ignored', sorted(x['plateNumber'] for x in res['data']) == ['STU 7001', 'STU 7002'], res)
+
+    call('POST', 'violations.php', {'plate': 'STU 7001', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'Blocking hydrant'}, guard)
+    code, res = call('GET', 'student.php?action=violations', token=tok)
+    check('violations: own warnings visible', code == 200 and len(res['data']) == 1 and res['data'][0]['plateNumber'] == 'STU 7001', res)
+    code, res = call('GET', 'student.php?action=me', token=tok)
+    check('summary shows strike count', res['data']['summary']['strikes'] == 1, res['data']['summary'])
+    call('POST', 'logs.php', {'plate': 'STU 7001', 'action': 'Entry Recorded', 'gate_type': 'Ingress',
+                              'driver_id': int(own['authorizedDrivers'] and call('GET', 'vehicles.php?plate=STU7001', token=admin)[1]['data']['authorizedDrivers'][0]['id'])}, guard)
+    code, res = call('GET', 'student.php?action=activity', token=tok)
+    check('activity: own gate history', code == 200 and res['data'] and all(a['plateNumber'].startswith('STU') for a in res['data']), res)
+
+    # Token separation
+    for path in ['vehicles.php', 'vehicles.php?plate=NDK4821', 'logs.php', 'violations.php', 'visitors.php', 'stats.php']:
+        code, _ = call('GET', path, token=tok)
+        check(f'student token rejected on staff endpoint {path} -> 401', code == 401, code)
+    code, _ = call('POST', 'verify.php', {'qr_code': stranger_payload}, tok)
+    check('student token cannot use the gate verifier -> 401', code == 401, code)
+    code, _ = call('GET', 'student.php?action=vehicles', token=admin)
+    check('staff token rejected on student endpoint -> 401', code == 401, code)
+
+    # Admin re-issues the login
+    code, res = call('POST', 'students.php', {'owner_id_number': owner_id, 'action': 'issue'}, guard)
+    check('guard cannot issue student logins -> 403', code == 403, code)
+    code, res = call('POST', 'students.php', {'owner_id_number': owner_id, 'action': 'issue'}, admin)
+    check('admin resets student password', code == 200 and res['data']['tempPassword'], res)
+    code, _ = call('GET', 'student.php?action=me', token=tok)
+    check('old student session revoked after reset', code == 401, code)
+    code, res = call('POST', 'students.php', {'owner_id_number': 'NO-SUCH-ID', 'action': 'issue'}, admin)
+    check('cannot issue a login for an owner without vehicles -> 404', code == 404, res)
+    code, res = call('POST', 'students.php', {'owner_id_number': 'NCST-2023-0099', 'action': 'issue'}, admin)
+    check('pre-v2 owner can be given a login from the dossier', code == 200 and res['data']['created'] is True, res)
+
+def test_visitor_items_and_on_campus(admin):
+    section('Visitor items & on-campus list')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    base = {'visitor_name': 'Eventos Catering', 'contact_number': '0917 321 0000', 'plate': 'EVT 4040',
+            'purpose': 'Foundation day setup', 'person_to_visit': 'Student Affairs Office'}
+    items = [{'name': 'Monobloc chairs', 'quantity': 40},
+             {'name': 'Sound system', 'quantity': 1, 'description': 'speakers + mixer'},
+             {'name': '', 'quantity': 1, 'description': ''}]
+
+    code, res = call('POST', 'visitors.php', dict(base, items=[{'name': 'Chairs', 'quantity': 0}]), guard)
+    check('item quantity must be 1-9999 -> 400', code == 400, res)
+    code, res = call('POST', 'visitors.php', dict(base, items=[{'name': '', 'quantity': 2, 'description': 'mystery box'}]), guard)
+    check('item without a name -> 400', code == 400, res)
+    code, res = call('POST', 'visitors.php', dict(base, items=[{'name': f'Item {i}', 'quantity': 1} for i in range(21)]), guard)
+    check('more than 20 items -> 400', code == 400, res)
+
+    code, res = call('POST', 'visitors.php', dict(base, items=items), guard)
+    vp = res['data']
+    check('day pass with items -> 201, blank rows ignored', code == 201 and [i['name'] for i in vp['items']] == ['Monobloc chairs', 'Sound system']
+          and vp['items'][0]['quantity'] == 40 and vp['items'][1]['description'] == 'speakers + mixer', vp)
+    _, res = call('GET', 'visitors.php', token=guard)
+    listed = {p['plateNumber']: p for p in res['data']}
+    check('items shown in the visitor list', len(listed['EVT4040']['items']) == 2, listed.get('EVT4040'))
+
+    code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('gate verification returns the items', v.get('result') == 'VALID' and len(v['visitor']['items']) == 2, v)
+    code, res = call('POST', 'logs.php', {'plate': 'EVT 4040', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': vp['id']}, guard)
+    check('entry without checking items -> 400', code == 400 and res['data']['code'] == 'ITEMS_CHECK_REQUIRED', res)
+    code, res = call('POST', 'logs.php', {'plate': 'EVT 4040', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': vp['id'], 'items_verified': True}, guard)
+    check('entry with items checked -> logged with item list', code == 201 and 'Items checked in: 40x Monobloc chairs, 1x Sound system (speakers + mixer)' in res['data']['notes'], res)
+
+    code, res = call('GET', 'oncampus.php', token=guard)
+    oc = res['data']
+    visitor_row = next((x for x in oc['visitors'] if x['plateNumber'] == 'EVT4040'), None)
+    check('on-campus list includes the visitor and items', code == 200 and visitor_row and len(visitor_row['items']) == 2, oc)
+    check('on-campus counts add up', oc['counts']['total'] == len(oc['vehicles']) + len(oc['visitors']), oc['counts'])
+
+    # A registered vehicle entering appears with driver and entry details
+    _, res = call('GET', 'vehicles.php?plate=STU7002', token=admin)
+    stu = res['data']
+    call('POST', 'logs.php', {'plate': 'STU 7002', 'action': 'Entry Recorded', 'gate_type': 'Ingress',
+                              'driver_id': int(stu['authorizedDrivers'][0]['id'])}, guard)
+    code, res = call('GET', 'oncampus.php', token=guard)
+    row = next((x for x in res['data']['vehicles'] if x['plateNumber'] == 'STU 7002'), None)
+    check('registered vehicle listed with driver, gate and guard', row and row['enteredBy'] == 'Sam Student'
+          and row['admittedBy'] == 'QA Guard (NCST-SEC-99)' and row['hoursInside'] is not None, row)
+
+    code, res = call('POST', 'logs.php', {'plate': 'EVT 4040', 'action': 'Exit Approved', 'gate_type': 'Egress', 'visitor_pass_id': vp['id'], 'items_verified': True}, guard)
+    check('exit with items checked -> "Items checked out" logged', code == 201 and 'Items checked out:' in res['data']['notes'], res)
+    code, res = call('GET', 'oncampus.php', token=guard)
+    check('visitor leaves the on-campus list after exit', not any(x['plateNumber'] == 'EVT4040' for x in res['data']['visitors']), res['data']['visitors'])
+
+    # Mobile scanner cannot tick the box: allowed, but the log says items were not checked
+    code, res = call('POST', 'visitors.php', dict(base, plate='EVT 4041', items=[{'name': 'Tables', 'quantity': 10}]), guard)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'EVT 4041', 'driverName': 'Driver', 'action': 'Entry Recorded'})
+    check('mobile entry logs items as not checked', code == 201 and 'not checked by mobile scanner' in res['data']['notes'], res)
+
+    code, _ = call('GET', 'oncampus.php')
+    check('on-campus list requires sign-in -> 401', code == 401, code)
+
+def main():
+    if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
+        os.remove(SQLITE_DB)
+        print(f'Deleted local SQLite DB: {SQLITE_DB}')
+    admin = test_auth()
+    test_staff_accounts(admin)
+    test_lockout()
+    test_mobile_compat()
+
+    # A clean guard account for the pass tests
+    code, res = call('POST', 'users.php', {'username': 'guard.qa', 'full_name': 'QA Guard', 'role': 'guard', 'badge_number': 'NCST-SEC-99'}, admin)
+    temp = res['data']['tempPassword']
+    qa = login('guard.qa', temp)[1]['data']['token']
+    call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Guard-QA-2026'}, qa)
+
+    test_signed_passes(admin)
+    test_legacy_passes(admin)
+    test_gate_flow(admin)
+    test_violations(admin)
+    test_overnight(admin)
+    test_visitor_passes(admin)
+    test_student_portal(admin)
+    test_visitor_items_and_on_campus(admin)
+    print(f'\n{passed} passed, {failed} failed')
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == '__main__':
+    main()
