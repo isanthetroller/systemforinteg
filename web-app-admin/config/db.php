@@ -307,15 +307,28 @@ function initializeSqliteSchema($pdo) {
     $pdo->exec("UPDATE `system_users` SET `role` = 'guard' WHERE `role` NOT IN ('admin', 'guard')");
     $pdo->exec("UPDATE `gate_logs` SET `action` = 'Entry Denied' WHERE `action` NOT IN ('Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied')");
 
-    // Clear any previous failed attempts or lockouts
+    // Clear any previous failed attempts or lockouts, and ensure guards are never locked out by must_change_password
     $pdo->exec("UPDATE `system_users` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
+    $pdo->exec("UPDATE `system_users` SET `must_change_password` = 0 WHERE `role` = 'guard'");
     $pdo->exec("UPDATE `student_accounts` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
 
-    // Seed the first administrator (must change password on first login)
+    // Seed baseline administrator and gate guards if empty
     $count = (int)$pdo->query("SELECT COUNT(*) FROM `system_users`")->fetchColumn();
     if ($count === 0) {
-        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 1)");
+        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 0)");
         $stmt->execute(['admin', password_hash('Password123!', PASSWORD_BCRYPT), 'System Administrator', 'NCST-SEC-01']);
+    }
+    // Ensure default guard terminal accounts exist for instant gate operations
+    $guardCheck = $pdo->prepare("SELECT `id` FROM `system_users` WHERE `username` = ? LIMIT 1");
+    $guardCheck->execute(['guard1']);
+    if (!$guardCheck->fetch()) {
+        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
+        $stmt->execute(['guard1', password_hash('password123', PASSWORD_BCRYPT), 'Officer Ramon Gomez', 'NCST-SEC-01', 'Gate 1 (Main Ingress)']);
+    }
+    $guardCheck->execute(['guard2']);
+    if (!$guardCheck->fetch()) {
+        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
+        $stmt->execute(['guard2', password_hash('password123', PASSWORD_BCRYPT), 'Officer Elena Torres', 'NCST-SEC-02', 'Gate 2 (Main Egress)']);
     }
 }
 

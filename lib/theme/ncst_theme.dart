@@ -17,6 +17,8 @@ class NcstColors {
   static const Color green = Color(0xFF16A34A);
   static const Color greenLight = Color(0xFFDCFCE7);
   static const Color greenDark = Color(0xFF15803D);
+  static const Color success = green;
+  static const Color error = crimson;
 
   // Neutrals & Surfaces
   static const Color white = Color(0xFFFFFFFF);

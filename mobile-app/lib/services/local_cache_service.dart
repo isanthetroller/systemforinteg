@@ -16,6 +16,22 @@ class LocalCacheService {
   static const String keyVisitorPasses = 'sp_cached_visitor_passes_v2';
   static const String keySyncQueue = 'sp_offline_sync_queue_v2';
   static const String keyVisitorPassValidityHours = 'sp_visitor_pass_validity_hours';
+  static const String keyServerBaseUrl = 'sp_server_base_url_v2';
+
+  /// Retrieve persistent backend API base URL
+  static String getServerBaseUrl({String defaultUrl = 'http://ncstparking-test.rf.gd/api'}) {
+    final stored = _getString(keyServerBaseUrl);
+    if (stored != null && stored.trim().isNotEmpty) {
+      return stored.trim();
+    }
+    return defaultUrl;
+  }
+
+  /// Store persistent backend API base URL
+  static Future<void> setServerBaseUrl(String url) async {
+    final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
+    await _setString(keyServerBaseUrl, clean);
+  }
 
   /// Initialize persistent storage (safe to call multiple times)
   static Future<void> init() async {

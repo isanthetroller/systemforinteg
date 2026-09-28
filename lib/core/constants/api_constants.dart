@@ -1,7 +1,14 @@
-/// InfinityFree API Configuration for Mobile Gate Scanner
+/// SecurePark API Configuration for Mobile Gate Scanner
 class ApiConstants {
-  /// Active InfinityFree live domain
-  static String baseUrl = 'http://ncstparking-test.rf.gd/api';
+  /// Known server presets
+  static const String liveCloudUrl = 'http://ncstparking-test.rf.gd/api';
+  static const String localLanUrl = 'http://192.168.0.102:8000/web-app-admin/api';
+  static const String localEmulatorUrl = 'http://10.0.2.2:8000/web-app-admin/api';
+
+  static const String defaultBaseUrl = liveCloudUrl;
+
+  /// Active base API URL (customizable, persistent across app launches)
+  static String baseUrl = defaultBaseUrl;
 
   static const String vehiclesEndpoint = '/vehicles.php';
   static const String logsEndpoint = '/logs.php';

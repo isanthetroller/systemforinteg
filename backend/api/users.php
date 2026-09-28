@@ -48,6 +48,7 @@ function handleCreateUser($pdo) {
     $role = isset($data['role']) ? $data['role'] : 'guard';
     $badge = isset($data['badge_number']) ? trim($data['badge_number']) : '';
     $gate = isset($data['gate_assigned']) ? trim($data['gate_assigned']) : 'Gate 1 (Main Ingress)';
+    $customPassword = isset($data['password']) ? trim((string)$data['password']) : '';
 
     if (!preg_match('/^[a-z0-9._-]{3,50}$/', $username)) {
         sendResponse(400, null, 'Username must be 3-50 characters: letters, numbers, dot, dash or underscore.');
@@ -65,13 +66,26 @@ function handleCreateUser($pdo) {
         sendResponse(409, null, "Username {$username} is already taken.");
     }
 
-    $tempPassword = generateTempPassword();
-    $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, ?, ?, ?, 'Active', 1)");
-    $stmt->execute([$username, password_hash($tempPassword, PASSWORD_BCRYPT), $fullName, $role, $badge ?: null, $gate ?: null]);
+    if ($customPassword !== '') {
+        if (strlen($customPassword) < 6) {
+            sendResponse(400, null, 'Custom password must be at least 6 characters.');
+        }
+        $finalPassword = $customPassword;
+        $mustChange = 0;
+    } else {
+        $finalPassword = generateTempPassword();
+        // Guards are never forced to change password because they operate the gate mobile terminal
+        $mustChange = ($role === 'admin') ? 1 : 0;
+    }
+
+    $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)");
+    $stmt->execute([$username, password_hash($finalPassword, PASSWORD_BCRYPT), $fullName, $role, $badge ?: null, $gate ?: null, $mustChange]);
 
     $row = fetchUser($pdo, (int)$pdo->lastInsertId());
-    sendResponse(201, ['user' => publicStaff($row), 'tempPassword' => $tempPassword],
-        "Account {$username} created. Share the temporary password securely; it is shown only once.");
+    $msg = $customPassword !== ''
+        ? "Account {$username} created with the specified password."
+        : "Account {$username} created. Password: {$finalPassword}";
+    sendResponse(201, ['user' => publicStaff($row), 'tempPassword' => $finalPassword], $msg);
 }
 
 function fetchUser($pdo, $id) {
@@ -114,12 +128,22 @@ function handleUpdateUser($pdo, $admin) {
     }
 
     if ($action === 'reset_password') {
-        $tempPassword = generateTempPassword();
-        $stmt = $pdo->prepare("UPDATE `system_users` SET `password_hash` = ?, `must_change_password` = 1, `failed_attempts` = 0, `locked_until` = NULL WHERE `id` = ?");
-        $stmt->execute([password_hash($tempPassword, PASSWORD_BCRYPT), $id]);
+        $customPassword = isset($data['password']) ? trim((string)$data['password']) : '';
+        if ($customPassword !== '') {
+            if (strlen($customPassword) < 6) {
+                sendResponse(400, null, 'Custom password must be at least 6 characters.');
+            }
+            $finalPassword = $customPassword;
+            $mustChange = 0;
+        } else {
+            $finalPassword = generateTempPassword();
+            $mustChange = ($row['role'] === 'admin') ? 1 : 0;
+        }
+        $stmt = $pdo->prepare("UPDATE `system_users` SET `password_hash` = ?, `must_change_password` = ?, `failed_attempts` = 0, `locked_until` = NULL WHERE `id` = ?");
+        $stmt->execute([password_hash($finalPassword, PASSWORD_BCRYPT), $mustChange, $id]);
         revokeUserTokens($pdo, 'staff', $id);
-        sendResponse(200, ['user' => publicStaff(fetchUser($pdo, $id)), 'tempPassword' => $tempPassword],
-            "Password for {$row['username']} was reset. Share the temporary password securely; it is shown only once.");
+        sendResponse(200, ['user' => publicStaff(fetchUser($pdo, $id)), 'tempPassword' => $finalPassword],
+            "Password for {$row['username']} was updated.");
     }
 
     if ($action === 'update') {

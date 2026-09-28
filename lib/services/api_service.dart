@@ -278,6 +278,41 @@ class ApiService {
     return [];
   }
 
+  /// Test connectivity to a target backend API base URL
+  static Future<Map<String, dynamic>> testConnection([String? customUrl]) async {
+    final targetUrl = (customUrl != null && customUrl.trim().isNotEmpty)
+        ? customUrl.trim()
+        : ApiConstants.baseUrl;
+    try {
+      final uri = Uri.parse('$targetUrl${ApiConstants.statsEndpoint}');
+      final res = await _client.get(uri, headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'SecurePark-GateScanner/2.4',
+      }).timeout(const Duration(seconds: 4));
+
+      final body = res.body;
+      if (res.statusCode == 200 || body.contains('"status"') || body.contains('slowAES')) {
+        return {
+          'success': true,
+          'statusCode': res.statusCode,
+          'message': 'Connected (HTTP ${res.statusCode})',
+        };
+      } else {
+        return {
+          'success': false,
+          'statusCode': res.statusCode,
+          'message': 'Server returned HTTP ${res.statusCode}',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'statusCode': 0,
+        'message': 'Connection failed ($e)',
+      };
+    }
+  }
+
   /// Authenticate guard against the live backend API (/api/auth.php?action=login)
   static Future<Map<String, dynamic>?> login({
     required String username,
@@ -302,22 +337,34 @@ class ApiService {
             unawaited(fetchSystemSettings());
           }
           return data;
+        } else {
+          throw Exception(body['message'] ?? 'Authentication failed');
         }
       } else if (res.statusCode == 400 || res.statusCode == 401 || res.statusCode == 403) {
-        final Map<String, dynamic> body = jsonDecode(res.body);
-        throw Exception(body['message'] ?? 'Authentication failed');
+        try {
+          final Map<String, dynamic> body = jsonDecode(res.body);
+          throw Exception(body['message'] ?? 'Authentication failed');
+        } catch (e) {
+          if (e is Exception && e.toString().contains('Exception:')) rethrow;
+          throw Exception('Authentication failed (HTTP ${res.statusCode})');
+        }
+      } else if (res.statusCode == 503) {
+        throw Exception('Cannot connect to server at ${ApiConstants.baseUrl}. Please verify your network or server URL setting.');
+      } else {
+        try {
+          final Map<String, dynamic> body = jsonDecode(res.body);
+          if (body['message'] != null) {
+            throw Exception(body['message']);
+          }
+        } catch (e) {
+          if (e is Exception && e.toString().contains('Exception:')) rethrow;
+        }
+        throw Exception('Server error (HTTP ${res.statusCode}). Unable to sign in.');
       }
     } catch (e) {
-      if (e is Exception && (e.toString().contains('Authentication failed') ||
-          e.toString().contains('Invalid') ||
-          e.toString().contains('required') ||
-          e.toString().contains('password') ||
-          e.toString().contains('Password'))) {
-        rethrow;
-      }
-      debugPrint('[ApiService] Login network/server exception: $e');
+      debugPrint('[ApiService] Login exception: $e');
+      rethrow;
     }
-    return null;
   }
 
   /// Logout guard and invalidate session token on backend (/api/auth.php?action=logout)

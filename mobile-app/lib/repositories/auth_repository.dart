@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import '../data/mock_data.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
@@ -64,22 +63,11 @@ class ApiAuthRepository implements AuthRepository {
         _currentUser = user;
         return user;
       }
+      throw const AuthException('Invalid response from server. Please try again.');
     } catch (e) {
-      final msg = e.toString().replaceFirst('Exception: ', '');
-      if (msg.contains('Password') ||
-          msg.contains('password') ||
-          msg.contains('credentials') ||
-          msg.contains('Invalid') ||
-          msg.contains('deactivated')) {
-        throw AuthException(msg);
-      }
-      debugPrint('[ApiAuthRepository] Backend auth notice: $e');
+      final msg = e.toString().replaceFirst('Exception: ', '').trim();
+      throw AuthException(msg.isNotEmpty ? msg : 'Unable to sign in. Please check your credentials.');
     }
-
-    // Offline / fallback path: allow local guard presets when server is unreachable
-    final fallbackUser = await _fallbackRepo.login(username: username, password: password);
-    _currentUser = fallbackUser;
-    return fallbackUser;
   }
 
   @override

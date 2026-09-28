@@ -409,15 +409,18 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
                           ),
                           const SizedBox(width: 6),
                           Flexible(
-                            child: Text(
-                              _statusPrompt,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: _isLocked
-                                    ? NcstColors.greenDark
-                                    : (_isStabilizing ? const Color(0xFF0369A1) : NcstColors.slate700),
-                                fontSize: 12,
-                                fontWeight: (_isStabilizing || _isLocked) ? FontWeight.w800 : FontWeight.w600,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                _statusPrompt,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: _isLocked
+                                      ? NcstColors.greenDark
+                                      : (_isStabilizing ? const Color(0xFF0369A1) : NcstColors.slate700),
+                                  fontSize: 12,
+                                  fontWeight: (_isStabilizing || _isLocked) ? FontWeight.w800 : FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
@@ -460,12 +463,17 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
                               color: _steadyScanEnabled ? NcstColors.navy : NcstColors.slate600,
                             ),
                             const SizedBox(width: 5),
-                            Text(
-                              _steadyScanEnabled ? 'Stabilization: Steady Hold (~0.9s)' : 'Stabilization: Off (Instant)',
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                                color: _steadyScanEnabled ? NcstColors.navy : NcstColors.slate600,
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  _steadyScanEnabled ? 'Stabilize: Steady Hold (~0.9s)' : 'Stabilization: Off (Instant)',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: _steadyScanEnabled ? NcstColors.navy : NcstColors.slate600,
+                                  ),
+                                ),
                               ),
                             ),
                           ],

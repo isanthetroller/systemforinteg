@@ -126,8 +126,14 @@ def main():
     if not FTP_USER or not FTP_PASS:
         fail('Set the FTP_USER and FTP_PASS environment variables.')
 
+    print(f'[FTP] Connecting to {FTP_HOST}...')
+    sys.stdout.flush()
     ftp = ftplib.FTP(FTP_HOST, timeout=30)
     ftp.login(FTP_USER, FTP_PASS)
+    ftp.set_pasv(True)
+    print('[FTP] Logged in successfully.')
+    sys.stdout.flush()
+
     created = set()
     for local, remote in uploads:
         remote_dir, filename = remote.rsplit('/', 1)
@@ -135,8 +141,10 @@ def main():
         with open(local, 'rb') as fh:
             ftp.storbinary(f'STOR {filename}', fh)
         print(f'[FTP] /{remote}')
+        sys.stdout.flush()
     ftp.quit()
     print(f'\n[FTP] SUCCESS: uploaded {len(uploads)} files.')
+    sys.stdout.flush()
     print('Remember: run the migrations in backend/database/migrations/ (001, then 002) in phpMyAdmin once each before first use.')
 
 

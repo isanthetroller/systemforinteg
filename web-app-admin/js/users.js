@@ -98,13 +98,21 @@
     $('staffFullName').value = editing ? user.fullName : '';
     $('staffUsername').value = editing ? user.username : '';
     $('staffUsername').disabled = editing;
+    if ($('staffPassword')) $('staffPassword').value = '';
+    if ($('staffPasswordContainer')) {
+      if (editing) {
+        $('staffPasswordContainer').classList.add('hidden');
+      } else {
+        $('staffPasswordContainer').classList.remove('hidden');
+      }
+    }
     $('staffRole').value = editing ? user.role : 'guard';
     $('staffBadge').value = editing ? (user.badgeNumber || '') : '';
     $('staffGate').value = editing ? (user.gateAssigned || 'Gate 1 (Main Ingress)') : 'Gate 1 (Main Ingress)';
     $('staffModalTitle').textContent = editing ? `Edit ${user.username}` : 'New Staff Account';
     $('staffModalHint').textContent = editing
       ? 'Username cannot be changed. Use Reset Password to issue a new temporary password.'
-      : 'A temporary password is generated and shown once.';
+      : 'Set a password or leave blank to auto-generate a temporary password.';
     $('staffSubmitBtn').textContent = editing ? 'Save Changes' : 'Create Account';
     $('staffFormError').classList.add('hidden');
     $('staffModal').classList.remove('hidden');
@@ -136,17 +144,21 @@
         SP.showToast('Staff account updated.', 'success');
       } else {
         payload.username = $('staffUsername').value.trim();
+        const pwd = $('staffPassword') ? $('staffPassword').value.trim() : '';
+        if (pwd) payload.password = pwd;
         const res = await ApiClient.createUser(payload);
         closeModal();
         if (window.SPAlert && typeof SPAlert.tempPassword === 'function') {
           await SPAlert.tempPassword({
             title: 'Staff Account Created',
             username: res.user.username,
-            password: res.tempPassword,
-            subtext: `Temporary password for ${res.user.fullName} (${res.user.username})`
+            password: res.tempPassword || pwd,
+            subtext: pwd
+              ? `Account ready. Use username "${res.user.username}" and your password to sign in to the web and mobile gate app.`
+              : `Password for ${res.user.fullName} (${res.user.username}). Use this to sign in to the web and mobile gate app.`
           });
         } else {
-          showTempPassword(res.user.username, res.tempPassword);
+          showTempPassword(res.user.username, res.tempPassword || pwd);
         }
       }
       load();

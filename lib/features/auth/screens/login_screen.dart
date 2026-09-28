@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/api_constants.dart';
 import '../../../models/user_model.dart';
+import '../../../services/api_service.dart';
 import '../../../services/auth_service.dart';
+import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../../guard/screens/guard_shell_screen.dart';
 
@@ -20,11 +23,40 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String? _errorMessage;
 
+  String _currentServerUrl = ApiConstants.baseUrl;
+  bool _isTestingConnection = false;
+  bool? _connectionStatus;
+  String _connectionMessage = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _currentServerUrl = LocalCacheService.getServerBaseUrl(defaultUrl: ApiConstants.defaultBaseUrl);
+    ApiConstants.baseUrl = _currentServerUrl;
+    _checkServerConnection();
+  }
+
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkServerConnection([String? urlToTest]) async {
+    final target = urlToTest ?? _currentServerUrl;
+    if (mounted) {
+      setState(() {
+        _isTestingConnection = true;
+      });
+    }
+    final res = await ApiService.testConnection(target);
+    if (!mounted) return;
+    setState(() {
+      _isTestingConnection = false;
+      _connectionStatus = res['success'] == true;
+      _connectionMessage = res['message'] ?? '';
+    });
   }
 
   void _applyDemoRole(GuardRole role) {
@@ -72,6 +104,403 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _showServerConfigDialog() {
+    String selectedUrl = _currentServerUrl;
+    final customController = TextEditingController(text: selectedUrl);
+    bool testing = false;
+    bool? testSuccess;
+    String testFeedback = '';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (modalContext, setModalState) {
+            return Container(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(modalContext).viewInsets.bottom + 20,
+              ),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.dns_rounded, color: NcstColors.navy),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Backend Server Connection',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: NcstColors.navy,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 20),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Choose where this terminal connects to authenticate guards and sync gate logs:',
+                      style: TextStyle(fontSize: 12, color: NcstColors.slate500),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildServerOptionTile(
+                      title: 'Live Cloud Server',
+                      subtitle: 'InfinityFree (ncstparking-test.rf.gd)',
+                      url: ApiConstants.liveCloudUrl,
+                      selectedUrl: selectedUrl,
+                      icon: Icons.cloud_outlined,
+                      onTap: () {
+                        setModalState(() {
+                          selectedUrl = ApiConstants.liveCloudUrl;
+                          customController.text = selectedUrl;
+                          testSuccess = null;
+                          testFeedback = '';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    _buildServerOptionTile(
+                      title: 'Local Wi-Fi PC Server',
+                      subtitle: 'Local Admin Web App (192.168.0.102:8000)',
+                      url: ApiConstants.localLanUrl,
+                      selectedUrl: selectedUrl,
+                      icon: Icons.computer_outlined,
+                      onTap: () {
+                        setModalState(() {
+                          selectedUrl = ApiConstants.localLanUrl;
+                          customController.text = selectedUrl;
+                          testSuccess = null;
+                          testFeedback = '';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    _buildServerOptionTile(
+                      title: 'Android Emulator',
+                      subtitle: 'Host Loopback (10.0.2.2:8000)',
+                      url: ApiConstants.localEmulatorUrl,
+                      selectedUrl: selectedUrl,
+                      icon: Icons.phone_android_outlined,
+                      onTap: () {
+                        setModalState(() {
+                          selectedUrl = ApiConstants.localEmulatorUrl;
+                          customController.text = selectedUrl;
+                          testSuccess = null;
+                          testFeedback = '';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: customController,
+                      decoration: InputDecoration(
+                        labelText: 'Server API Base URL',
+                        hintText: 'http://<IP_OR_DOMAIN>/api',
+                        prefixIcon: const Icon(Icons.link, size: 18),
+                        filled: true,
+                        fillColor: NcstColors.slate50,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                      style: const TextStyle(fontSize: 13),
+                      onChanged: (val) {
+                        setModalState(() {
+                          selectedUrl = val.trim();
+                          testSuccess = null;
+                          testFeedback = '';
+                        });
+                      },
+                    ),
+                    if (testFeedback.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: testSuccess == true ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: testSuccess == true ? const Color(0xFFBBF7D0) : const Color(0xFFFECACA),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              testSuccess == true ? Icons.check_circle : Icons.error_outline,
+                              color: testSuccess == true ? NcstColors.success : NcstColors.error,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                testFeedback,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: testSuccess == true ? NcstColors.success : NcstColors.error,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: testing
+                                ? null
+                                : () async {
+                                    setModalState(() {
+                                      testing = true;
+                                      testFeedback = 'Testing connection...';
+                                    });
+                                    final res = await ApiService.testConnection(customController.text.trim());
+                                    setModalState(() {
+                                      testing = false;
+                                      testSuccess = res['success'] == true;
+                                      testFeedback = res['message'] ?? (testSuccess! ? 'Connected successfully' : 'Unreachable');
+                                    });
+                                  },
+                            icon: testing
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.network_check_rounded, size: 16),
+                            label: const Text('TEST PING', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () async {
+                              final clean = customController.text.trim().replaceAll(RegExp(r'/+$'), '');
+                              if (clean.isEmpty) return;
+                              ApiConstants.baseUrl = clean;
+                              await LocalCacheService.setServerBaseUrl(clean);
+                              if (!mounted) return;
+                              setState(() {
+                                _currentServerUrl = clean;
+                                _errorMessage = null;
+                              });
+                              _checkServerConnection();
+                              if (ctx.mounted) {
+                                Navigator.pop(ctx);
+                              }
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Connected to $clean'),
+                                  backgroundColor: NcstColors.navy,
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: NcstColors.navy,
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: const Icon(Icons.save_rounded, size: 16),
+                            label: const Text('SAVE & CONNECT', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildServerOptionTile({
+    required String title,
+    required String subtitle,
+    required String url,
+    required String selectedUrl,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    final isSelected = selectedUrl == url;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? NcstColors.navy.withValues(alpha: 0.06) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? NcstColors.navy : NcstColors.slate200,
+            width: isSelected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: isSelected ? NcstColors.navy : NcstColors.slate500),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                      color: isSelected ? NcstColors.navy : NcstColors.slate900,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 11, color: NcstColors.slate500),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              const Icon(Icons.check_circle_rounded, color: NcstColors.navy, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildServerConnectionCard() {
+    final isCloud = _currentServerUrl == ApiConstants.liveCloudUrl;
+    final isLocal = _currentServerUrl == ApiConstants.localLanUrl;
+    final isEmulator = _currentServerUrl == ApiConstants.localEmulatorUrl;
+
+    String label = 'Custom Server';
+    if (isCloud) {
+      label = 'Live Cloud (rf.gd)';
+    } else if (isLocal) {
+      label = 'Local PC (192.168.0.102)';
+    } else if (isEmulator) {
+      label = 'Android Emulator (10.0.2.2)';
+    }
+
+    final Color statusColor;
+    final String statusText;
+    final IconData statusIcon;
+
+    if (_isTestingConnection) {
+      statusColor = NcstColors.slate500;
+      statusText = 'Checking connection...';
+      statusIcon = Icons.sync;
+    } else if (_connectionStatus == true) {
+      statusColor = NcstColors.success;
+      statusText = 'Connected to $label';
+      statusIcon = Icons.cloud_done_rounded;
+    } else if (_connectionStatus == false) {
+      statusColor = NcstColors.error;
+      statusText = 'Unreachable: Tap to switch';
+      statusIcon = Icons.cloud_off_rounded;
+    } else {
+      statusColor = NcstColors.slate500;
+      statusText = label;
+      statusIcon = Icons.dns_rounded;
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _connectionStatus == false
+            ? const Color(0xFFFEF2F2)
+            : (_connectionStatus == true ? const Color(0xFFF0FDF4) : NcstColors.white),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: _connectionStatus == false
+              ? const Color(0xFFFECACA)
+              : (_connectionStatus == true ? const Color(0xFFBBF7D0) : NcstColors.slate200),
+        ),
+      ),
+      child: InkWell(
+        onTap: _showServerConfigDialog,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Icon(statusIcon, size: 18, color: statusColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      statusText,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: statusColor,
+                      ),
+                    ),
+                    Text(
+                      _currentServerUrl,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: NcstColors.slate500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (_connectionMessage.isNotEmpty && _connectionStatus != true)
+                      Text(
+                        _connectionMessage,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: NcstColors.error,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: NcstColors.navy.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'CHANGE',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: NcstColors.navy,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
@@ -96,11 +525,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   children: [
                     // Brand Logo & Header
                     _buildHeader(isCompact),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 18),
+
+                    // Active Server Connection Indicator
+                    _buildServerConnectionCard(),
+                    const SizedBox(height: 16),
 
                     // Quick Demo Role Selector Pills
                     _buildDemoRoleSelector(),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
 
                     // Error Banner if authentication fails
                     if (_errorMessage != null) ...[

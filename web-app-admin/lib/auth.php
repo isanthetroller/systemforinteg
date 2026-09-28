@@ -116,7 +116,8 @@ function requireStaff($pdo, $roles = ['admin', 'guard'], $allowPendingPassword =
         sendResponse(401, ['code' => 'AUTH_REQUIRED'], 'Please sign in to continue.');
     }
     $user = $auth['user'];
-    if (!$allowPendingPassword && (int)$user['must_change_password'] === 1) {
+    // Guards operating gate terminals are immune to password change lockouts
+    if (!$allowPendingPassword && $user['role'] !== 'guard' && (int)$user['must_change_password'] === 1) {
         sendResponse(403, ['code' => 'PASSWORD_CHANGE_REQUIRED'], 'You must change your temporary password first.');
     }
     if (!in_array($user['role'], $roles, true)) {
@@ -150,7 +151,7 @@ function requireStudent($pdo, $allowPendingPassword = false) {
 function requireStaffOrScanner($pdo) {
     $auth = resolveAuth($pdo);
     if ($auth && $auth['type'] === 'staff') {
-        return requireStaff($pdo);
+        return requireStaff($pdo, ['admin', 'guard'], true);
     }
     // A request that presents a session token must not fall back to scanner access
     // when that token is expired, revoked or belongs to a deactivated / student account.

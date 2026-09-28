@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'core/constants/api_constants.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'services/local_cache_service.dart';
 import 'services/sync_queue_service.dart';
@@ -9,6 +10,9 @@ void main() async {
 
   // Initialize local persistent caching for offline Wi-Fi resilience
   await LocalCacheService.init();
+
+  // Initialize persistent server endpoint (defaults to live cloud, persists user selection)
+  ApiConstants.baseUrl = LocalCacheService.getServerBaseUrl(defaultUrl: ApiConstants.defaultBaseUrl);
 
   // Start automated background synchronization queue for offline data flush
   SyncQueueService().startAutoSync();
