@@ -1227,15 +1227,12 @@
 
               <!-- QR Code (Direct, Sized Up with Zoom Control) -->
               <div class="flex flex-col items-center justify-center py-2">
-                <div class="relative">
-                  <div id="qrCodeContainer" class="w-[220px] h-[220px] flex items-center justify-center overflow-hidden cursor-pointer rounded-lg border border-transparent hover:border-ncst-navy/30 transition-all p-1 opacity-40" title="Preview only - the signed pass is issued when you register">
+                <div class="relative p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div id="qrCodeContainer" class="w-[220px] h-[220px] flex items-center justify-center overflow-hidden cursor-pointer rounded-lg border border-slate-100 hover:border-ncst-navy/40 transition-all p-1" title="Official scannable QR gate pass">
                     <!-- Rendered by QRCode library -->
                   </div>
-                  <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
-                    <span class="px-2.5 py-1 rounded bg-ncst-crimson/90 text-white text-[11px] font-extrabold tracking-wider -rotate-12 shadow">PREVIEW &middot; NOT VALID</span>
-                  </div>
                 </div>
-                <p class="mt-1.5 text-[10px] text-slate-500 text-center max-w-[220px]">The signed QR pass is issued by the server when you register the vehicle.</p>
+                <p class="mt-1.5 text-[10px] text-slate-500 text-center max-w-[220px]">Scannable official QR pass — click or tap to enlarge.</p>
                 <button type="button" id="zoomPreviewQrBtn" class="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white hover:bg-ncst-navy hover:text-white text-slate-700 text-xs font-semibold border border-slate-300 transition-all shadow-2xs cursor-pointer">
                   <svg class="w-3.5 h-3.5 text-ncst-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="11" cy="11" r="8"></circle>

@@ -112,6 +112,33 @@ class LocalCacheService {
     return null;
   }
 
+  static Future<void> upsertVehicle(VehicleRecord vehicle) async {
+    try {
+      final raw = _getString(keyVehicles);
+      List<dynamic> list = [];
+      if (raw != null && raw.isNotEmpty) {
+        list = jsonDecode(raw) as List;
+      }
+      final normPlate = vehicle.plateNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+      final idx = list.indexWhere((item) {
+        if (item is Map) {
+          final p = (item['plateNumber'] ?? item['plate_number'] ?? item['plate'] ?? '').toString().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+          return p == normPlate;
+        }
+        return false;
+      });
+      final jsonMap = vehicle.toJson();
+      if (idx >= 0) {
+        list[idx] = jsonMap;
+      } else {
+        list.insert(0, jsonMap);
+      }
+      await saveVehicles(list);
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error upserting vehicle in cache: $e');
+    }
+  }
+
   // ---- 2. Gate Audit Logs Cache ----
   static Future<void> saveLogs(List<dynamic> jsonList) async {
     try {

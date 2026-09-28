@@ -39,7 +39,15 @@ class DriverPhotoView extends StatelessWidget {
   }
 
   Widget _buildPhotoContent() {
-    final raw = photoUrl.trim();
+    var raw = photoUrl.trim();
+    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+      raw = raw.substring(1, raw.length - 1).trim();
+    }
+    if (raw.contains('%') && (raw.contains('%20') || raw.contains('%2F') || raw.contains('%3A'))) {
+      try {
+        raw = Uri.decodeFull(raw);
+      } catch (_) {}
+    }
     if (raw.isEmpty) {
       return _buildPlaceholderPhoto();
     }
@@ -52,7 +60,7 @@ class DriverPhotoView extends StatelessWidget {
     if (raw.startsWith('data:image/') ||
         raw.startsWith('/9j/') ||
         raw.startsWith('iVBORw') ||
-        (raw.length > 200 && !raw.startsWith('http') && !raw.startsWith('assets/'))) {
+        (raw.length > 100 && !raw.startsWith('http') && !raw.startsWith('assets/'))) {
       try {
         final commaIdx = raw.indexOf(',');
         final base64Str = commaIdx != -1 ? raw.substring(commaIdx + 1) : raw;
@@ -62,7 +70,6 @@ class DriverPhotoView extends StatelessWidget {
         return Image.memory(
           bytes,
           cacheWidth: targetPixelSize,
-          cacheHeight: targetPixelSize,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) => _buildPlaceholderPhoto(),
         );
@@ -76,7 +83,6 @@ class DriverPhotoView extends StatelessWidget {
       return Image.asset(
         raw,
         cacheWidth: targetPixelSize,
-        cacheHeight: targetPixelSize,
         fit: BoxFit.cover,
         errorBuilder: (context, error, stackTrace) => _buildPlaceholderPhoto(),
       );
@@ -89,7 +95,6 @@ class DriverPhotoView extends StatelessWidget {
         resolvedUrl,
         headers: ApiService.imageHeaders,
         cacheWidth: targetPixelSize,
-        cacheHeight: targetPixelSize,
         fit: BoxFit.cover,
         loadingBuilder: (context, child, progress) {
           if (progress == null) return child;
@@ -153,10 +158,17 @@ class VehiclePhotoThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final raw = photoData.trim();
+    var raw = photoData.trim();
+    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+      raw = raw.substring(1, raw.length - 1).trim();
+    }
+    if (raw.contains('%') && (raw.contains('%20') || raw.contains('%2F') || raw.contains('%3A'))) {
+      try {
+        raw = Uri.decodeFull(raw);
+      } catch (_) {}
+    }
     Widget content;
     final targetW = (width * 2).round().clamp(60, 240);
-    final targetH = (height * 2).round().clamp(48, 240);
 
     if (raw.startsWith('data:image/') ||
         raw.startsWith('/9j/') ||
@@ -173,7 +185,6 @@ class VehiclePhotoThumb extends StatelessWidget {
           width: width,
           height: height,
           cacheWidth: targetW,
-          cacheHeight: targetH,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) => _fallback(),
         );
@@ -186,7 +197,6 @@ class VehiclePhotoThumb extends StatelessWidget {
         width: width,
         height: height,
         cacheWidth: targetW,
-        cacheHeight: targetH,
         fit: BoxFit.cover,
         errorBuilder: (context, error, stackTrace) => _fallback(),
       );
@@ -199,7 +209,6 @@ class VehiclePhotoThumb extends StatelessWidget {
           width: width,
           height: height,
           cacheWidth: targetW,
-          cacheHeight: targetH,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
             return _NetworkImageWithFallback(

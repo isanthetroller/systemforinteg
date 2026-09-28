@@ -293,6 +293,30 @@ class VehicleRecord {
       isAntiPassback: isAntiPassback ?? this.isAntiPassback,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'plateNumber': plateNumber,
+    'vehicleType': vehicleType,
+    'makeModelColor': makeModelColor,
+    'ownerName': ownerName,
+    'ownerRole': ownerRole,
+    'ownerIdNumber': ownerIdNumber,
+    'qrPassCode': qrPassCode,
+    'stickerYear': stickerYear,
+    if (ownerPhotoUrl != null) 'ownerPhotoUrl': ownerPhotoUrl,
+    if (vehiclePicture != null) 'vehiclePicture': vehiclePicture,
+    'authorizedDrivers': authorizedDrivers.map((d) => d.toJson()).toList(),
+    'isParsedFromQr': isParsedFromQr,
+    if (rawQrPayload != null) 'rawQrPayload': rawQrPayload,
+    'isSyncedWithDb': isSyncedWithDb,
+    'category': category.name,
+    'isFlagged': isFlagged,
+    if (flagReason != null) 'flagReason': flagReason,
+    if (flaggedAt != null) 'flaggedAt': flaggedAt?.toIso8601String(),
+    'isBanned': isBanned,
+    if (campusStatus != null) 'campusStatus': campusStatus,
+    'isAntiPassback': isAntiPassback,
+  };
 }
 
 class AuditLogEntry {

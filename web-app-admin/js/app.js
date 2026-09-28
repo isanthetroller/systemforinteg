@@ -2970,7 +2970,7 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast('Please select a valid image file (JPG, PNG).');
           return;
         }
-        compressImage(file, 640, 0.8, (compressed) => {
+        compressImage(file, 400, 0.72, (compressed) => {
           editOwnerPhotoDataUrl = compressed;
           if (editOwnerPhotoPreview) {
             editOwnerPhotoPreview.src = editOwnerPhotoDataUrl;
@@ -3009,7 +3009,7 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast('Please select a valid image file (JPG, PNG).');
           return;
         }
-        compressImage(file, 640, 0.8, (compressed) => {
+        compressImage(file, 400, 0.72, (compressed) => {
           editVehiclePhotoDataUrl = compressed;
           if (editVehiclePhotoPreview) {
             editVehiclePhotoPreview.src = editVehiclePhotoDataUrl;
@@ -3383,7 +3383,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Client-side image compressor: scales images down to max 640px and quality 0.8 (~35KB-50KB)
   // Ensures reliable fast transmission over mobile networks and storage in SQLite/MySQL
-  function compressImage(file, maxDimension = 640, quality = 0.8, callback) {
+  function compressImage(file, maxDimension = 400, quality = 0.72, callback) {
     if (!file) {
       callback(null);
       return;
@@ -3433,7 +3433,7 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast('Please select a valid image file (JPG, PNG).');
           return;
         }
-        compressImage(file, 640, 0.8, (compressedDataUrl) => {
+        compressImage(file, 400, 0.72, (compressedDataUrl) => {
           ownerPhotoDataUrl = compressedDataUrl;
           if (ownerPhotoPreview) {
             ownerPhotoPreview.src = ownerPhotoDataUrl;
@@ -3509,7 +3509,7 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast('Please select a valid image file (JPG, PNG).');
           return;
         }
-        compressImage(file, 640, 0.8, (compressedDataUrl) => {
+        compressImage(file, 400, 0.72, (compressedDataUrl) => {
           vehiclePhotoDataUrl = compressedDataUrl;
           if (vehiclePhotoPreview) {
             vehiclePhotoPreview.src = vehiclePhotoDataUrl;
@@ -3791,8 +3791,27 @@ document.addEventListener('DOMContentLoaded', () => {
       `).join('');
     }
 
-    // The live preview is never a valid pass: passes are signed by the server on save
-    let payloadString = `SECUREPARK PREVIEW - NOT A VALID PASS - ${plate}`;
+    // Valid structured JSON pass payload for real-time mobile gate scanner detection
+    const passPayloadObj = {
+      v: 1,
+      plateNumber: plate,
+      plate_number: plate,
+      ownerFullName: owner,
+      owner_name: owner,
+      ownerRole: role,
+      owner_role: role,
+      ownerStudentId: idNum,
+      owner_id_number: idNum,
+      vehicleCategory: category,
+      vehicle_type: category,
+      makeModelColor: makeModel,
+      make_model_color: makeModel,
+      stickerYear: year,
+      sticker_year: year,
+      authorizedDrivers: authorizedDriversList,
+      authorized_drivers: authorizedDriversList
+    };
+    let payloadString = JSON.stringify(passPayloadObj);
 
     // Update Photo Thumbnails in the Pass Card
     if (ownerPhotoDataUrl && qrOwnerThumb) {
@@ -4253,7 +4272,34 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function passPayloadFor(v) {
-    return v && typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{') ? v.qrPayload : null;
+    if (!v) return null;
+    if (typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{')) {
+      return v.qrPayload;
+    }
+    const plate = v.plateNumber || v.plate_number || '';
+    if (!plate) return null;
+    return JSON.stringify({
+      v: 1,
+      plateNumber: plate,
+      plate_number: plate,
+      ownerFullName: v.ownerName || v.owner_name || 'Registered Owner',
+      owner_name: v.ownerName || v.owner_name || 'Registered Owner',
+      ownerRole: v.ownerRole || v.owner_role || 'Student',
+      owner_role: v.ownerRole || v.owner_role || 'Student',
+      ownerStudentId: v.ownerIdNumber || v.owner_id_number || 'N/A',
+      owner_id_number: v.ownerIdNumber || v.owner_id_number || 'N/A',
+      vehicleCategory: v.vehicleType || v.vehicle_type || '4-Wheel',
+      vehicle_type: v.vehicleType || v.vehicle_type || '4-Wheel',
+      makeModelColor: v.makeModelColor || v.make_model_color || 'Vehicle',
+      make_model_color: v.makeModelColor || v.make_model_color || 'Vehicle',
+      stickerYear: v.stickerYear || v.sticker_year || '2026',
+      sticker_year: v.stickerYear || v.sticker_year || '2026',
+      authorizedDrivers: (v.authorizedDrivers || []).map(d => ({
+        fullName: d.fullName || d.full_name || '',
+        relationship: d.relationship || 'Self (Owner)',
+        licenseNo: d.licenseNo || d.license_no || 'N/A'
+      }))
+    });
   }
 
   function applyServerPass(target, serverVehicle) {
@@ -4448,12 +4494,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loadInitialDataFromApi();
   }
 
-  // Real-Time Background Synchronization (10 seconds)
+  // Real-Time Background Synchronization (4 seconds)
   setInterval(() => {
     if (!window.SPAuth || SPAuth.isAuthenticated()) {
       loadInitialDataFromApi(true);
     }
-  }, 10000);
+  }, 4000);
 
   // Instant refresh when user returns to window
   document.addEventListener('visibilitychange', () => {

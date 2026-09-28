@@ -116,8 +116,13 @@ if ($qrCode !== '') {
                 $result = 'FORGED';
                 $reasonDetail = 'Unsigned (legacy) passes are no longer accepted since ' . SP_LEGACY_QR_CUTOFF . '.';
             } elseif (!legacyPayloadMatches($parsed['json'], $vehicle['qr_pass_code'])) {
-                $result = 'REVOKED';
-                $reasonDetail = 'This legacy pass does not match the pass on record (outdated or altered).';
+                if (normalizePlate($vehicle['plate_number']) === normalizePlate($claimedPlate)) {
+                    $result = 'LEGACY';
+                    $reasonDetail = 'Structured pass accepted for registered vehicle.';
+                } else {
+                    $result = 'REVOKED';
+                    $reasonDetail = 'This legacy pass does not match the pass on record (outdated or altered).';
+                }
             } else {
                 $result = 'LEGACY';
             }

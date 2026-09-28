@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../../data/mock_data.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../services/api_service.dart';
+import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../../visitor/screens/visitor_registration_screen.dart';
 import '../dialogs/block_reason_dialog.dart';
@@ -163,19 +165,40 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       final lookupRawFuture = (raw != null && raw.isNotEmpty) ? ApiService.lookupVehicle(raw) : Future<VehicleRecord?>.value(null);
 
       final verifyResult = await verifyFuture;
-      final remoteVehicle = (await lookupPlateFuture) ?? (await lookupRawFuture);
+      VehicleRecord? remoteVehicle = (await lookupPlateFuture) ?? (await lookupRawFuture);
+
+      // If direct vehicle lookup didn't find the vehicle or timed out, but verifyPassWithServer
+      // returned the vehicle object, parse it directly from verifyResult
+      if (remoteVehicle == null && verifyResult != null) {
+        final serverVeh = verifyResult['vehicle'] ?? verifyResult['data']?['vehicle'];
+        if (serverVeh is Map<String, dynamic>) {
+          try {
+            remoteVehicle = VehicleRecord.fromQrJson(
+              serverVeh,
+              rawPayload: raw ?? 'SERVER_VERIFY_RECORD',
+              isSyncedWithDb: true,
+            );
+          } catch (e) {
+            debugPrint('[QrScannerScreen] Parse vehicle from verifyResult: $e');
+          }
+        }
+      }
 
       if (mounted && (_scannedVehicle == null || _scannedVehicle?.plateNumber == vehicle.plateNumber)) {
-        final isServerBanned = verifyResult != null &&
-            (verifyResult['result'] == 'BANNED' ||
-             verifyResult['result'] == 'SUSPENDED' ||
-             verifyResult['result'] == 'FORGED' ||
-             verifyResult['result'] == 'REVOKED' ||
-             (verifyResult['accepted'] == false && (verifyResult['message']?.toString().toUpperCase().contains('BAN') == true)));
+        final vData = (verifyResult != null && verifyResult['data'] is Map<String, dynamic>)
+            ? (verifyResult['data'] as Map<String, dynamic>)
+            : verifyResult;
 
-        final serverReason = verifyResult?['reason']?.toString() ?? verifyResult?['message']?.toString();
-        final serverCampusStatus = verifyResult?['result']?.toString() ?? remoteVehicle?.campusStatus;
-        final isAntiPassback = (verifyResult != null && verifyResult['currentlyInside'] == true) ||
+        final isServerBanned = vData != null &&
+            (vData['result'] == 'BANNED' ||
+             vData['result'] == 'SUSPENDED' ||
+             vData['result'] == 'FORGED' ||
+             vData['result'] == 'REVOKED' ||
+             (vData['accepted'] == false && (vData['message']?.toString().toUpperCase().contains('BAN') == true)));
+
+        final serverReason = vData?['reason']?.toString() ?? vData?['message']?.toString();
+        final serverCampusStatus = vData?['result']?.toString() ?? remoteVehicle?.campusStatus;
+        final isAntiPassback = (vData != null && vData['currentlyInside'] == true) ||
             (remoteVehicle != null && remoteVehicle.isAntiPassback);
 
         if (remoteVehicle != null) {
@@ -185,7 +208,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             makeModelColor: remoteVehicle.makeModelColor.isNotEmpty ? remoteVehicle.makeModelColor : vehicle.makeModelColor,
             ownerName: remoteVehicle.ownerName.isNotEmpty ? remoteVehicle.ownerName : vehicle.ownerName,
             ownerRole: remoteVehicle.ownerRole.isNotEmpty ? remoteVehicle.ownerRole : vehicle.ownerRole,
-            ownerIdNumber: remoteVehicle.ownerIdNumber.isNotEmpty ? remoteVehicle.ownerIdNumber : vehicle.ownerIdNumber,
+            ownerIdNumber: remoteVehicle.ownerIdNumber.isNotEmpty && remoteVehicle.ownerIdNumber != 'UNKNOWN'
+                ? remoteVehicle.ownerIdNumber
+                : (vehicle.ownerIdNumber != 'UNKNOWN' ? vehicle.ownerIdNumber : 'CAMPUS-USER'),
             ownerPhotoUrl: (remoteVehicle.ownerPhotoUrl != null && remoteVehicle.ownerPhotoUrl!.isNotEmpty)
                 ? remoteVehicle.ownerPhotoUrl
                 : vehicle.ownerPhotoUrl,
@@ -196,7 +221,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             authorizedDrivers: remoteVehicle.authorizedDrivers.isNotEmpty
                 ? remoteVehicle.authorizedDrivers
                 : vehicle.authorizedDrivers,
-            isParsedFromQr: vehicle.isParsedFromQr,
+            isParsedFromQr: true,
             rawQrPayload: raw ?? vehicle.rawQrPayload,
             isSyncedWithDb: true,
             category: remoteVehicle.category,
@@ -208,14 +233,19 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             isAntiPassback: isAntiPassback,
           );
 
+          MockData.upsertVehicle(enriched);
+          LocalCacheService.upsertVehicle(enriched);
+
           setState(() {
             _scannedVehicle = enriched;
 
             final wasOwnerSelected = _selectedDriverName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
                 _selectedRelationship.toLowerCase().contains('self') ||
-                _selectedRelationship.toLowerCase().contains('owner');
+                _selectedRelationship.toLowerCase().contains('owner') ||
+                _selectedRelationship.toLowerCase().contains('visitor') ||
+                _selectedRelationship.toLowerCase().contains('driver');
 
-            if (wasOwnerSelected) {
+            if (wasOwnerSelected || enriched.authorizedDrivers.isEmpty) {
               _selectedDriverName = enriched.ownerName;
               _selectedRelationship = 'Self (Owner)';
               _currentPhotoUrl = enriched.ownerPhotoUrl ?? '';

@@ -144,6 +144,12 @@ class ApiService {
           res = await _client.get(uri, headers: _buildHeaders()).timeout(ApiConstants.timeout);
         }
       }
+      // If 401 Unauthorized occurs and authToken was set, clear expired token and retry once with scanner key
+      if (res.statusCode == 401 && authToken != null) {
+        debugPrint('[ApiService] 401 with authToken; clearing token and retrying with scanner API key');
+        authToken = null;
+        res = await _client.get(uri, headers: _buildHeaders()).timeout(ApiConstants.timeout);
+      }
       return res;
     } catch (_) {
       return http.Response('{"status":"offline"}', 503);
@@ -163,6 +169,12 @@ class ApiService {
           _testCookie = solved;
           res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
         }
+      }
+      // If 401 Unauthorized occurs on POST and authToken was set, clear expired token and retry once
+      if (res.statusCode == 401 && authToken != null) {
+        debugPrint('[ApiService] 401 on POST with authToken; clearing token and retrying with scanner API key');
+        authToken = null;
+        res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
       }
       return res;
     } catch (_) {
@@ -600,6 +612,9 @@ class ApiService {
       final res = await _post(uri, payload);
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
+        if (body['status'] == 'success' && body['data'] is Map<String, dynamic>) {
+          return body['data'] as Map<String, dynamic>;
+        }
         return body;
       }
     } catch (e) {

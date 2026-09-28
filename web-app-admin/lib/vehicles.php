@@ -67,6 +67,20 @@ function getDriversForVehicle($pdo, $vehicleId) {
 function findVehicleByPlate($pdo, $plate) {
     $plate = trim((string)$plate);
     if ($plate === '') return null;
+
+    // If a JSON payload was passed into plate, extract the plate
+    if (strlen($plate) > 1 && $plate[0] === '{') {
+        $decoded = json_decode($plate, true);
+        if (is_array($decoded)) {
+            $extracted = $decoded['plateNumber'] ?? $decoded['plate_number'] ?? $decoded['plate'] ?? '';
+            if ($extracted !== '') $plate = $extracted;
+        }
+    }
+    // If a preview string was passed, extract the plate at the end
+    if (stripos($plate, 'PREVIEW') !== false && preg_match('/([A-Za-z0-9\- ]{3,15})$/', $plate, $m)) {
+        $plate = trim($m[1]);
+    }
+
     $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `plate_number` = ? LIMIT 1");
     $stmt->execute([strtoupper($plate)]);
     $veh = $stmt->fetch();

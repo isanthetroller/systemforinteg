@@ -104,7 +104,7 @@ function handleCreateLog($pdo, $actor) {
     $data = getJsonInput();
     $isScanner = !empty($actor['is_scanner']);
 
-    $plateNumber = strtoupper(trim((string)($data['plate'] ?? $data['plateNumber'] ?? '')));
+    $plateNumber = strtoupper(trim((string)($data['plate'] ?? $data['plateNumber'] ?? $data['plate_number'] ?? '')));
     $action = normalizeGateAction(trim((string)($data['action'] ?? 'Entry Recorded')));
 
     if ($plateNumber === '') {
@@ -133,8 +133,8 @@ function handleCreateLog($pdo, $actor) {
     }
 
     /* ---- Driver confirmation ------------------------------------------- */
-    $driverName = trim((string)($data['driverName'] ?? ''));
-    $driverRelationship = trim((string)($data['driverRelationship'] ?? ''));
+    $driverName = trim((string)($data['driverName'] ?? $data['driver_name'] ?? ''));
+    $driverRelationship = trim((string)($data['driverRelationship'] ?? $data['driver_relationship'] ?? ''));
     $verifiedDriverName = null;
     $driverId = (int)($data['driver_id'] ?? 0);
 

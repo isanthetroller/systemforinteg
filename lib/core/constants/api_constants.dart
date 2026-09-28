@@ -25,6 +25,7 @@ class ApiConstants {
     'Content-Type': 'application/json',
     'User-Agent': 'SecurePark-GateScanner/2.4',
     'X-Requested-With': 'XMLHttpRequest',
+    'X-Api-Key': 'local-scanner-key-2026',
   };
 
   /// Root host URL (excluding the /api suffix)

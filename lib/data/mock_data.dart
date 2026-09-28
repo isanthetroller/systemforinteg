@@ -20,6 +20,19 @@ class MockData {
   /// Dynamic registered vehicles list: Uses prototype test dataset as fallback
   static List<VehicleRecord> get registeredVehicles => _testVehicles;
 
+  /// Add or update vehicle record in the in-memory registered vehicles list
+  static void upsertVehicle(VehicleRecord vehicle) {
+    final norm = vehicle.plateNumber.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    final idx = _testVehicles.indexWhere(
+      (v) => v.plateNumber.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '') == norm,
+    );
+    if (idx >= 0) {
+      _testVehicles[idx] = vehicle;
+    } else {
+      _testVehicles.insert(0, vehicle);
+    }
+  }
+
   /// Initial audit logs for the guard dashboard feed
   static List<AuditLogEntry> getInitialAuditLogs() {
     final now = DateTime.now();

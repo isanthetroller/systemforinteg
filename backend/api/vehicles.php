@@ -87,12 +87,17 @@ function lookupVehicleByAnyCode($pdo, $needle) {
     if ($veh) return $veh;
 
     $parsed = parseScannedQr($needle);
-    if ($parsed['kind'] === 'signed' && $parsed['sigValid']) {
-        $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `pass_id` = ? LIMIT 1");
-        $stmt->execute([$parsed['pass']['pid']]);
-        if ($row = $stmt->fetch()) return $row;
+    if ($parsed['kind'] === 'signed') {
+        if (!empty($parsed['pass']['pid'])) {
+            $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `pass_id` = ? LIMIT 1");
+            $stmt->execute([$parsed['pass']['pid']]);
+            if ($row = $stmt->fetch()) return $row;
+        }
+        if (!empty($parsed['pass']['plate_number'])) {
+            if ($row = findVehicleByPlate($pdo, $parsed['pass']['plate_number'])) return $row;
+        }
     }
-    if ($parsed['kind'] === 'legacy' && $parsed['plate'] !== '') {
+    if ($parsed['kind'] === 'legacy' && !empty($parsed['plate'])) {
         if ($row = findVehicleByPlate($pdo, $parsed['plate'])) return $row;
     }
 

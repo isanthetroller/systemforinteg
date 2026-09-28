@@ -228,7 +228,17 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     if (registeredVehicle == null || !registeredVehicle.isParsedFromQr || registeredVehicle.ownerIdNumber == 'UNKNOWN') {
       registeredVehicle = GateRepository().resolveVehicle(clean);
     }
-    if (registeredVehicle.isParsedFromQr && registeredVehicle.ownerIdNumber != 'UNKNOWN' && !registeredVehicle.ownerRole.contains('Guest')) {
+    if (registeredVehicle == null || registeredVehicle.ownerIdNumber == 'UNKNOWN') {
+      final verifyResult = await ApiService.verifyPassWithServer(qrCode: clean, plate: clean, gateType: 'Egress');
+      if (verifyResult != null && verifyResult['vehicle'] is Map<String, dynamic>) {
+        registeredVehicle = VehicleRecord.fromQrJson(
+          verifyResult['vehicle'] as Map<String, dynamic>,
+          rawPayload: clean,
+          isSyncedWithDb: true,
+        );
+      }
+    }
+    if (registeredVehicle != null && registeredVehicle.isParsedFromQr && registeredVehicle.ownerIdNumber != 'UNKNOWN' && !registeredVehicle.ownerRole.contains('Guest')) {
       _evaluateRegisteredVehicle(registeredVehicle);
       return;
     }

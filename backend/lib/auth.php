@@ -153,17 +153,28 @@ function requireStaffOrScanner($pdo) {
     if ($auth && $auth['type'] === 'staff') {
         return requireStaff($pdo, ['admin', 'guard'], true);
     }
-    // A request that presents a session token must not fall back to scanner access
-    // when that token is expired, revoked or belongs to a deactivated / student account.
-    if (getBearerToken() !== null) {
-        sendResponse(401, ['code' => 'AUTH_REQUIRED'], 'Session expired or invalid. Please sign in again.');
-    }
 
     $key = $_SERVER['HTTP_X_API_KEY'] ?? '';
     $keyValid = $key !== '' && hash_equals(SP_SCANNER_API_KEY, $key);
     $keyRequired = defined('SP_SCANNER_KEY_REQUIRED') ? SP_SCANNER_KEY_REQUIRED : true;
 
-    if ($keyValid || !$keyRequired) {
+    if ($keyValid) {
+        return [
+            'id' => null,
+            'username' => 'mobile-scanner',
+            'full_name' => 'Mobile Scanner',
+            'role' => 'scanner',
+            'badge_number' => null,
+            'is_scanner' => true,
+        ];
+    }
+
+    // A request without a valid scanner key that presents an invalid session token is rejected
+    if (getBearerToken() !== null) {
+        sendResponse(401, ['code' => 'AUTH_REQUIRED'], 'Session expired or invalid. Please sign in again.');
+    }
+
+    if (!$keyRequired) {
         return [
             'id' => null,
             'username' => 'mobile-scanner',
