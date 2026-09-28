@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../services/api_service.dart';
 import '../../../theme/ncst_theme.dart';
+import '../../visitor/screens/visitor_registration_screen.dart';
 import '../dialogs/block_reason_dialog.dart';
 import '../dialogs/manual_qr_dialog.dart';
 import '../widgets/authorized_drivers_card.dart';
@@ -14,6 +16,7 @@ import '../widgets/scanned_person_card.dart';
 class QrScannerScreen extends StatefulWidget {
   final Function(AuditLogEntry) onDecision;
   final VoidCallback? onReturnToDashboard;
+  final VoidCallback? onNavigateToVisitorRegistration;
   final bool isEmbedded;
   final GateRepository repository;
   final VehicleRecord? initialVehicle;
@@ -22,6 +25,7 @@ class QrScannerScreen extends StatefulWidget {
     super.key,
     required this.onDecision,
     this.onReturnToDashboard,
+    this.onNavigateToVisitorRegistration,
     this.isEmbedded = false,
     this.repository = const GateRepository(),
     this.initialVehicle,
@@ -149,69 +153,107 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
   Future<void> _syncVehicleWithDb(VehicleRecord vehicle, [String? raw]) async {
     try {
-      final remoteVehicle = await ApiService.lookupVehicleByPlate(vehicle.plateNumber) ??
-          (raw != null && raw.isNotEmpty ? await ApiService.lookupVehicle(raw) : null);
+      final verifyFuture = ApiService.verifyPassWithServer(
+        qrCode: raw,
+        plate: vehicle.plateNumber,
+        gateType: 'Ingress',
+      );
+      final lookupPlateFuture = ApiService.lookupVehicleByPlate(vehicle.plateNumber);
+      final lookupRawFuture = (raw != null && raw.isNotEmpty) ? ApiService.lookupVehicle(raw) : Future<VehicleRecord?>.value(null);
 
-      if (remoteVehicle != null && mounted && (_scannedVehicle == null || _scannedVehicle?.plateNumber == vehicle.plateNumber)) {
-        final enriched = VehicleRecord(
-          plateNumber: remoteVehicle.plateNumber.isNotEmpty ? remoteVehicle.plateNumber : vehicle.plateNumber,
-          vehicleType: remoteVehicle.vehicleType.isNotEmpty ? remoteVehicle.vehicleType : vehicle.vehicleType,
-          makeModelColor: remoteVehicle.makeModelColor.isNotEmpty ? remoteVehicle.makeModelColor : vehicle.makeModelColor,
-          ownerName: remoteVehicle.ownerName.isNotEmpty ? remoteVehicle.ownerName : vehicle.ownerName,
-          ownerRole: remoteVehicle.ownerRole.isNotEmpty ? remoteVehicle.ownerRole : vehicle.ownerRole,
-          ownerIdNumber: remoteVehicle.ownerIdNumber.isNotEmpty ? remoteVehicle.ownerIdNumber : vehicle.ownerIdNumber,
-          ownerPhotoUrl: (remoteVehicle.ownerPhotoUrl != null && remoteVehicle.ownerPhotoUrl!.isNotEmpty)
-              ? remoteVehicle.ownerPhotoUrl
-              : vehicle.ownerPhotoUrl,
-          qrPassCode: vehicle.qrPassCode.isNotEmpty ? vehicle.qrPassCode : remoteVehicle.qrPassCode,
-          // Preserves the physical sticker year from the pass (e.g. 2026), or defaults to remote
-          stickerYear: vehicle.stickerYear.isNotEmpty ? vehicle.stickerYear : remoteVehicle.stickerYear,
-          vehiclePicture: remoteVehicle.vehiclePicture ?? vehicle.vehiclePicture,
-          authorizedDrivers: remoteVehicle.authorizedDrivers.isNotEmpty
-              ? remoteVehicle.authorizedDrivers
-              : vehicle.authorizedDrivers,
-          isParsedFromQr: true,
-          rawQrPayload: raw ?? vehicle.rawQrPayload,
-          isSyncedWithDb: true,
-        );
+      final verifyResult = await verifyFuture;
+      final remoteVehicle = (await lookupPlateFuture) ?? (await lookupRawFuture);
 
-        setState(() {
-          _scannedVehicle = enriched;
+      if (mounted && (_scannedVehicle == null || _scannedVehicle?.plateNumber == vehicle.plateNumber)) {
+        final isServerBanned = verifyResult != null &&
+            (verifyResult['result'] == 'BANNED' ||
+             verifyResult['result'] == 'SUSPENDED' ||
+             verifyResult['result'] == 'FORGED' ||
+             verifyResult['result'] == 'REVOKED' ||
+             (verifyResult['accepted'] == false && (verifyResult['message']?.toString().toUpperCase().contains('BAN') == true)));
 
-          final wasOwnerSelected = _selectedDriverName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
-              _selectedRelationship.toLowerCase().contains('self') ||
-              _selectedRelationship.toLowerCase().contains('owner');
+        final serverReason = verifyResult?['reason']?.toString() ?? verifyResult?['message']?.toString();
+        final serverCampusStatus = verifyResult?['result']?.toString() ?? remoteVehicle?.campusStatus;
+        final isAntiPassback = (verifyResult != null && verifyResult['currentlyInside'] == true) ||
+            (remoteVehicle != null && remoteVehicle.isAntiPassback);
 
-          if (wasOwnerSelected) {
-            _selectedDriverName = enriched.ownerName;
-            _selectedRelationship = 'Self (Owner)';
-            _currentPhotoUrl = enriched.ownerPhotoUrl ?? '';
-          } else {
-            // Check if currently selected driver exists in the enriched driver roster
-            final matched = enriched.authorizedDrivers.cast<AuthorizedDriver?>().firstWhere(
-              (d) => d?.fullName.trim().toLowerCase() == _selectedDriverName.trim().toLowerCase(),
-              orElse: () => null,
-            );
-            if (matched != null) {
-              _selectedDriverName = matched.fullName;
-              _selectedRelationship = matched.relationship;
-              _currentPhotoUrl = (matched.photoUrl != null && matched.photoUrl!.isNotEmpty)
-                  ? matched.photoUrl!
-                  : (enriched.ownerPhotoUrl ?? '');
-            } else if (enriched.authorizedDrivers.isNotEmpty) {
-              final first = enriched.authorizedDrivers.first;
-              _selectedDriverName = first.fullName;
-              _selectedRelationship = first.relationship;
-              _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
-                  ? first.photoUrl!
-                  : (enriched.ownerPhotoUrl ?? '');
-            } else {
+        if (remoteVehicle != null) {
+          final enriched = VehicleRecord(
+            plateNumber: remoteVehicle.plateNumber.isNotEmpty ? remoteVehicle.plateNumber : vehicle.plateNumber,
+            vehicleType: remoteVehicle.vehicleType.isNotEmpty ? remoteVehicle.vehicleType : vehicle.vehicleType,
+            makeModelColor: remoteVehicle.makeModelColor.isNotEmpty ? remoteVehicle.makeModelColor : vehicle.makeModelColor,
+            ownerName: remoteVehicle.ownerName.isNotEmpty ? remoteVehicle.ownerName : vehicle.ownerName,
+            ownerRole: remoteVehicle.ownerRole.isNotEmpty ? remoteVehicle.ownerRole : vehicle.ownerRole,
+            ownerIdNumber: remoteVehicle.ownerIdNumber.isNotEmpty ? remoteVehicle.ownerIdNumber : vehicle.ownerIdNumber,
+            ownerPhotoUrl: (remoteVehicle.ownerPhotoUrl != null && remoteVehicle.ownerPhotoUrl!.isNotEmpty)
+                ? remoteVehicle.ownerPhotoUrl
+                : vehicle.ownerPhotoUrl,
+            qrPassCode: vehicle.qrPassCode.isNotEmpty ? vehicle.qrPassCode : remoteVehicle.qrPassCode,
+            // Preserves the physical sticker year from the pass (e.g. 2026), or defaults to remote
+            stickerYear: vehicle.stickerYear.isNotEmpty ? vehicle.stickerYear : remoteVehicle.stickerYear,
+            vehiclePicture: remoteVehicle.vehiclePicture ?? vehicle.vehiclePicture,
+            authorizedDrivers: remoteVehicle.authorizedDrivers.isNotEmpty
+                ? remoteVehicle.authorizedDrivers
+                : vehicle.authorizedDrivers,
+            isParsedFromQr: vehicle.isParsedFromQr,
+            rawQrPayload: raw ?? vehicle.rawQrPayload,
+            isSyncedWithDb: true,
+            category: remoteVehicle.category,
+            isFlagged: remoteVehicle.isFlagged,
+            flagReason: remoteVehicle.flagReason ?? serverReason,
+            flaggedAt: remoteVehicle.flaggedAt,
+            isBanned: remoteVehicle.isBanned || isServerBanned,
+            campusStatus: serverCampusStatus,
+            isAntiPassback: isAntiPassback,
+          );
+
+          setState(() {
+            _scannedVehicle = enriched;
+
+            final wasOwnerSelected = _selectedDriverName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+                _selectedRelationship.toLowerCase().contains('self') ||
+                _selectedRelationship.toLowerCase().contains('owner');
+
+            if (wasOwnerSelected) {
               _selectedDriverName = enriched.ownerName;
-              _selectedRelationship = 'Registered Owner';
+              _selectedRelationship = 'Self (Owner)';
               _currentPhotoUrl = enriched.ownerPhotoUrl ?? '';
+            } else {
+              // Check if currently selected driver exists in the enriched driver roster
+              final matched = enriched.authorizedDrivers.cast<AuthorizedDriver?>().firstWhere(
+                (d) => d?.fullName.trim().toLowerCase() == _selectedDriverName.trim().toLowerCase(),
+                orElse: () => null,
+              );
+              if (matched != null) {
+                _selectedDriverName = matched.fullName;
+                _selectedRelationship = matched.relationship;
+                _currentPhotoUrl = (matched.photoUrl != null && matched.photoUrl!.isNotEmpty)
+                    ? matched.photoUrl!
+                    : (enriched.ownerPhotoUrl ?? '');
+              } else if (enriched.authorizedDrivers.isNotEmpty) {
+                final first = enriched.authorizedDrivers.first;
+                _selectedDriverName = first.fullName;
+                _selectedRelationship = first.relationship;
+                _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
+                    ? first.photoUrl!
+                    : (enriched.ownerPhotoUrl ?? '');
+              } else {
+                _selectedDriverName = enriched.ownerName;
+                _selectedRelationship = 'Registered Owner';
+                _currentPhotoUrl = enriched.ownerPhotoUrl ?? '';
+              }
             }
-          }
-        });
+          });
+        } else if (verifyResult != null) {
+          setState(() {
+            _scannedVehicle = _scannedVehicle?.copyWith(
+              isBanned: isServerBanned,
+              campusStatus: serverCampusStatus,
+              isAntiPassback: isAntiPassback,
+              flagReason: serverReason,
+            );
+          });
+        }
       }
     } catch (e) {
       debugPrint('[QrScannerScreen] Database sync note: $e');
@@ -222,8 +264,106 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     ManualQrDialog.show(context, _processRawQrCode);
   }
 
-  void _handleCleared() {
+  void _handleCleared() async {
     if (_scannedVehicle == null) return;
+    final vehicle = _scannedVehicle!;
+
+    // 1. Guard against Banned / Suspended / Denied vehicles
+    if (vehicle.isAccessDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.crimson,
+          content: Text(
+            'ENTRY DENIED: ${vehicle.plateNumber} is banned or suspended. You must block this vehicle.',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // 2. Unregistered pass -> route to visitor registration
+    if (vehicle.isUnregistered) {
+      if (widget.onNavigateToVisitorRegistration != null) {
+        widget.onNavigateToVisitorRegistration!();
+      } else {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => VisitorRegistrationScreen(
+              currentGuard: GuardUser(
+                id: 'guard-current',
+                username: 'guard',
+                fullName: 'Gate Guard',
+                badgeNumber: 'G-101',
+                role: GuardRole.entrance,
+                assignedGate: 'Gate 1 (Main Ingress)',
+                loginTime: DateTime.now(),
+              ),
+              onReturnToDashboard: widget.onReturnToDashboard,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    // 3. Flagged vehicle alert / confirmation dialog
+    if (vehicle.hasActiveFlag) {
+      final shouldProceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Row(
+            children: const [
+              Icon(Icons.warning_amber_rounded, color: NcstColors.goldDark, size: 28),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Flagged Vehicle Notice', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Vehicle ${vehicle.plateNumber} has an active security flag.',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Reason: ${vehicle.flagReason ?? "Security flag on file"}',
+                style: const TextStyle(color: NcstColors.slate700),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Do you wish to permit entry despite the active flag? Ensure security protocol has been followed.',
+                style: TextStyle(fontSize: 13, color: NcstColors.slate600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('CANCEL', style: TextStyle(color: NcstColors.slate600, fontWeight: FontWeight.w700)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: NcstColors.goldDark,
+                foregroundColor: NcstColors.white,
+              ),
+              child: const Text('PERMIT ENTRY', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldProceed != true) {
+        return;
+      }
+    }
 
     final newEntry = AuditLogEntry(
       id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
@@ -512,6 +652,18 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         BottomDecisionBar(
           onBlock: _showBlockDialog,
           onCleared: _handleCleared,
+          isClearedEnabled: !vehicle.isAccessDenied,
+          clearedLabel: vehicle.isAccessDenied
+              ? 'ACCESS DENIED (BANNED)'
+              : (vehicle.isUnregistered
+                  ? 'REGISTER VISITOR'
+                  : 'CLEARED (TO GO)'),
+          clearedIcon: vehicle.isUnregistered
+              ? Icons.how_to_reg_rounded
+              : Icons.check_rounded,
+          clearedColor: vehicle.isUnregistered
+              ? NcstColors.goldDark
+              : NcstColors.green,
         ),
       ],
     );

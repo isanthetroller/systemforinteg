@@ -60,11 +60,14 @@ class VehicleRecord {
   final String? rawQrPayload;
   final bool isSyncedWithDb;
 
-  // Role and Flagged attributes
+  // Role, Banned, and Status attributes
   final CampusUserCategory category;
   final bool isFlagged;
   final String? flagReason;
   final DateTime? flaggedAt;
+  final bool isBanned;
+  final String? campusStatus;
+  final bool isAntiPassback;
 
   const VehicleRecord({
     required this.plateNumber,
@@ -85,6 +88,9 @@ class VehicleRecord {
     this.isFlagged = false,
     this.flagReason,
     this.flaggedAt,
+    this.isBanned = false,
+    this.campusStatus,
+    this.isAntiPassback = false,
   });
 
   /// IMPORTANT ARCHITECTURAL CONSTRAINT:
@@ -92,6 +98,21 @@ class VehicleRecord {
   /// Visitors using temporary QR passes should never receive student/employee flagged status.
   bool get canBeFlagged => category == CampusUserCategory.student || category == CampusUserCategory.employee;
   bool get hasActiveFlag => canBeFlagged && isFlagged;
+
+  /// Operational security rule: Banned, suspended, revoked, or forged vehicles/passes must be blocked at gate
+  bool get isAccessDenied => isBanned ||
+      (campusStatus != null && (
+          campusStatus!.toLowerCase().contains('ban') ||
+          campusStatus!.toLowerCase().contains('suspend') ||
+          campusStatus!.toLowerCase().contains('revok') ||
+          campusStatus!.toLowerCase().contains('forg')));
+
+  /// Pass validity evaluation: Is this an unverified or unregistered visitor vehicle?
+  bool get isUnregistered =>
+      ownerRole.contains('Unverified') ||
+      ownerRole.contains('Unregistered') ||
+      ownerName.contains('Unregistered') ||
+      ownerIdNumber == 'UNKNOWN';
 
   String get categoryDisplay {
     switch (category) {
@@ -189,6 +210,17 @@ class VehicleRecord {
       ));
     }
 
+    final isBanned = json['isBanned'] == true ||
+        json['is_banned'] == 1 ||
+        json['is_banned'] == '1' ||
+        json['is_banned'] == true ||
+        (json['status'] ?? '').toString().toLowerCase().contains('suspend') ||
+        (json['status'] ?? '').toString().toLowerCase().contains('ban');
+
+    final campusStatus = (json['status'] ?? json['campusStatus'] ?? json['campus_status'])?.toString();
+    final isAntiPassback = json['currentlyInside'] == true ||
+        (campusStatus != null && campusStatus.toLowerCase().contains('inside'));
+
     return VehicleRecord(
       plateNumber: plate,
       vehicleType: vehicleType,
@@ -208,6 +240,57 @@ class VehicleRecord {
       isFlagged: isFlagged,
       flagReason: flagReason,
       flaggedAt: flaggedAt,
+      isBanned: isBanned,
+      campusStatus: campusStatus,
+      isAntiPassback: isAntiPassback,
+    );
+  }
+
+  VehicleRecord copyWith({
+    String? plateNumber,
+    String? vehicleType,
+    String? makeModelColor,
+    String? ownerName,
+    String? ownerRole,
+    String? ownerIdNumber,
+    String? qrPassCode,
+    String? stickerYear,
+    String? ownerPhotoUrl,
+    String? vehiclePicture,
+    List<AuthorizedDriver>? authorizedDrivers,
+    bool? isParsedFromQr,
+    String? rawQrPayload,
+    bool? isSyncedWithDb,
+    CampusUserCategory? category,
+    bool? isFlagged,
+    String? flagReason,
+    DateTime? flaggedAt,
+    bool? isBanned,
+    String? campusStatus,
+    bool? isAntiPassback,
+  }) {
+    return VehicleRecord(
+      plateNumber: plateNumber ?? this.plateNumber,
+      vehicleType: vehicleType ?? this.vehicleType,
+      makeModelColor: makeModelColor ?? this.makeModelColor,
+      ownerName: ownerName ?? this.ownerName,
+      ownerRole: ownerRole ?? this.ownerRole,
+      ownerIdNumber: ownerIdNumber ?? this.ownerIdNumber,
+      qrPassCode: qrPassCode ?? this.qrPassCode,
+      stickerYear: stickerYear ?? this.stickerYear,
+      ownerPhotoUrl: ownerPhotoUrl ?? this.ownerPhotoUrl,
+      vehiclePicture: vehiclePicture ?? this.vehiclePicture,
+      authorizedDrivers: authorizedDrivers ?? this.authorizedDrivers,
+      isParsedFromQr: isParsedFromQr ?? this.isParsedFromQr,
+      rawQrPayload: rawQrPayload ?? this.rawQrPayload,
+      isSyncedWithDb: isSyncedWithDb ?? this.isSyncedWithDb,
+      category: category ?? this.category,
+      isFlagged: isFlagged ?? this.isFlagged,
+      flagReason: flagReason ?? this.flagReason,
+      flaggedAt: flaggedAt ?? this.flaggedAt,
+      isBanned: isBanned ?? this.isBanned,
+      campusStatus: campusStatus ?? this.campusStatus,
+      isAntiPassback: isAntiPassback ?? this.isAntiPassback,
     );
   }
 }

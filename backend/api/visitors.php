@@ -173,7 +173,8 @@ function handleCreateVisitor($pdo, $actor) {
         sendResponse(409, ['code' => 'PASS_EXISTS', 'passCode' => $existing], "An active day pass ({$existing}) already exists for {$plate} today.");
     }
 
-    $code = newVisitorPassCode($pdo, $today);
+    $clientCode = trim((string)($data['passCode'] ?? $data['passId'] ?? $data['pass_code'] ?? ''));
+    $code = $clientCode !== '' ? $clientCode : newVisitorPassCode($pdo, $today);
     $stmt = $pdo->prepare("INSERT INTO `visitor_passes`
         (`pass_code`, `visitor_name`, `contact_number`, `plate_number`, `vehicle_model`, `purpose_of_visit`,
          `person_to_visit`, `valid_date`, `status`, `created_by`, `created_by_user_id`, `created_at`)

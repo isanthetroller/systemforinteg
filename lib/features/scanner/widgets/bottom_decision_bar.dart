@@ -4,11 +4,19 @@ import '../../../theme/ncst_theme.dart';
 class BottomDecisionBar extends StatelessWidget {
   final VoidCallback onBlock;
   final VoidCallback onCleared;
+  final bool isClearedEnabled;
+  final String clearedLabel;
+  final IconData clearedIcon;
+  final Color? clearedColor;
 
   const BottomDecisionBar({
     super.key,
     required this.onBlock,
     required this.onCleared,
+    this.isClearedEnabled = true,
+    this.clearedLabel = 'CLEARED (TO GO)',
+    this.clearedIcon = Icons.check_rounded,
+    this.clearedColor,
   });
 
   @override
@@ -69,32 +77,36 @@ class BottomDecisionBar extends StatelessWidget {
                   ),
                   SizedBox(width: isCompact ? 10 : 16),
 
-                  // CLEARED BUTTON (Green)
+                  // CLEARED BUTTON (Green or custom action)
                   Expanded(
                     child: SizedBox(
                       height: isCompact ? 46 : 52,
                       child: ElevatedButton.icon(
-                        onPressed: onCleared,
+                        onPressed: isClearedEnabled ? onCleared : null,
                         icon: Icon(
-                          Icons.check_rounded,
+                          isClearedEnabled ? clearedIcon : Icons.lock_outline_rounded,
                           size: isCompact ? 18 : 22,
-                          color: NcstColors.white,
+                          color: isClearedEnabled ? NcstColors.white : NcstColors.slate500,
                         ),
                         label: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            'CLEARED (TO GO)',
+                            isClearedEnabled ? clearedLabel : 'ENTRY REFUSED',
                             style: TextStyle(
                               fontSize: isCompact ? 13 : 15,
                               fontWeight: FontWeight.w800,
                               letterSpacing: 0.6,
-                              color: NcstColors.white,
+                              color: isClearedEnabled ? NcstColors.white : NcstColors.slate500,
                             ),
                           ),
                         ),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: NcstColors.green,
-                          foregroundColor: NcstColors.white,
+                          backgroundColor: isClearedEnabled
+                              ? (clearedColor ?? NcstColors.green)
+                              : NcstColors.slate200,
+                          foregroundColor: isClearedEnabled ? NcstColors.white : NcstColors.slate500,
+                          disabledBackgroundColor: NcstColors.slate200,
+                          disabledForegroundColor: NcstColors.slate500,
                           elevation: 0,
                           padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

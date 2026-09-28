@@ -9,6 +9,7 @@ import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
+import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../dialogs/manual_qr_dialog.dart';
 
@@ -157,7 +158,8 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       reason = 'This pass was already checked out at ${pass.exitTime != null ? DateTimeUtils.formatTime(pass.exitTime!) : 'earlier today'}.';
     } else if (pass.isExpired) {
       status = ExitVerificationStatus.expired;
-      reason = 'Stay duration exceeded permitted 8-hour limit. Expired at ${DateTimeUtils.formatTime(pass.expiryTime)}.';
+      final validityHours = LocalCacheService.getVisitorPassValidityHours();
+      reason = 'Stay duration exceeded permitted $validityHours-hour limit. Expired at ${DateTimeUtils.formatTime(pass.expiryTime)}.';
     } else {
       status = ExitVerificationStatus.valid;
     }
@@ -174,10 +176,15 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     ExitVerificationStatus status = ExitVerificationStatus.valid;
     String? reason;
 
-    // Check if vehicle is flagged or blocked
-    if (vehicle.hasActiveFlag) {
+    if (vehicle.isAccessDenied) {
+      status = ExitVerificationStatus.valid;
+      reason = 'HOLD ALERT: Vehicle is banned/suspended. Exit allowed to clear campus, but incident must be reported.';
+    } else if (vehicle.campusStatus != null &&
+        vehicle.campusStatus!.toLowerCase().contains('outside')) {
+      reason = 'ATTENTION: No entry record found today — this vehicle was not recorded as inside campus.';
+    } else if (vehicle.hasActiveFlag) {
       // Vehicle is cleared for exit log, but flagged warning must be shown
-      reason = vehicle.flagReason;
+      reason = 'FLAGGED VEHICLE: ${vehicle.flagReason ?? "Security flag active"}';
     }
 
     setState(() {
@@ -214,7 +221,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         driverRelationship: 'Visitor / Temporary Pass',
         gatePoint: widget.currentGuard.assignedGate,
         action: 'Exit Approved',
-        status: 'Departed Campus',
+        status: 'Outside',
         guardName: widget.currentGuard.fullName,
         notes: 'Visitor pass ${pass.passId} checked out upon egress',
         vehicleType: 'Visitor Vehicle',
@@ -244,7 +251,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         driverRelationship: rel,
         gatePoint: widget.currentGuard.assignedGate,
         action: 'Exit Approved',
-        status: 'Departed Campus',
+        status: 'Outside',
         guardName: widget.currentGuard.fullName,
         notes: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : 'Standard student/faculty exit',
         vehicleType: v.vehicleType,
@@ -668,6 +675,69 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
             ],
           ),
         ),
+        if (pass.items.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFBEB),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFDE68A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: const [
+                    Icon(Icons.inventory_2_outlined, size: 16, color: NcstColors.goldDark),
+                    SizedBox(width: 6),
+                    Text(
+                      'DECLARED CARGO / ITEMS CHECKLIST',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: NcstColors.goldDark,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Verify that outgoing items match the registered cargo declarations:',
+                  style: TextStyle(fontSize: 11, color: NcstColors.slate600),
+                ),
+                const SizedBox(height: 8),
+                ...pass.items.map((item) {
+                  final name = (item['name'] ?? item['item_name'] ?? item['description'] ?? 'Item').toString();
+                  final qty = item['quantity'] ?? item['qty'] ?? 1;
+                  final desc = item['description']?.toString();
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.check_box_outlined, size: 16, color: NcstColors.goldDark),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '$qty× $name${(desc != null && desc.isNotEmpty && desc != name) ? " ($desc)" : ""}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: NcstColors.slate800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

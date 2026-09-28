@@ -104,6 +104,7 @@ class VehicleLookupService {
       ownerIdNumber: visitorId,
       qrPassCode: rawCode,
       authorizedDrivers: const [],
+      isParsedFromQr: false,
     );
   }
 }

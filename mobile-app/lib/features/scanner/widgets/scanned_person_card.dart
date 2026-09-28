@@ -33,20 +33,56 @@ class ScannedPersonCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Row(
-                    children: const [
-                      Icon(Icons.check_circle, size: 18, color: NcstColors.green),
-                      SizedBox(width: 6),
+                    children: [
+                      Icon(
+                        vehicle.isAccessDenied
+                            ? Icons.block_rounded
+                            : (vehicle.isUnregistered
+                                ? Icons.warning_amber_rounded
+                                : (vehicle.isAntiPassback
+                                    ? Icons.history_toggle_off
+                                    : (vehicle.hasActiveFlag
+                                        ? Icons.warning_rounded
+                                        : Icons.check_circle))),
+                        size: 18,
+                        color: vehicle.isAccessDenied
+                            ? NcstColors.crimson
+                            : (vehicle.isUnregistered
+                                ? NcstColors.goldDark
+                                : (vehicle.isAntiPassback
+                                    ? NcstColors.goldDark
+                                    : (vehicle.hasActiveFlag
+                                        ? NcstColors.crimson
+                                        : NcstColors.green))),
+                      ),
+                      const SizedBox(width: 6),
                       Expanded(
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            'SCANNED QR PASS VERIFIED',
+                            vehicle.isAccessDenied
+                                ? 'ACCESS DENIED — VEHICLE BANNED'
+                                : (vehicle.isUnregistered
+                                    ? 'UNREGISTERED QR PASS'
+                                    : (vehicle.isAntiPassback
+                                        ? 'ANTI-PASSBACK ALERT'
+                                        : (vehicle.hasActiveFlag
+                                            ? 'ACCESS WARNING — FLAGGED'
+                                            : 'SCANNED QR PASS VERIFIED'))),
                             style: TextStyle(
                               fontSize: 12,
-                              fontWeight: FontWeight.w700,
+                              fontWeight: FontWeight.w800,
                               letterSpacing: 0.8,
-                              color: NcstColors.slate700,
+                              color: vehicle.isAccessDenied
+                                  ? NcstColors.crimson
+                                  : (vehicle.isUnregistered
+                                      ? NcstColors.goldDark
+                                      : (vehicle.isAntiPassback
+                                          ? NcstColors.goldDark
+                                          : (vehicle.hasActiveFlag
+                                              ? NcstColors.crimson
+                                              : NcstColors.slate700))),
                             ),
                           ),
                         ),
@@ -58,22 +94,126 @@ class ScannedPersonCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: NcstColors.gold,
+                    color: vehicle.isUnregistered ? NcstColors.slate200 : NcstColors.gold,
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: NcstColors.goldDark.withValues(alpha: 0.4)),
+                    border: Border.all(
+                      color: vehicle.isUnregistered
+                          ? NcstColors.slate400
+                          : NcstColors.goldDark.withValues(alpha: 0.4),
+                    ),
                   ),
                   child: Text(
-                    'STICKER ${vehicle.stickerYear}',
-                    style: const TextStyle(
+                    vehicle.isUnregistered ? 'NO STICKER' : 'STICKER ${vehicle.stickerYear}',
+                    style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
-                      color: NcstColors.navyDark,
+                      color: vehicle.isUnregistered ? NcstColors.slate700 : NcstColors.navyDark,
                       letterSpacing: 0.5,
                     ),
                   ),
                 ),
               ],
             ),
+            if (vehicle.isAccessDenied) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: NcstColors.crimsonLight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: NcstColors.crimson, width: 1.5),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.block_rounded, color: NcstColors.crimson, size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ENTRY REFUSED: VEHICLE IS BANNED',
+                            style: TextStyle(fontWeight: FontWeight.w900, color: NcstColors.crimson, fontSize: 13),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            vehicle.flagReason ?? 'Vehicle is suspended or banned by administrator / 3-strike policy. Do not allow entrance.',
+                            style: const TextStyle(fontWeight: FontWeight.w600, color: NcstColors.slate800, fontSize: 11.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else if (vehicle.isUnregistered) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: NcstColors.goldDark, width: 1.5),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, color: NcstColors.goldDark, size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'UNREGISTERED PASS DETECTED',
+                            style: TextStyle(fontWeight: FontWeight.w900, color: NcstColors.navyDark, fontSize: 13),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'This QR code does not belong to any registered student, faculty, or valid visitor pass. Direct driver to Visitor Registration.',
+                            style: TextStyle(fontWeight: FontWeight.w600, color: NcstColors.slate800, fontSize: 11.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else if (vehicle.isAntiPassback) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: NcstColors.goldDark, width: 1.5),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.history_toggle_off, color: NcstColors.goldDark, size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'ANTI-PASSBACK WARNING',
+                            style: TextStyle(fontWeight: FontWeight.w900, color: NcstColors.navyDark, fontSize: 13),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'This vehicle is already logged as INSIDE campus. Verify if the vehicle previously exited through an unlogged gate.',
+                            style: TextStyle(fontWeight: FontWeight.w600, color: NcstColors.slate800, fontSize: 11.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
 
             // Driver Photo Box

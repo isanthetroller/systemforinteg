@@ -356,7 +356,12 @@ document.addEventListener('DOMContentLoaded', () => {
      2. Metrics & Status Updates
      ========================================================================== */
   function updateCounts() {
-    const insideCount = state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length;
+    const insideVehicles = state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length;
+    const insideVisitors = (state.visitors || []).filter(v => {
+      const s = (v.status || '').toLowerCase();
+      return (s === 'active' || s.includes('inside')) && !v.exitTime;
+    }).length;
+    const insideCount = insideVehicles + insideVisitors;
     const activeIncidents = state.incidents.filter(i => i.status === 'Held').length;
     const blockedCount = activeIncidents > 0 ? activeIncidents : state.vehicles.filter(v => v.status === 'Blocked / Alert').length;
 
@@ -3620,10 +3625,11 @@ document.addEventListener('DOMContentLoaded', () => {
   async function loadInitialDataFromApi() {
     if (!window.ApiClient) return;
     try {
-      const [vehicles, logs, incidents] = await Promise.all([
+      const [vehicles, logs, incidents, visitors] = await Promise.all([
         ApiClient.getVehicles().catch(() => null),
         ApiClient.getLogs().catch(() => null),
-        ApiClient.getIncidents().catch(() => null)
+        ApiClient.getIncidents().catch(() => null),
+        ApiClient.getVisitorPasses().catch(() => null)
       ]);
 
       let hasUpdate = false;
@@ -3637,6 +3643,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (incidents && Array.isArray(incidents) && incidents.length > 0) {
         state.incidents = incidents;
+        hasUpdate = true;
+      }
+      if (visitors && Array.isArray(visitors)) {
+        state.visitors = visitors;
         hasUpdate = true;
       }
 
@@ -3693,4 +3703,11 @@ document.addEventListener('DOMContentLoaded', () => {
   } else {
     loadInitialDataFromApi();
   }
+
+  // Periodic background refresh every 30 seconds to maintain real-time synchrony
+  setInterval(() => {
+    if (!window.SPAuth || SPAuth.isAuthenticated()) {
+      loadInitialDataFromApi();
+    }
+  }, 30000);
 });

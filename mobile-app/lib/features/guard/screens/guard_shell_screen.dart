@@ -299,6 +299,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
               });
               _fetchLiveLogs();
             },
+            onNavigateToVisitorRegistration: () {
+              setState(() {
+                _selectedIndex = 2;
+              });
+            },
           );
         case 2:
           return VisitorRegistrationScreen(

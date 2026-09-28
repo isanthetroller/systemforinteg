@@ -45,12 +45,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  int get _insideCount => _auditLogs.where((l) => l.isInside).length;
+  Map<String, GateStatus> _getLatestGateStatusByPlate() {
+    final map = <String, GateStatus>{};
+    // _auditLogs is ordered with the newest first
+    for (final log in _auditLogs) {
+      final plate = log.plateNumber.toUpperCase().trim();
+      if (plate.isNotEmpty && !map.containsKey(plate)) {
+        map[plate] = log.status;
+      }
+    }
+    return map;
+  }
+
+  int get _insideCount {
+    final latestMap = _getLatestGateStatusByPlate();
+    return latestMap.values.where((s) => s == GateStatus.inside).length;
+  }
+
   int get _blockedTodayCount =>
       _auditLogs.where((l) => l.status == GateStatus.blocked).length;
   int get _totalEntriesToday => _auditLogs.length;
 
   List<AuditLogEntry> get _filteredLogs {
+    final latestMap = _getLatestGateStatusByPlate();
     return _auditLogs.where((log) {
       final matchesSearch =
           log.plateNumber.toLowerCase().contains(_searchQuery.toLowerCase()) ||
@@ -59,7 +76,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (!matchesSearch) return false;
 
-      if (_selectedFilter == 'Inside') return log.isInside;
+      final plate = log.plateNumber.toUpperCase().trim();
+      if (_selectedFilter == 'Inside') {
+        return latestMap[plate] == GateStatus.inside && log.isInside;
+      }
       if (_selectedFilter == 'Blocked') return log.status == GateStatus.blocked;
       return true;
     }).toList();

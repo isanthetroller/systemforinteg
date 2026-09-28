@@ -178,8 +178,8 @@ function handleCreateLog($pdo, $actor) {
                 sendResponse(403, ['code' => 'PASS_USED'], 'This single-day pass has already been used.');
             }
         }
-        if (!$vehicle && !$visitor && !$isScanner) {
-            sendResponse(403, ['code' => 'UNREGISTERED'], "Entry refused: {$plateNumber} has no registration or visitor pass for today.");
+        if ($isApproval && !$vehicle && !$visitor) {
+            sendResponse(403, ['code' => 'UNREGISTERED'], "Entry refused: {$plateNumber} has no active registration or visitor pass. Please register visitor first.");
         }
     }
 
@@ -192,14 +192,14 @@ function handleCreateLog($pdo, $actor) {
                 sendResponse(400, ['code' => 'ITEMS_CHECK_REQUIRED', 'items' => $items],
                     'Check the items declared on this visitor pass before approving.');
             }
-            $itemsNote = ($isScanner ? 'Items declared (not checked by mobile scanner): ' : ($gateType === 'Ingress' ? 'Items checked in: ' : 'Items checked out: '))
+            $itemsNote = ($gateType === 'Ingress' ? 'Items checked in: ' : 'Items checked out: ')
                 . visitorItemsSummary($items);
         }
     }
 
     /* ---- Write ---------------------------------------------------------- */
     if ($isApproval) {
-        $status = $gateType === 'Egress' ? 'Exited' : 'Inside Campus';
+        $status = $gateType === 'Egress' ? 'Outside' : 'Inside Campus';
     } else {
         $status = $gateType === 'Egress' ? 'Inside Campus' : 'Outside';
     }

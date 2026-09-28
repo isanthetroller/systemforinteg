@@ -100,7 +100,7 @@
     state.passes.forEach(p => {
       const tr = document.createElement('tr');
       tr.className = 'align-top hover:bg-slate-50/60';
-      const canRevoke = isAdmin() && p.status === 'Active' && !p.isInside;
+      const canRevoke = isAdmin() && p.status === 'Active';
       tr.innerHTML = `
         <td class="px-4 py-2.5">
           <div class="font-mono font-bold text-slate-900 whitespace-nowrap">${esc(p.passCode)}</div>

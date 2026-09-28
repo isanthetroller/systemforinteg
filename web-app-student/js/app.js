@@ -220,7 +220,7 @@
     tab.innerHTML = `
       ${chips}
       <article class="card pass" aria-label="Campus pass for ${esc(v.plateNumber)}">
-        <div class="pass-banner ${st.cls}"><span>${esc(st.label)}</span><span>${v.status === 'Inside Campus' ? 'ON CAMPUS' : ''}</span></div>
+        <div class="pass-banner ${st.cls}"><span>${esc(st.label)}</span><span>${(v.status || '').toLowerCase().includes('inside') ? 'ON CAMPUS' : 'OFF CAMPUS'}</span></div>
         <div class="pass-body">
           <span class="plate">${esc(v.plateNumber)}</span>
           <div class="pass-vehicle">${esc(v.makeModelColor || v.vehicleType || '')}</div>
@@ -232,7 +232,7 @@
             <div><dt>Valid until</dt><dd>${esc(fmtDate(v.passValidUntil))}</dd></div>
             <div><dt>Sticker year</dt><dd>${esc(v.stickerYear || '—')}</dd></div>
             <div><dt>Strikes</dt><dd>${v.isBanned ? 'Banned' : `${v.warningCount} of ${STRIKE_LIMIT}`}</dd></div>
-            <div><dt>Campus status</dt><dd>${esc(v.status || '—')}</dd></div>
+            <div><dt>Campus status</dt><dd>${(v.status || '').toLowerCase().includes('inside') ? '<span class="status-on">On Campus</span>' : '<span class="status-off">Outside Campus</span>'}</dd></div>
           </dl>
         </div>
         <div class="pass-actions">
