@@ -99,17 +99,28 @@ if ($qrCode !== '') {
         $passType = 'legacy';
         $claimedPlate = $parsed['plate'];
         $vehicle = findVehicleByPlate($pdo, $claimedPlate);
-        if (!legacyPassesAllowed($now)) {
-            $result = 'FORGED';
-            $reasonDetail = 'Unsigned (legacy) passes are no longer accepted since ' . SP_LEGACY_QR_CUTOFF . '.';
-        } elseif (!$vehicle) {
+        if (!$vehicle) {
+            $passId = $parsed['json']['passId'] ?? $parsed['json']['pass_code'] ?? '';
+            $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE (`pass_code` = ? OR `plate_number` = ? OR REPLACE(REPLACE(`plate_number`, '-', ''), ' ', '') = ?) ORDER BY `id` DESC LIMIT 1");
+            $stmt->execute([$passId, $claimedPlate, normalizePlate($claimedPlate)]);
+            $visitor = $stmt->fetch() ?: null;
+            if ($visitor) {
+                $passType = 'visitor_temp';
+            }
+        }
+        if (!$vehicle && !$visitor) {
             $result = 'NOT_FOUND';
-            $reasonDetail = 'No registered vehicle matches this pass.';
-        } elseif (!legacyPayloadMatches($parsed['json'], $vehicle['qr_pass_code'])) {
-            $result = 'REVOKED';
-            $reasonDetail = 'This legacy pass does not match the pass on record (outdated or altered).';
-        } else {
-            $result = 'LEGACY';
+            $reasonDetail = 'No registered vehicle or visitor pass matches this QR code.';
+        } elseif ($vehicle) {
+            if (!legacyPassesAllowed($now)) {
+                $result = 'FORGED';
+                $reasonDetail = 'Unsigned (legacy) passes are no longer accepted since ' . SP_LEGACY_QR_CUTOFF . '.';
+            } elseif (!legacyPayloadMatches($parsed['json'], $vehicle['qr_pass_code'])) {
+                $result = 'REVOKED';
+                $reasonDetail = 'This legacy pass does not match the pass on record (outdated or altered).';
+            } else {
+                $result = 'LEGACY';
+            }
         }
     } else {
         // Plain text: an old pass code, or a plate typed / scanned into the box
@@ -127,7 +138,15 @@ if ($qrCode !== '') {
                 $reasonDetail = 'Unsigned (legacy) passes are no longer accepted since ' . SP_LEGACY_QR_CUTOFF . '.';
             }
         } else {
-            $plateInput = $code; // fall through to manual lookup
+            $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `pass_code` = ? LIMIT 1");
+            $stmt->execute([$code]);
+            $visitor = $stmt->fetch() ?: null;
+            if ($visitor) {
+                $passType = 'visitor_temp';
+                $claimedPlate = $visitor['plate_number'];
+            } else {
+                $plateInput = $code; // fall through to manual lookup
+            }
         }
     }
 }

@@ -274,6 +274,18 @@ function initializeSqliteSchema($pdo) {
             `description` TEXT NULL,
             FOREIGN KEY (`visitor_pass_id`) REFERENCES `visitor_passes`(`id`) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS `system_settings` (
+            `setting_key` TEXT PRIMARY KEY,
+            `setting_value` TEXT NOT NULL,
+            `description` TEXT NULL,
+            `updated_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    ");
+
+    $pdo->exec("
+        INSERT OR IGNORE INTO `system_settings` (`setting_key`, `setting_value`, `description`)
+        VALUES ('visitor_pass_validity_hours', '8', 'Validity duration for temporary visitor passes in hours');
     ");
 
     // Bring older SQLite databases up to the v2 structure
@@ -294,6 +306,10 @@ function initializeSqliteSchema($pdo) {
     $pdo->exec("UPDATE `system_users` SET `role` = 'admin' WHERE `role` NOT IN ('admin', 'guard') AND (LOWER(`role`) LIKE '%admin%')");
     $pdo->exec("UPDATE `system_users` SET `role` = 'guard' WHERE `role` NOT IN ('admin', 'guard')");
     $pdo->exec("UPDATE `gate_logs` SET `action` = 'Entry Denied' WHERE `action` NOT IN ('Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied')");
+
+    // Clear any previous failed attempts or lockouts
+    $pdo->exec("UPDATE `system_users` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
+    $pdo->exec("UPDATE `student_accounts` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
 
     // Seed the first administrator (must change password on first login)
     $count = (int)$pdo->query("SELECT COUNT(*) FROM `system_users`")->fetchColumn();

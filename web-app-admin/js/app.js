@@ -262,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Update navigation item styles for white sidebar
-    const activeClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-ncst-navy bg-blue-50/80 border-l-4 border-ncst-navy shadow-2xs transition-colors text-left cursor-pointer";
+    const activeClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-ncst-navy bg-ncst-navy/10 border-l-4 border-ncst-navy shadow-2xs transition-colors text-left cursor-pointer";
     const inactiveClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer";
 
     Object.keys(navMap).forEach(key => {
@@ -368,7 +368,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (flaggedSidebarCount) {
       flaggedSidebarCount.textContent = activeIncidents;
       if (activeIncidents > 0) {
-        flaggedSidebarCount.className = "text-[10px] px-1.5 py-0.2 rounded font-bold bg-rose-50 text-ncst-crimson border border-rose-200";
+        flaggedSidebarCount.className = "text-[10px] px-1.5 py-0.2 rounded font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
         flaggedSidebarCount.className = "text-[10px] px-1.5 py-0.2 rounded font-bold bg-slate-100 text-slate-400 border border-slate-200";
       }
@@ -377,7 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (incidentQueueBadge) {
       incidentQueueBadge.textContent = `${activeIncidents} Active ${activeIncidents === 1 ? 'Case' : 'Cases'}`;
       if (activeIncidents > 0) {
-        incidentQueueBadge.className = "text-xs px-2.5 py-0.5 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200";
+        incidentQueueBadge.className = "text-xs px-2.5 py-0.5 rounded-full font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
         incidentQueueBadge.className = "text-xs px-2.5 py-0.5 rounded-full font-bold bg-slate-100 text-slate-600 border border-slate-200";
       }
@@ -661,7 +661,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (attentionCountBadge) {
       attentionCountBadge.textContent = `${activeIncidents.length} Active`;
       if (activeIncidents.length > 0) {
-        attentionCountBadge.className = "text-[10px] px-1.5 py-0.5 rounded font-bold bg-rose-50 text-rose-700 border border-rose-200";
+        attentionCountBadge.className = "text-[10px] px-1.5 py-0.5 rounded font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
         attentionCountBadge.className = "text-[10px] px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600 border border-slate-200";
       }
@@ -671,7 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
       attentionPanelContent.innerHTML = `
         <div class="h-full min-h-[110px] flex items-center justify-center p-3 rounded-lg border border-dashed border-slate-200 bg-slate-50/70 text-center">
           <div>
-            <div class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center font-bold text-xs mb-1.5">
+            <div class="w-6 h-6 rounded-full bg-ncst-greenLight text-ncst-greenDark mx-auto flex items-center justify-center font-bold text-xs mb-1.5">
               ✓
             </div>
             <div class="text-xs font-bold text-slate-800">All Campus Gates Normal</div>
@@ -684,22 +684,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     activeIncidents.forEach(inc => {
       const card = document.createElement('div');
-      card.className = 'p-2.5 rounded-r-lg border-y border-r border-rose-200 border-l-4 border-l-rose-600 bg-rose-50/40 hover:bg-rose-50/70 transition-colors';
+      card.className = 'p-2.5 rounded-r-lg border-y border-r border-ncst-crimson/20 border-l-4 border-l-ncst-crimson bg-ncst-crimsonLight/40 hover:bg-ncst-crimsonLight/70 transition-colors';
 
       card.innerHTML = `
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <span class="font-mono font-bold text-xs bg-white text-slate-900 px-1.5 py-0.5 rounded border border-slate-200 shadow-xs">${escapeHtml(inc.plateNumber)}</span>
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">HELD AT GATE</span>
+            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30">HELD AT GATE</span>
           </div>
           <span class="text-[11px] font-mono text-slate-500">${escapeHtml(inc.timestamp.replace('Today, ', ''))}</span>
         </div>
-        <div class="text-xs font-semibold text-rose-900 mt-1">${escapeHtml(inc.reason)}</div>
+        <div class="text-xs font-semibold text-ncst-crimson mt-1">${escapeHtml(inc.reason)}</div>
         <div class="grid grid-cols-2 gap-2 mt-1 text-[11px] text-slate-600">
           <div>Operator: <span class="font-medium text-slate-800">${escapeHtml(inc.driverName)}</span></div>
           <div>Owner: <span class="font-medium text-slate-800">${escapeHtml(inc.ownerName)}</span></div>
         </div>
-        <div class="mt-2 flex items-center justify-between pt-1.5 border-t border-rose-200/60">
+        <div class="mt-2 flex items-center justify-between pt-1.5 border-t border-ncst-crimson/20">
           <span class="text-[10px] text-slate-500 font-mono">${escapeHtml(inc.caseNumber)} • ${escapeHtml(inc.gatePoint)}</span>
           <button type="button" class="investigate-card-btn text-xs font-bold text-ncst-navy hover:underline">
             Investigate Incident →
@@ -766,14 +766,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const tr = document.createElement('tr');
       tr.className = 'hover:bg-slate-50 transition-colors';
 
-      let statusBadge = 'bg-emerald-50 text-emerald-700 border border-emerald-200';
+      let statusBadge = 'bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30';
       let statusText = 'Inside';
 
       if (log.status === 'Exited') {
         statusBadge = 'bg-slate-100 text-slate-600 border border-slate-200';
         statusText = 'Exited';
       } else if (log.status === 'Blocked / Alert') {
-        statusBadge = 'bg-rose-50 text-rose-700 border border-rose-200 font-bold';
+        statusBadge = 'bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 font-bold';
         statusText = 'Flagged';
       }
 
@@ -881,10 +881,10 @@ document.addEventListener('DOMContentLoaded', () => {
       let custodyLabel = 'Outside';
       const vStatus = (vehicle.status || '').toLowerCase();
       if (vStatus.includes('inside')) {
-        custodyDot = 'bg-emerald-500';
+        custodyDot = 'bg-ncst-green';
         custodyLabel = 'Inside';
       } else if (vStatus.includes('block') || vStatus.includes('alert') || vStatus.includes('hold')) {
-        custodyDot = 'bg-rose-600';
+        custodyDot = 'bg-ncst-crimson';
         custodyLabel = 'Blocked';
       } else {
         custodyDot = 'bg-slate-400';
@@ -893,8 +893,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Registration pass status badge
       const regStatusBadge = vehicle.registrationStatus === 'Active'
-        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-        : 'bg-amber-50 text-amber-700 border-amber-200';
+        ? 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'
+        : 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
 
       const driversCount = vehicle.authorizedDrivers ? vehicle.authorizedDrivers.length : 0;
 
@@ -959,7 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <button type="button" class="edit-btn admin-only px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors cursor-pointer" title="Edit vehicle record">
               Edit
             </button>
-            <button type="button" class="toggle-status-btn admin-only px-2.5 py-1 rounded border text-xs font-semibold shadow-xs transition-colors cursor-pointer ${vehicle.registrationStatus === 'Active' ? 'border-amber-200 bg-amber-50/60 hover:bg-amber-100 text-amber-800' : 'border-emerald-200 bg-emerald-50/60 hover:bg-emerald-100 text-emerald-800'}" title="Toggle registration status">
+            <button type="button" class="toggle-status-btn admin-only px-2.5 py-1 rounded border text-xs font-semibold shadow-xs transition-colors cursor-pointer ${vehicle.registrationStatus === 'Active' ? 'border-ncst-gold/40 bg-ncst-goldLight/60 hover:bg-ncst-goldLight text-amber-950' : 'border-ncst-green/30 bg-ncst-greenLight/60 hover:bg-ncst-greenLight text-ncst-greenDark'}" title="Toggle registration status">
               ${vehicle.registrationStatus === 'Active' ? 'Suspend' : 'Activate'}
             </button>
           </div>
@@ -987,20 +987,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function toggleVehicleRegistrationStatus(vehicle) {
+  async function toggleVehicleRegistrationStatus(vehicle) {
     if (vehicle.isBanned) {
-      showToast(`${vehicle.plateNumber} is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.`);
+      if (window.SPAlert) {
+        SPAlert.warning({
+          title: 'Vehicle Banned',
+          text: `${vehicle.plateNumber} is banned by an active violation. Resolve it in Violations & Penalties to lift the suspension.`
+        });
+      } else {
+        showToast(`${vehicle.plateNumber} is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.`, 'warning');
+      }
       return;
     }
     const nextStatus = vehicle.registrationStatus === 'Active' ? 'Suspended' : 'Active';
     const actionDesc = nextStatus === 'Active' ? 'activated' : 'suspended';
 
-    if (confirm(`Are you sure you want to change pass status of ${vehicle.plateNumber} to ${nextStatus}?`)) {
+    const confirmed = window.SPAlert
+      ? await SPAlert.confirm({
+          title: `${nextStatus === 'Active' ? 'Activate' : 'Suspend'} Vehicle Pass?`,
+          text: `Are you sure you want to change pass status of ${vehicle.plateNumber} to ${nextStatus}?`,
+          confirmText: nextStatus === 'Active' ? 'Activate Pass' : 'Suspend Pass',
+          icon: nextStatus === 'Active' ? 'question' : 'warning',
+          isDanger: nextStatus === 'Suspended'
+        })
+      : confirm(`Are you sure you want to change pass status of ${vehicle.plateNumber} to ${nextStatus}?`);
+
+    if (confirmed) {
       vehicle.registrationStatus = nextStatus;
       renderVehiclesTable();
       updateCounts();
       renderDashboard();
-      showToast(`Pass for ${vehicle.plateNumber} is now ${actionDesc}.`);
+      showToast(`Pass for ${vehicle.plateNumber} is now ${actionDesc}.`, 'success');
 
       if (window.ApiClient && vehicle.id) {
         ApiClient.toggleVehicleStatus(vehicle.id).catch(err => {
@@ -1068,7 +1085,7 @@ document.addEventListener('DOMContentLoaded', () => {
       incidentsTableBody.innerHTML = `
         <tr>
           <td colspan="8" class="py-12 text-center text-slate-400 text-xs">
-            <div class="font-medium text-emerald-600">No active security stops or flagged vehicles.</div>
+            <div class="font-semibold text-ncst-green">No active security stops or flagged vehicles.</div>
             <div class="text-[11px] text-slate-400 mt-1">All campus gates operating under standard clearance.</div>
           </td>
         </tr>
@@ -1083,7 +1100,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const isHeld = inc.status === 'Held';
       const statusBadge = isHeld 
-        ? 'bg-rose-50 text-rose-700 border-rose-200' 
+        ? 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30' 
         : 'bg-slate-100 text-slate-600 border-slate-200';
 
       tr.innerHTML = `
@@ -1100,11 +1117,11 @@ document.addEventListener('DOMContentLoaded', () => {
           ${escapeHtml(inc.vehicleType)}
         </td>
         <td class="py-2.5 px-4">
-          <div class="text-rose-700 font-medium">${escapeHtml(inc.driverName)}</div>
+          <div class="text-slate-900 font-medium">${escapeHtml(inc.driverName)}</div>
           <div class="text-[11px] text-slate-500">Owner: ${escapeHtml(inc.ownerName)}</div>
         </td>
         <td class="py-2.5 px-4">
-          <span class="inline-block px-2 py-0.5 rounded text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200">
+          <span class="inline-block px-2 py-0.5 rounded text-[11px] font-medium bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30">
             ${escapeHtml(inc.reason)}
           </span>
         </td>
@@ -1121,7 +1138,7 @@ document.addEventListener('DOMContentLoaded', () => {
               Investigate
             </button>
             ${isHeld ? `
-              <button type="button" class="resolve-btn admin-only px-2.5 py-1 rounded text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 shadow-xs transition-colors">
+              <button type="button" class="resolve-btn admin-only px-2.5 py-1 rounded text-xs font-semibold text-ncst-greenDark bg-ncst-greenLight border border-ncst-green/30 hover:bg-ncst-greenLight/80 shadow-xs transition-colors">
                 Clear & Unblock
               </button>
             ` : ''}
@@ -1281,10 +1298,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     pagedLogs.forEach(log => {
       const tr = document.createElement('tr');
-      tr.className = 'odd:bg-white even:bg-slate-50/75 hover:bg-sky-50/40 transition-colors border-b border-slate-200 text-xs text-slate-800';
+      tr.className = 'odd:bg-white even:bg-slate-50/75 hover:bg-slate-100/70 transition-colors border-b border-slate-200 text-xs text-slate-800';
 
-      let statusBadge = 'bg-emerald-100 text-emerald-900 border-emerald-300 font-semibold';
-      let statusDot = 'bg-emerald-600';
+      let statusBadge = 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30 font-semibold';
+      let statusDot = 'bg-ncst-green';
       let statusText = 'Inside';
 
       if (log.status === 'Exited') {
@@ -1292,8 +1309,8 @@ document.addEventListener('DOMContentLoaded', () => {
         statusDot = 'bg-slate-500';
         statusText = 'Exited';
       } else if (log.status === 'Blocked / Alert') {
-        statusBadge = 'bg-rose-100 text-rose-900 border-rose-300 font-bold';
-        statusDot = 'bg-rose-600';
+        statusBadge = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30 font-bold';
+        statusDot = 'bg-ncst-crimson';
         statusText = 'Hold / Blocked';
       }
 
@@ -1301,11 +1318,11 @@ document.addEventListener('DOMContentLoaded', () => {
       let actionColor = 'text-slate-800 font-medium';
       const actLower = (log.action || '').toLowerCase();
       if (actLower.includes('entry') || actLower.includes('ingress') || actLower.includes('approved')) {
-        actionColor = 'text-emerald-800 font-semibold';
+        actionColor = 'text-ncst-greenDark font-semibold';
       } else if (actLower.includes('exit') || actLower.includes('egress')) {
         actionColor = 'text-slate-700 font-medium';
       } else if (actLower.includes('flag') || actLower.includes('held') || actLower.includes('blocked') || actLower.includes('alert')) {
-        actionColor = 'text-rose-800 font-bold';
+        actionColor = 'text-ncst-crimson font-bold';
       }
 
       tr.innerHTML = `
@@ -1627,10 +1644,10 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="text-xs text-slate-600 font-medium mt-0.5">${escapeHtml(v.makeModelColor)} (${escapeHtml(v.vehicleType)})</div>
           </div>
           <div class="flex sm:flex-col items-center sm:items-end gap-2">
-            <span class="px-3 py-1 rounded text-xs font-extrabold border ${v.registrationStatus === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}">
+            <span class="px-3 py-1 rounded text-xs font-extrabold border ${v.registrationStatus === 'Active' ? 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30' : 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30'}">
               ${escapeHtml(v.registrationStatus || 'Active')}
             </span>
-            <span class="px-2.5 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-900 border border-amber-300 font-mono">
+            <span class="px-2.5 py-0.5 rounded text-[11px] font-bold bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 font-mono">
               Sticker ${escapeHtml(v.stickerYear || '2026')}
             </span>
           </div>
@@ -1693,7 +1710,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div class="min-w-0 flex-1">
                 <div class="text-xs font-extrabold text-slate-900 truncate">${escapeHtml(v.ownerName)}</div>
                 <div class="text-[11px] text-slate-500 font-mono mt-0.5">${escapeHtml(v.ownerIdNumber || 'No ID')}</div>
-                <span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-ncst-navy border border-blue-200">
+                <span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20">
                   ${escapeHtml(v.ownerRole || 'Student')}
                 </span>
               </div>
@@ -1724,7 +1741,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div class="min-w-0 flex-1">
                 <div class="text-xs font-extrabold text-slate-900 truncate">${escapeHtml(v.makeModelColor)}</div>
                 <div class="text-[11px] text-slate-600 mt-0.5">${escapeHtml(v.vehicleType)}</div>
-                <span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${v.status === 'Inside' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600 border border-slate-200'}">
+                <span class="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${v.status === 'Inside' ? 'bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30' : 'bg-slate-100 text-slate-600 border border-slate-200'}">
                   ${v.status === 'Inside' ? 'Inside Campus' : 'Outside Campus'}
                 </span>
               </div>
@@ -1775,13 +1792,13 @@ document.addEventListener('DOMContentLoaded', () => {
           </svg>
           <span>Print Pass</span>
         </button>
-<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
+<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
           Flag Violation / Warning
         </button>
         <button id="drawerStudentLoginBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="Create or reset the owner's student portal login">
           Student Login
         </button>
-        <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-800 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
+        <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
           Reissue Pass
         </button>
         <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
@@ -1846,15 +1863,30 @@ document.addEventListener('DOMContentLoaded', () => {
     if (flagBtn) flagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(v));
     const studentLoginBtn = drawerFooter.querySelector('#drawerStudentLoginBtn');
     if (studentLoginBtn) studentLoginBtn.addEventListener('click', async () => {
-      if (!v.ownerIdNumber) return showToast('This vehicle has no owner ID number.');
-      if (!confirm(`Issue a student portal login for owner ID ${v.ownerIdNumber}?
-
-If the owner already has one, the password is reset and they are signed out everywhere.`)) return;
+      if (!v.ownerIdNumber) return showToast('This vehicle has no owner ID number.', 'warning');
+      const confirmed = window.SPAlert
+        ? await SPAlert.confirm({
+            title: 'Issue Student Portal Login?',
+            text: `Issue login credentials for owner ID ${v.ownerIdNumber}. If the student already has an account, their password will be reset and other sessions will be signed out.`,
+            confirmText: 'Issue Login',
+            icon: 'question'
+          })
+        : confirm(`Issue a student portal login for owner ID ${v.ownerIdNumber}?\n\nIf the owner already has one, the password is reset and they are signed out everywhere.`);
+      if (!confirmed) return;
       try {
         const res = await ApiClient.issueStudentLogin(v.ownerIdNumber);
-        if (window.SPTempPassword) SPTempPassword(`Student portal login for owner ID ${res.ownerIdNumber}`, res.tempPassword);
+        if (window.SPAlert && typeof SPAlert.tempPassword === 'function') {
+          await SPAlert.tempPassword({
+            title: 'Student Portal Login Created',
+            username: `Owner ID: ${res.ownerIdNumber}`,
+            password: res.tempPassword,
+            subtext: `Student credentials issued for ${v.ownerName || 'vehicle owner'} (${res.ownerIdNumber})`
+          });
+        } else if (window.SPTempPassword) {
+          SPTempPassword(`Student portal login for owner ID ${res.ownerIdNumber}`, res.tempPassword);
+        }
       } catch (err) {
-        showToast(`Could not issue login: ${err.message}`);
+        showToast(`Could not issue login: ${err.message}`, 'error');
       }
     });
     const reissueBtn = drawerFooter.querySelector('#drawerReissueBtn');
@@ -1874,13 +1906,13 @@ If the owner already has one, the password is reset and they are signed out ever
 
     const html = `
       <div class="space-y-5">
-        <div class="p-4 rounded-lg border ${isHeld ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}">
+        <div class="p-4 rounded-lg border ${isHeld ? 'bg-ncst-crimsonLight border-ncst-crimson/30' : 'bg-slate-50 border-slate-200'}">
           <div class="flex items-center justify-between">
-            <div class="text-xs font-bold ${isHeld ? 'text-rose-700' : 'text-slate-600'} uppercase">Security Incident Report</div>
-            <span class="px-2 py-0.5 rounded text-xs font-bold ${isHeld ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700'}">${escapeHtml(inc.status)}</span>
+            <div class="text-xs font-bold ${isHeld ? 'text-ncst-crimson' : 'text-slate-600'} uppercase">Security Incident Report</div>
+            <span class="px-2 py-0.5 rounded text-xs font-bold ${isHeld ? 'bg-ncst-crimson text-white' : 'bg-slate-200 text-slate-700'}">${escapeHtml(inc.status)}</span>
           </div>
           <div class="text-xl font-mono font-bold text-slate-900 mt-2">${escapeHtml(inc.plateNumber)}</div>
-          <div class="text-xs font-semibold text-rose-700 mt-1 font-mono">${escapeHtml(inc.caseNumber)} • Stop Reason: ${escapeHtml(inc.reason)}</div>
+          <div class="text-xs font-semibold text-ncst-crimson mt-1 font-mono">${escapeHtml(inc.caseNumber)} • Stop Reason: ${escapeHtml(inc.reason)}</div>
         </div>
 
         <div>
@@ -1888,7 +1920,7 @@ If the owner already has one, the password is reset and they are signed out ever
           <div class="grid grid-cols-2 gap-3 text-xs bg-white p-3 rounded border border-slate-200">
             <div>
               <span class="text-slate-400 block text-[11px]">Unregistered Driver</span>
-              <span class="font-bold text-rose-700">${escapeHtml(inc.driverName)}</span>
+              <span class="font-bold text-ncst-crimson">${escapeHtml(inc.driverName)}</span>
               <span class="text-[11px] text-slate-500 block">(${escapeHtml(inc.driverRelationship)})</span>
             </div>
             <div>
@@ -1923,7 +1955,7 @@ If the owner already has one, the password is reset and they are signed out ever
     let footerHtml = '';
     if (isHeld) {
       footerHtml = `
-        <button id="drawerResolveBtn" class="admin-only px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold">
+        <button id="drawerResolveBtn" class="admin-only px-3 py-1.5 rounded-md bg-ncst-green hover:bg-ncst-greenDark text-white text-xs font-semibold">
           Clear & Unblock
         </button>
         <button id="drawerCancelBtnInner" class="px-3 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700">
@@ -1957,7 +1989,7 @@ If the owner already has one, the password is reset and they are signed out ever
             <span class="text-[11px] text-slate-400 font-mono block">AUDIT LOG ID</span>
             <span class="text-base font-bold font-mono text-slate-900">${escapeHtml(log.id)}</span>
           </div>
-          <span class="px-2 py-0.5 rounded text-xs font-bold ${log.status === 'Blocked / Alert' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}">
+          <span class="px-2 py-0.5 rounded text-xs font-bold ${log.status === 'Blocked / Alert' ? 'bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30' : 'bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30'}">
             ${escapeHtml(log.status)}
           </span>
         </div>
@@ -2006,7 +2038,7 @@ If the owner already has one, the password is reset and they are signed out ever
     const auditVehicle = state.vehicles.find(x => (x.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() === (log.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase());
     const auditFooter = auditVehicle ? `
       <div class="flex items-center justify-end gap-2 w-full">
-        <button id="auditFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
+        <button id="auditFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
           Flag Violation / Warning
         </button>
         <button id="drawerCancelBtnInner" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">
@@ -2031,7 +2063,7 @@ If the owner already has one, the password is reset and they are signed out ever
       <div class="flex items-center justify-between">
         <span class="edit-driver-num-label text-xs font-bold text-slate-700">Driver #${index + 1}</span>
         ${!isFirst ? `
-          <button type="button" class="remove-edit-driver-btn text-[11px] text-rose-500 hover:text-rose-700 font-semibold flex items-center gap-1 cursor-pointer">
+          <button type="button" class="remove-edit-driver-btn text-[11px] text-ncst-crimson hover:text-ncst-crimsonDark font-semibold flex items-center gap-1 cursor-pointer">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -2042,11 +2074,11 @@ If the owner already has one, the password is reset and they are signed out ever
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
         <div>
-          <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-rose-500">*</span></label>
+          <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-ncst-crimson">*</span></label>
           <input type="text" class="edit-driver-name w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="Driver name" value="${escapeHtml(driverData.fullName || '')}" required>
         </div>
         <div>
-          <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-rose-500">*</span></label>
+          <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-ncst-crimson">*</span></label>
           <select class="edit-driver-rel w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
             <option value="Self (Owner)" ${driverData.relationship === 'Self (Owner)' ? 'selected' : ''}>Self (Owner)</option>
             <option value="Spouse" ${driverData.relationship === 'Spouse' ? 'selected' : ''}>Spouse</option>
@@ -2057,7 +2089,7 @@ If the owner already has one, the password is reset and they are signed out ever
           </select>
         </div>
         <div>
-          <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-rose-500">*</span></label>
+          <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-ncst-crimson">*</span></label>
           <input type="text" class="edit-driver-license w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="N01-22-849201" value="${escapeHtml(driverData.licenseNo || '')}" required>
         </div>
         <div>
@@ -2490,10 +2522,10 @@ If the owner already has one, the password is reset and they are signed out ever
       if (exists && val.length > 0) {
         plateValidationMsg.textContent = `Warning: Plate ${val} is already registered in the system!`;
         plateValidationMsg.classList.remove('hidden');
-        plateInput.classList.add('border-rose-400');
+        plateInput.classList.add('border-ncst-crimson');
       } else {
         plateValidationMsg.classList.add('hidden');
-        plateInput.classList.remove('border-rose-400');
+        plateInput.classList.remove('border-ncst-crimson');
       }
     });
   }
@@ -2511,19 +2543,19 @@ If the owner already has one, the password is reset and they are signed out ever
       driverCard.innerHTML = `
         <div class="flex items-center justify-between">
           <span class="driver-num-label text-xs font-bold text-slate-700">Driver #${count}</span>
-          <button type="button" class="remove-driver-btn text-xs font-medium text-rose-600 hover:underline">
+          <button type="button" class="remove-driver-btn text-xs font-medium text-ncst-crimson hover:text-ncst-crimsonDark hover:underline cursor-pointer">
             Remove
           </button>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-rose-500">*</span></label>
+            <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-ncst-crimson">*</span></label>
             <input type="text" class="driver-name w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="Driver name" required>
           </div>
 
           <div>
-            <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-rose-500">*</span></label>
+            <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-ncst-crimson">*</span></label>
             <select class="driver-rel w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
               <option value="Spouse">Spouse</option>
               <option value="Parent">Parent</option>
@@ -2534,7 +2566,7 @@ If the owner already has one, the password is reset and they are signed out ever
           </div>
 
           <div>
-            <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-rose-500">*</span></label>
+            <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-ncst-crimson">*</span></label>
             <input type="text" class="driver-license w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="N01-22-849201" required>
           </div>
 
@@ -2574,12 +2606,12 @@ If the owner already has one, the password is reset and they are signed out ever
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-rose-500">*</span></label>
+            <label class="block text-[11px] font-medium text-slate-600 mb-1">Full Name <span class="text-ncst-crimson">*</span></label>
             <input type="text" class="driver-name w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="Driver name" required>
           </div>
 
           <div>
-            <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-rose-500">*</span></label>
+            <label class="block text-[11px] font-medium text-slate-600 mb-1">Relationship to Owner <span class="text-ncst-crimson">*</span></label>
             <select class="driver-rel w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
               <option value="Self (Owner)" selected>Self (Owner)</option>
               <option value="Spouse">Spouse</option>
@@ -2591,7 +2623,7 @@ If the owner already has one, the password is reset and they are signed out ever
           </div>
 
           <div>
-            <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-rose-500">*</span></label>
+            <label class="block text-[11px] font-medium text-slate-600 mb-1">Driver's License No. <span class="text-ncst-crimson">*</span></label>
             <input type="text" class="driver-license w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="N01-22-849201" required>
           </div>
 
@@ -2902,7 +2934,7 @@ If the owner already has one, the password is reset and they are signed out ever
       resetOwnerPhoto();
       resetVehiclePhoto();
       plateValidationMsg.classList.add('hidden');
-      plateInput.classList.remove('border-rose-400');
+      plateInput.classList.remove('border-ncst-crimson');
 
     });
   }
@@ -2914,7 +2946,7 @@ If the owner already has one, the password is reset and they are signed out ever
       resetOwnerPhoto();
       resetVehiclePhoto();
       plateValidationMsg.classList.add('hidden');
-      plateInput.classList.remove('border-rose-400');
+      plateInput.classList.remove('border-ncst-crimson');
       generateQrPass(true);
       showToast('Registration form cleared.');
     });
@@ -3474,7 +3506,7 @@ If the owner already has one, the password is reset and they are signed out ever
   function strikeChip(v) {
     if (v.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[9px] font-extrabold tracking-wide">BANNED</span>';
     const n = Number(v.warningCount || 0);
-    return n > 0 ? `<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-extrabold">STRIKE ${n}/3</span>` : '';
+    return n > 0 ? `<span class="px-1.5 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[9px] font-extrabold">STRIKE ${n}/3</span>` : '';
   }
 
   function passPayloadFor(v) {
@@ -3490,23 +3522,35 @@ If the owner already has one, the password is reset and they are signed out ever
 
   async function reissueVehiclePass(v) {
     if (!v || !v.id) return;
-    if (!confirm(`Issue a new pass for ${v.plateNumber}?\n\nEvery previously printed QR code for this vehicle will stop working immediately.`)) return;
+    const confirmed = window.SPAlert
+      ? await SPAlert.confirm({
+          title: 'Issue New QR Pass?',
+          text: `Issue a new pass for ${v.plateNumber}? Every previously printed QR code for this vehicle will stop working immediately.`,
+          confirmText: 'Issue New Pass',
+          icon: 'warning',
+          isDanger: true
+        })
+      : confirm(`Issue a new pass for ${v.plateNumber}?\n\nEvery previously printed QR code for this vehicle will stop working immediately.`);
+    if (!confirmed) return;
     try {
       const saved = await ApiClient.reissuePass(v.id);
       const target = state.vehicles.find(x => x.id === v.id) || v;
       applyServerPass(target, saved);
-      showToast(`New pass issued for ${v.plateNumber}. Old QR codes are revoked.`);
+      showToast(`New pass issued for ${v.plateNumber}. Old QR codes are revoked.`, 'success');
       renderVehiclesTable();
       openVehicleDrawer(target);
     } catch (err) {
-      showToast(`Reissue failed: ${err.message}`);
+      showToast(`Reissue failed: ${err.message}`, 'error');
     }
   }
 
   /* ==========================================================================
      10. Utility Functions
      ========================================================================== */
-  function showToast(message) {
+  function showToast(message, type) {
+    if (window.SPAlert && typeof SPAlert.toast === 'function') {
+      return SPAlert.toast(message, type);
+    }
     if (!toastHub) return;
     const toast = document.createElement('div');
     toast.className = `pointer-events-auto px-4 py-2.5 rounded-md shadow-lg text-xs font-semibold text-white bg-slate-900 border border-slate-700 transition-all duration-200 transform translate-y-2 opacity-0`;
@@ -3621,6 +3665,7 @@ If the owner already has one, the password is reset and they are signed out ever
     escapeHtml,
     openDrawer,
     closeDrawer,
+    alert: window.SPAlert,
     reload: loadInitialDataFromApi,
     openVehicle(id) {
       const v = state.vehicles.find(x => x.id === id);

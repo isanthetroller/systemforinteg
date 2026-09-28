@@ -57,14 +57,23 @@
       const active = btn.dataset.mode === gate.mode;
       btn.setAttribute('aria-checked', active ? 'true' : 'false');
       btn.className = 'gate-mode-btn px-4 py-2 rounded-md text-xs font-extrabold tracking-wide transition-colors cursor-pointer ' + (active
-        ? (gate.mode === 'Ingress' ? 'bg-emerald-600 text-white shadow' : 'bg-ncst-navy text-white shadow')
+        ? (gate.mode === 'Ingress' ? 'bg-ncst-green text-white shadow' : 'bg-ncst-navy text-white shadow')
         : 'text-slate-600 hover:text-slate-900');
     });
     if (gate.cctv) {
       gate.cctv.setLane(gate.mode === 'Ingress' ? 'INGRESS MONITOR - LANE 1' : 'EGRESS MONITOR - LANE 2');
     }
     const btn = $('gateVerifyBtn');
-    if (btn) btn.textContent = gate.mode === 'Ingress' ? 'Verify Entry' : 'Verify Exit';
+    if (btn) {
+      btn.textContent = gate.mode === 'Ingress' ? 'Verify Entry' : 'Verify Exit';
+      if (gate.mode === 'Ingress') {
+        btn.classList.remove('bg-ncst-navy', 'hover:bg-ncst-navyDark');
+        btn.classList.add('bg-ncst-green', 'hover:bg-ncst-greenDark');
+      } else {
+        btn.classList.remove('bg-ncst-green', 'hover:bg-ncst-greenDark');
+        btn.classList.add('bg-ncst-navy', 'hover:bg-ncst-navyDark');
+      }
+    }
   }
 
   function setMode(mode) {
@@ -151,7 +160,7 @@
   function renderError(message) {
     $('gateResult').innerHTML = `
       <div class="p-5 space-y-3">
-        <div class="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-ncst-crimson" role="alert">${esc(message)}</div>
+        <div class="rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight px-4 py-3 text-sm font-semibold text-ncst-crimson" role="alert">${esc(message)}</div>
         <button type="button" data-act="reset" class="px-4 py-2 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer">Try Again</button>
       </div>`;
     $('gateResult').querySelector('[data-act="reset"]').addEventListener('click', resetResult);
@@ -164,8 +173,8 @@
   };
 
   function bannerClasses(severity) {
-    if (severity === 'ok') return 'bg-emerald-600 text-white';
-    if (severity === 'warning') return 'bg-amber-400 text-slate-900';
+    if (severity === 'ok') return 'bg-ncst-green text-white';
+    if (severity === 'warning') return 'bg-ncst-gold text-slate-900';
     return 'bg-ncst-crimson text-white';
   }
 
@@ -175,7 +184,7 @@
     const dirLabel = r.gateType === 'Ingress' ? 'ENTRY' : 'EXIT';
 
     const warnings = (r.warnings || []).map(w => `
-      <li class="flex gap-2 items-start"><span aria-hidden="true" class="mt-0.5 text-amber-600">&#9888;</span><span>${esc(w)}</span></li>`).join('');
+      <li class="flex gap-2 items-start"><span aria-hidden="true" class="mt-0.5 text-ncst-goldDark">&#9888;</span><span>${esc(w)}</span></li>`).join('');
 
     let subject = '';
     if (r.vehicle) subject = vehicleBlock(r.vehicle, r);
@@ -192,16 +201,16 @@
           ${needsItems && !gate.itemsChecked ? `<p class="text-[11px] font-semibold text-ncst-navy">Check the visitor's items ${r.gateType === 'Ingress' ? 'coming in' : 'going out'} and tick the box to continue.</p>` : ''}
           <div class="flex flex-wrap items-center gap-2">
             <button type="button" data-act="approve" ${ready ? '' : 'disabled'}
-              class="px-5 py-2.5 rounded-md text-sm font-extrabold text-white shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${r.gateType === 'Ingress' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-ncst-navy hover:bg-ncst-navyDark'}">
+              class="px-5 py-2.5 rounded-md text-sm font-extrabold text-white shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${r.gateType === 'Ingress' ? 'bg-ncst-green hover:bg-ncst-greenDark' : 'bg-ncst-navy hover:bg-ncst-navyDark'}">
               ${r.gateType === 'Ingress' ? 'Record Entry' : 'Approve Exit'}
             </button>
-            <button type="button" data-act="deny" class="px-4 py-2.5 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-sm font-bold text-ncst-crimson cursor-pointer">
+            <button type="button" data-act="deny" class="px-4 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">
               Deny ${dirLabel === 'ENTRY' ? 'Entry' : 'Exit'}
             </button>
-            ${r.vehicle ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-amber-300 bg-amber-50 hover:bg-amber-100 text-sm font-bold text-amber-900 cursor-pointer">Issue Warning</button>' : ''}
+            ${r.vehicle ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
             <button type="button" data-act="reset" class="ml-auto px-3 py-2 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">Cancel</button>
           </div>
-          <div id="gateDenyPanel" class="hidden rounded-md border border-rose-200 bg-rose-50/60 p-3 space-y-2">
+          <div id="gateDenyPanel" class="hidden rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight/70 p-3 space-y-2">
             <label for="gateDenyReason" class="block text-[11px] font-bold text-slate-700">Reason for denial</label>
             <select id="gateDenyReason" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs">
               ${DENY_REASONS.map(x => `<option>${esc(x)}</option>`).join('')}
@@ -210,7 +219,7 @@
             <textarea id="gateDenyNotes" rows="2" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs" placeholder="What did you observe?"></textarea>
             <div class="flex justify-end gap-2">
               <button type="button" data-act="deny-cancel" class="px-3 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer">Back</button>
-              <button type="button" data-act="deny-confirm" class="px-3 py-1.5 rounded bg-ncst-crimson hover:bg-red-700 text-white text-xs font-bold cursor-pointer">Deny &amp; Flag Vehicle</button>
+              <button type="button" data-act="deny-confirm" class="px-3 py-1.5 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-xs font-bold cursor-pointer">Deny &amp; Flag Vehicle</button>
             </div>
           </div>
         </div>`;
@@ -221,8 +230,8 @@
       actions = `
         <div class="border-t border-slate-100 px-5 py-4 flex flex-wrap items-center gap-3">
           <p class="text-xs text-slate-600 flex-1 min-w-[200px]">${logged}</p>
-          ${r.result === 'NOT_FOUND' && r.gateType === 'Ingress' ? '<button type="button" data-act="visitor" class="px-3 py-2.5 rounded-md border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sm font-bold text-sky-800 cursor-pointer">Issue Visitor Pass</button>' : ''}
-          ${r.vehicle ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-amber-300 bg-amber-50 hover:bg-amber-100 text-sm font-bold text-amber-900 cursor-pointer">Issue Warning</button>' : ''}
+          ${r.result === 'NOT_FOUND' && r.gateType === 'Ingress' ? '<button type="button" data-act="visitor" class="px-3 py-2.5 rounded-md border border-ncst-navy/20 bg-ncst-navy/5 hover:bg-ncst-navy/10 text-sm font-bold text-ncst-navy cursor-pointer">Issue Visitor Pass</button>' : ''}
+          ${r.vehicle ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
           <button type="button" data-act="reset" class="px-5 py-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold cursor-pointer">Scan Next</button>
         </div>`;
     }
@@ -236,7 +245,7 @@
         <div class="mt-1.5 text-xl font-extrabold tracking-tight">${esc(r.accepted ? (r.severity === 'ok' ? 'CLEAR TO ' + (r.gateType === 'Ingress' ? 'ENTER' : 'EXIT') : 'CHECK BEFORE ' + (r.gateType === 'Ingress' ? 'ENTRY' : 'EXIT')) : 'ACCESS DENIED')}</div>
         <div class="text-sm font-semibold mt-0.5">${esc(r.message)}${r.reason ? ' &mdash; ' + esc(r.reason) : ''}</div>
       </div>
-      ${warnings ? `<ul class="px-5 py-3 space-y-1 text-xs text-amber-900 bg-amber-50 border-b border-amber-200">${warnings}</ul>` : ''}
+      ${warnings ? `<ul class="px-5 py-3 space-y-1 text-xs text-amber-950 bg-ncst-goldLight border-b border-ncst-gold/30">${warnings}</ul>` : ''}
       ${subject}
       ${actions}`;
 
@@ -294,7 +303,7 @@
     const strikes = Number(v.warningCount || 0);
     const standing = v.isBanned
       ? '<span class="px-2 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">BANNED</span>'
-      : (strikes > 0 ? `<span class="px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold">STRIKE ${strikes} OF 3</span>` : '');
+      : (strikes > 0 ? `<span class="px-2 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[10px] font-extrabold">STRIKE ${strikes} OF 3</span>` : '');
     const drivers = v.authorizedDrivers || [];
     const ownerPhoto = v.ownerPhoto || v.ownerPhotoUrl;
 
@@ -305,14 +314,14 @@
       const photo = d.photoUrl || d.photo_url || (isOwner ? ownerPhoto : '');
       return `
         <button type="button" role="radio" aria-checked="${selected}" data-driver-id="${id}" ${r.accepted ? '' : 'disabled'}
-          class="text-left flex items-center gap-3 p-2.5 rounded-lg border-2 transition-colors ${selected ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-white hover:border-slate-400'} ${r.accepted ? 'cursor-pointer' : 'cursor-default opacity-80'}">
+          class="text-left flex items-center gap-3 p-2.5 rounded-lg border-2 transition-colors ${selected ? 'border-ncst-green bg-ncst-greenLight' : 'border-slate-200 bg-white hover:border-slate-400'} ${r.accepted ? 'cursor-pointer' : 'cursor-default opacity-80'}">
           ${photoHtml(photo, d.fullName)}
           <div class="min-w-0 flex-1">
             <div class="text-sm font-bold text-slate-900 truncate">${esc(d.fullName)}</div>
             <div class="text-[11px] text-slate-500 truncate">${esc(d.relationship || '')}</div>
             <div class="text-[10px] font-mono text-slate-400 truncate">Lic. ${esc(d.licenseNo || d.license_no || 'N/A')}</div>
           </div>
-          ${selected ? '<span class="text-emerald-600 text-lg" aria-hidden="true">&#10003;</span>' : ''}
+          ${selected ? '<span class="text-ncst-green text-lg font-bold" aria-hidden="true">&#10003;</span>' : ''}
         </button>`;
     }).join('');
 
@@ -341,12 +350,12 @@
   function visitorBlock(v) {
     return `
       <div class="px-5 py-4">
-        <div class="flex items-start gap-3 p-3 rounded-lg border-2 border-sky-300 bg-sky-50">
+        <div class="flex items-start gap-3 p-3 rounded-lg border-2 border-ncst-navy/20 bg-ncst-navy/5">
           ${photoHtml('', v.visitorName)}
           <div class="min-w-0 flex-1 text-xs space-y-0.5">
             <div class="flex flex-wrap items-center gap-2">
               <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-sm tracking-wider">${esc(v.plateNumber)}</span>
-              <span class="px-1.5 py-0.5 rounded bg-sky-600 text-white text-[10px] font-extrabold">VISITOR DAY PASS</span>
+              <span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">VISITOR DAY PASS</span>
             </div>
             <div class="text-sm font-bold text-slate-900 mt-1">${esc(v.visitorName)}</div>
             <div class="text-slate-600">Visiting: <span class="font-semibold">${esc(v.personToVisit)}</span></div>
@@ -364,14 +373,14 @@
     const r = gate.result;
     const direction = r.gateType === 'Ingress' ? 'coming in' : 'going out';
     return `
-      <div class="mt-3 rounded-lg border-2 ${gate.itemsChecked ? 'border-emerald-400 bg-emerald-50' : 'border-amber-300 bg-amber-50'} p-3">
+      <div class="mt-3 rounded-lg border-2 ${gate.itemsChecked ? 'border-ncst-green bg-ncst-greenLight' : 'border-ncst-gold bg-ncst-goldLight'} p-3">
         <div class="text-[11px] font-extrabold uppercase tracking-wider text-slate-700">Declared items (${items.length})</div>
         <ul class="mt-1.5 space-y-1 text-sm text-slate-900">
           ${items.map(i => `<li class="flex gap-2"><span class="font-mono font-extrabold w-12 text-right flex-shrink-0">${esc(i.quantity)}&times;</span><span><span class="font-semibold">${esc(i.name)}</span>${i.description ? ` <span class="text-slate-500 text-xs">(${esc(i.description)})</span>` : ''}</span></li>`).join('')}
         </ul>
         ${r.accepted ? `
         <label class="mt-2 flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
-          <input type="checkbox" data-act="items-check" class="w-4 h-4 accent-emerald-600" ${gate.itemsChecked ? 'checked' : ''}>
+          <input type="checkbox" data-act="items-check" class="w-4 h-4 accent-ncst-green" ${gate.itemsChecked ? 'checked' : ''}>
           I checked these items ${direction}
         </label>` : ''}
       </div>`;
@@ -468,7 +477,7 @@
     list.innerHTML = logs.map(l => {
       const denied = /Denied/.test(l.action || '');
       const exit = /Exit/.test(l.action || '');
-      const chip = denied ? 'bg-rose-50 text-ncst-crimson border-rose-200' : (exit ? 'bg-blue-50 text-ncst-navy border-blue-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200');
+      const chip = denied ? 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30' : (exit ? 'bg-ncst-navy/10 text-ncst-navy border-ncst-navy/20' : 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30');
       return `
         <li class="px-4 py-2 flex items-center gap-3">
           <span class="px-1.5 py-0.5 rounded border text-[10px] font-bold whitespace-nowrap ${chip}">${esc(l.action)}</span>

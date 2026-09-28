@@ -24,7 +24,7 @@
 
   function roleBadge(role) {
     return role === 'admin'
-      ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-ncst-navy border border-blue-200">Administrator</span>'
+      ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20">Administrator</span>'
       : '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">Gate Guard</span>';
   }
 
@@ -33,9 +33,9 @@
       return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>';
     }
     if (u.mustChangePassword) {
-      return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">Pending first sign-in</span>';
+      return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-goldLight text-amber-950 border border-ncst-gold/40">Pending first sign-in</span>';
     }
-    return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>';
+    return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">Active</span>';
   }
 
   /* ------------------------------------------------------------------------
@@ -67,8 +67,8 @@
             <button type="button" data-act="edit" class="px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs cursor-pointer">Edit</button>
             <button type="button" data-act="reset" class="px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs cursor-pointer">Reset Password</button>
             ${isSelf ? '' : (u.status === 'Active'
-              ? '<button type="button" data-act="deactivate" class="px-2.5 py-1 rounded border border-rose-200 bg-rose-50/60 hover:bg-rose-100 text-xs font-semibold text-ncst-crimson shadow-xs cursor-pointer">Deactivate</button>'
-              : '<button type="button" data-act="activate" class="px-2.5 py-1 rounded border border-emerald-200 bg-emerald-50/60 hover:bg-emerald-100 text-xs font-semibold text-emerald-700 shadow-xs cursor-pointer">Activate</button>')}
+              ? '<button type="button" data-act="deactivate" class="px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight/60 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-xs cursor-pointer">Deactivate</button>'
+              : '<button type="button" data-act="activate" class="px-2.5 py-1 rounded border border-ncst-green/30 bg-ncst-greenLight/60 hover:bg-ncst-greenLight text-xs font-semibold text-ncst-greenDark shadow-xs cursor-pointer">Activate</button>')}
           </div>
         </td>`;
       tr.querySelector('[data-act="edit"]').addEventListener('click', () => openModal(u));
@@ -133,12 +133,21 @@
       if (id) {
         await ApiClient.updateUser(Number(id), 'update', payload);
         closeModal();
-        SP.showToast('Staff account updated.');
+        SP.showToast('Staff account updated.', 'success');
       } else {
         payload.username = $('staffUsername').value.trim();
         const res = await ApiClient.createUser(payload);
         closeModal();
-        showTempPassword(res.user.username, res.tempPassword);
+        if (window.SPAlert && typeof SPAlert.tempPassword === 'function') {
+          await SPAlert.tempPassword({
+            title: 'Staff Account Created',
+            username: res.user.username,
+            password: res.tempPassword,
+            subtext: `Temporary password for ${res.user.fullName} (${res.user.username})`
+          });
+        } else {
+          showTempPassword(res.user.username, res.tempPassword);
+        }
       }
       load();
     } catch (err) {
@@ -153,25 +162,52 @@
      Row actions
      ------------------------------------------------------------------------ */
   async function resetPassword(u) {
-    if (!confirm(`Reset the password for ${u.fullName} (${u.username})?\n\nThey will be signed out everywhere and must set a new password at next sign-in.`)) return;
+    const confirmed = window.SPAlert
+      ? await SPAlert.confirm({
+          title: 'Reset Password?',
+          text: `Reset the password for ${u.fullName} (${u.username})? They will be signed out everywhere and must set a new password at next sign-in.`,
+          confirmText: 'Reset Password',
+          icon: 'warning',
+          isDanger: true
+        })
+      : confirm(`Reset the password for ${u.fullName} (${u.username})?\n\nThey will be signed out everywhere and must set a new password at next sign-in.`);
+    if (!confirmed) return;
     try {
       const res = await ApiClient.updateUser(u.id, 'reset_password');
-      showTempPassword(u.username, res.tempPassword);
+      if (window.SPAlert && typeof SPAlert.tempPassword === 'function') {
+        await SPAlert.tempPassword({
+          title: 'Password Reset',
+          username: u.username,
+          password: res.tempPassword,
+          subtext: `Temporary password for ${u.fullName} (${u.username})`
+        });
+      } else {
+        showTempPassword(u.username, res.tempPassword);
+      }
       load();
     } catch (err) {
-      SP.showToast(err.message);
+      SP.showToast(err.message, 'error');
     }
   }
 
   async function setStatus(u, status) {
     const verb = status === 'Active' ? 'Reactivate' : 'Deactivate';
-    if (!confirm(`${verb} the account of ${u.fullName} (${u.username})?`)) return;
+    const confirmed = window.SPAlert
+      ? await SPAlert.confirm({
+          title: `${verb} Account?`,
+          text: `Are you sure you want to ${verb.toLowerCase()} the account of ${u.fullName} (${u.username})?`,
+          confirmText: `${verb} Account`,
+          icon: status === 'Active' ? 'question' : 'warning',
+          isDanger: status !== 'Active'
+        })
+      : confirm(`${verb} the account of ${u.fullName} (${u.username})?`);
+    if (!confirmed) return;
     try {
       await ApiClient.updateUser(u.id, 'set_status', { status });
-      SP.showToast(`${u.username} is now ${status}.`);
+      SP.showToast(`${u.username} is now ${status}.`, 'success');
       load();
     } catch (err) {
-      SP.showToast(err.message);
+      SP.showToast(err.message, 'error');
     }
   }
 

@@ -1,0 +1,143 @@
+# NCST SecurePark — Mobile Gate Security Terminal (Flutter)
+
+A specialized cross-platform mobile application engineered for National College of Science and Technology (NCST) gate security officers. Built on Flutter 3 / Material Design 3, the terminal provides rapid QR gate pass scanning, optical verification against campus databases, multi-driver authorization checks, and immediate synchronization with the campus backend.
+
+---
+
+## 🚀 Key Features
+
+- **High-Performance QR Scanning**: Integrated with `mobile_scanner: ^7.4.2` for zero-latency camera viewfinder scanning, auto-focus, and torch control.
+- **Visual Identity & Verification**:
+  - Displays registered owner and designated authorized drivers (family, spouse, student).
+  - High-resolution driver photo view with base64, network URL, and asset decoding.
+  - Sticker validation year badge and vehicle make/model/color identification.
+- **InfinityFree Challenge Solver**:
+  - Built-in AES decryption engine solving InfinityFree anti-bot JavaScript challenges (`slowAES.decrypt`) automatically on live endpoints.
+- **Offline / Standalone Resilience**:
+  - Robust mock dataset and offline fallbacks when Wi-Fi or cellular networks drop.
+  - Dynamically synthesizes unverified guest passes for unregistered visitor vehicles.
+- **Audit Logging**:
+  - Instantly logs entries and exits (time, guard officer, lane direction, vehicle metadata) to live MySQL database.
+  - Incident reporting modal with customizable hold reasons.
+
+---
+
+## 📂 Architecture & Directory Structure
+
+```
+mobile-app/
+├── android/                   # Native Android configuration (Manifest, Gradle, Proguard)
+├── ios/                       # Native iOS configuration (Runner, Info.plist, Podfile)
+├── assets/
+│   └── images/                # Static assets & test driver photographs
+├── test/                      # Unit, widget, and API communication test suite
+├── lib/
+│   ├── main.dart              # Application entrypoint & theme initialization
+│   ├── theme/
+│   │   └── ncst_theme.dart    # NCST Collegiate theme (Navy, Gold, Crimson, Green, Slate)
+│   ├── models/
+│   │   └── vehicle_model.dart # VehicleRecord, AuthorizedDriver, AuditLogEntry, GateStatus
+│   ├── services/
+│   │   ├── api_service.dart   # HTTP client, InfinityFree challenge solver, image caching
+│   │   └── vehicle_lookup_service.dart # QR payload parser & multi-criteria lookup
+│   ├── repositories/
+│   │   └── gate_repository.dart # Abstracted gate data repository
+│   ├── data/
+│   │   └── mock_data.dart     # Test environment fixtures & fallback datasets
+│   ├── core/
+│   │   ├── constants/         # API endpoints & application metadata
+│   │   ├── utils/             # Date/time formatters
+│   │   └── widgets/           # DriverPhotoView, PlateBadge, StatusBadge
+│   └── features/
+│       ├── dashboard/         # Dashboard screen, KPI statistics, real-time audit logs
+│       └── scanner/           # QR scanner viewfinder, driver switch cards, decision actions
+├── analysis_options.yaml      # Dart static analysis configuration
+├── pubspec.yaml               # Project dependencies and asset declarations
+└── pubspec.lock               # Exact package dependency lockfile
+```
+
+---
+
+## 🛠️ Requirements & Setup
+
+### Prerequisites
+- **Flutter SDK**: `^3.13.3` or later (tested on Flutter 3.27+)
+- **Dart SDK**: `^3.1.0` or later
+- **Android Studio / VS Code** with Flutter & Dart extensions
+- **Android SDK**: API level 21 (Android 5.0 Lollipop) minimum; Target SDK 34 (Android 14)
+
+### Getting Started
+
+1. **Navigate to the directory**:
+   ```bash
+   cd mobile-app
+   ```
+
+2. **Install Flutter dependencies**:
+   ```bash
+   flutter pub get
+   ```
+
+3. **Run static analysis**:
+   ```bash
+   flutter analyze
+   ```
+
+4. **Execute test suite**:
+   ```bash
+   flutter test
+   ```
+
+5. **Run on connected device or emulator**:
+   ```bash
+   flutter run
+   ```
+
+---
+
+## 🌐 API Configuration
+
+API endpoints are configured in `lib/core/constants/api_constants.dart`:
+
+```dart
+class ApiConstants {
+  // Live InfinityFree Endpoint or Local IP
+  static String baseUrl = 'http://ncstparking-test.rf.gd/api';
+  
+  static const String vehiclesEndpoint = '/vehicles.php';
+  static const String logsEndpoint     = '/logs.php';
+  static const String statsEndpoint    = '/stats.php';
+  static const String incidentsEndpoint = '/incidents.php';
+}
+```
+
+To test against a local backend server during development, update `baseUrl` to your machine's LAN IP (e.g., `http://192.168.1.100/api` or `http://10.0.2.2/api` for Android Emulator).
+
+---
+
+## 📦 Building Production Release
+
+### Build Android APK
+```bash
+flutter build apk --release
+```
+The output APK will be located at:
+`build/app/outputs/flutter-apk/app-release.apk`
+
+### Build Android App Bundle (AAB for Google Play)
+```bash
+flutter build appbundle --release
+```
+
+---
+
+## 🎨 Official Brand Identity (NCST Theme)
+
+| Color Name | Hex Code | Purpose |
+| :--- | :--- | :--- |
+| **Academic Navy** | `#1A3B8B` | Primary app bars, active tabs, header branding |
+| **Navy Dark** | `#0F265C` | Deep container backgrounds, contrast accents |
+| **Academic Gold** | `#F5B800` | Secondary accents, sticker year tags, warnings |
+| **Academic Crimson**| `#D92128` | Blocked alerts, hold incident actions, error pips |
+| **Academic Green**  | `#16A34A` | Verified pass indicators, ingress badges |
+| **Slate Neutrals**  | `#F8FAFC` - `#0F172A` | Backgrounds, surface cards, divider borders |

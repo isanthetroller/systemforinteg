@@ -94,7 +94,7 @@ form .btn { margin-top: 16px; }
 }
 .topbar-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .topbar-title { font-weight: 800; font-size: 15px; }
-.topbar-sub { font-size: 12px; color: #C7D2FE; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55vw; }
+.topbar-sub { font-size: 12px; color: rgba(255, 255, 255, 0.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55vw; }
 .content { max-width: 520px; margin: 0 auto; padding: 16px; }
 .tab > * + * { margin-top: 14px; }
 
@@ -172,7 +172,7 @@ form .btn { margin-top: 16px; }
 /* Strikes */
 .meter { display: flex; align-items: center; gap: 8px; }
 .pip { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #CBD5E1; background: #fff; }
-.pip.on { background: #F59E0B; border-color: #D97706; }
+.pip.on { background: var(--gold); border-color: var(--gold-dark); }
 .pip.full { background: var(--crimson); border-color: var(--crimson); }
 .meter-label { font-weight: 800; color: var(--ink); margin-left: 4px; }
 .standing-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }

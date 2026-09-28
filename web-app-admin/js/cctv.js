@@ -89,7 +89,7 @@
         <div class="sp-cctv-vignette"></div>
         <div style="position:absolute;top:8px;left:8px;right:8px;display:flex;flex-direction:column;align-items:flex-start;gap:4px;">
           <div class="sp-cctv-hud" style="position:static;display:flex;align-items:center;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-            <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse mr-2 flex-shrink-0"></span> LIVE - ${camera}
+            <span class="inline-block w-2.5 h-2.5 rounded-full bg-ncst-crimson animate-pulse mr-2 flex-shrink-0"></span> LIVE - ${camera}
           </div>
           <div class="sp-cctv-hud sp-cctv-clock" style="position:static;white-space:nowrap;">${manilaTimestamp()}</div>
         </div>

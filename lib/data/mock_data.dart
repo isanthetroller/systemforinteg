@@ -17,14 +17,60 @@ class MockData {
   // Enabled by default on real devices and emulators; suppressed in test harness
   static bool useNetworkImages = !_isTestEnv;
 
-  /// Dynamic registered vehicles list: Empty in production runtime
-  static List<VehicleRecord> get registeredVehicles => _isTestEnv ? _testVehicles : const [];
+  /// Dynamic registered vehicles list: Uses prototype test dataset as fallback
+  static List<VehicleRecord> get registeredVehicles => _testVehicles;
 
-  /// Initial audit logs: Empty in production runtime
-  static List<AuditLogEntry> getInitialAuditLogs() => <AuditLogEntry>[];
+  /// Initial audit logs for the guard dashboard feed
+  static List<AuditLogEntry> getInitialAuditLogs() {
+    final now = DateTime.now();
+    return [
+      AuditLogEntry(
+        id: 'LOG-101',
+        plateNumber: 'NKM-2024',
+        vehicleType: 'Sedan',
+        ownerName: 'Monares, Kriz',
+        driverName: 'Monares, Kriz',
+        driverRelationship: 'Self (Owner)',
+        timeIn: now.subtract(const Duration(minutes: 18)),
+        status: GateStatus.inside,
+      ),
+      AuditLogEntry(
+        id: 'LOG-102',
+        plateNumber: 'ABC-1234',
+        vehicleType: 'Sedan',
+        ownerName: 'Prof. Roberto D. Reyes',
+        driverName: 'Prof. Roberto D. Reyes',
+        driverRelationship: 'Faculty Member',
+        timeIn: now.subtract(const Duration(minutes: 42)),
+        status: GateStatus.inside,
+      ),
+      AuditLogEntry(
+        id: 'LOG-103',
+        plateNumber: 'NDK-1234',
+        vehicleType: 'Sedan',
+        ownerName: 'Maria Elena Gomez (Visitor)',
+        driverName: 'Maria Elena Gomez',
+        driverRelationship: 'Visitor / Temporary Pass',
+        timeIn: now.subtract(const Duration(hours: 1, minutes: 20)),
+        status: GateStatus.inside,
+      ),
+      AuditLogEntry(
+        id: 'LOG-104',
+        plateNumber: 'WXY-9012',
+        vehicleType: 'Sedan',
+        ownerName: 'Christian Santos',
+        driverName: 'Christian Santos',
+        driverRelationship: 'Student',
+        timeIn: now.subtract(const Duration(hours: 2, minutes: 10)),
+        status: GateStatus.blocked,
+        blockReason: 'Flagged Student: 2nd Parking Strike / Fire Lane',
+      ),
+    ];
+  }
 
-  // Internal test fixtures used strictly by offline unit/widget tests
+  // Internal test fixtures covering Students, Faculty, and Flagged Accounts
   static final List<VehicleRecord> _testVehicles = [
+    // 1. Normal Registered Faculty Member
     VehicleRecord(
       plateNumber: 'ABC-1234',
       vehicleType: 'Sedan',
@@ -34,6 +80,8 @@ class MockData {
       ownerIdNumber: 'NCST-FAC-2021-019',
       qrPassCode: 'NCST-QR-ABC1234',
       ownerPhotoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400',
+      category: CampusUserCategory.employee,
+      isFlagged: false,
       authorizedDrivers: [
         AuthorizedDriver(
           id: 'drv-01',
@@ -51,6 +99,8 @@ class MockData {
         ),
       ],
     ),
+
+    // 2. Normal Registered Student
     VehicleRecord(
       plateNumber: 'NKM-2024',
       vehicleType: 'Sedan',
@@ -60,6 +110,8 @@ class MockData {
       ownerIdNumber: 'NCST-2024-05182',
       qrPassCode: 'NCST-QR-NKM2024',
       ownerPhotoUrl: 'assets/images/kriz_monares.jpg',
+      category: CampusUserCategory.student,
+      isFlagged: false,
       authorizedDrivers: [
         AuthorizedDriver(
           id: 'drv-km-01',
@@ -77,51 +129,81 @@ class MockData {
         ),
       ],
     ),
+
+    // 3. Normal Student (Alternative plate NDK-4821)
     VehicleRecord(
-      plateNumber: 'NCY-8821',
-      vehicleType: 'Motorcycle',
-      makeModelColor: 'Matte Black Yamaha NMAX',
-      ownerName: 'Christian Jay Alcantara',
-      ownerRole: 'Student - BS Information Technology (3rd Year)',
-      ownerIdNumber: 'NCST-2023-04812',
-      qrPassCode: 'NCST-QR-NCY8821',
-      ownerPhotoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400',
+      plateNumber: 'NDK-4821',
+      vehicleType: 'Sedan',
+      makeModelColor: 'White Toyota Vios',
+      ownerName: 'Kriz Monares',
+      ownerRole: 'Student - BS Information Technology',
+      ownerIdNumber: 'NCST-2024-05182',
+      qrPassCode: 'NCST-QR-NDK4821',
+      ownerPhotoUrl: 'assets/images/kriz_monares.jpg',
+      category: CampusUserCategory.student,
+      isFlagged: false,
       authorizedDrivers: [
         AuthorizedDriver(
-          id: 'drv-03',
-          fullName: 'Mark Alcantara',
-          relationship: 'Brother',
-          licenseNo: 'N03-20-449102',
-          photoUrl: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=400',
+          id: 'drv-ndk-01',
+          fullName: 'Kriz Monares',
+          relationship: 'Self (Owner)',
+          licenseNo: 'N01-19-094821',
+          photoUrl: 'assets/images/kriz_monares.jpg',
         ),
       ],
     ),
+
+    // 4. FLAGGED STUDENT (Crucial Requirement: Student flagged for violations)
     VehicleRecord(
-      plateNumber: 'WDX-5901',
-      vehicleType: 'SUV',
-      makeModelColor: 'Silver Mitsubishi Montero',
-      ownerName: 'Dr. Evelyn Santos-Bautista',
-      ownerRole: 'Dean - College of Engineering',
-      ownerIdNumber: 'NCST-ADM-2015-004',
-      qrPassCode: 'NCST-QR-WDX5901',
-      ownerPhotoUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=400',
+      plateNumber: 'WXY-9012',
+      vehicleType: 'Sedan',
+      makeModelColor: 'Midnight Black Honda City',
+      ownerName: 'Christian Santos',
+      ownerRole: 'Student - BS Business Administration (4th Year)',
+      ownerIdNumber: 'NCST-2022-09412',
+      qrPassCode: 'NCST-QR-WXY9012',
+      ownerPhotoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400',
+      category: CampusUserCategory.student,
+      isFlagged: true,
+      flagReason: '2nd Parking Strike: Blocking Campus Emergency Fire Lane',
+      flaggedAt: DateTime(2026, 9, 20),
       authorizedDrivers: [
         AuthorizedDriver(
-          id: 'drv-04',
-          fullName: 'Rolando Bautista',
-          relationship: 'Spouse / Designated Driver',
-          licenseNo: 'N01-15-883912',
+          id: 'drv-wxy-01',
+          fullName: 'Christian Santos',
+          relationship: 'Self (Owner)',
+          licenseNo: 'N02-21-998811',
+          photoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400',
+        ),
+      ],
+    ),
+
+    // 5. FLAGGED EMPLOYEE / FACULTY (Crucial Requirement: Employee flagged status)
+    VehicleRecord(
+      plateNumber: 'DEF-5678',
+      vehicleType: 'SUV',
+      makeModelColor: 'Silver Toyota Fortuner',
+      ownerName: 'Engr. Danilo Ramos',
+      ownerRole: 'Faculty - College of Engineering',
+      ownerIdNumber: 'NCST-FAC-2018-042',
+      qrPassCode: 'NCST-QR-DEF5678',
+      ownerPhotoUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400',
+      category: CampusUserCategory.employee,
+      isFlagged: true,
+      flagReason: 'Security Hold: Expired Campus Parking Decal & Reserved Stall Violation',
+      flaggedAt: DateTime(2026, 9, 15),
+      authorizedDrivers: [
+        AuthorizedDriver(
+          id: 'drv-def-01',
+          fullName: 'Engr. Danilo Ramos',
+          relationship: 'Faculty Member',
+          licenseNo: 'N01-16-778811',
           photoUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400',
         ),
-        AuthorizedDriver(
-          id: 'drv-05',
-          fullName: 'Eunice Bautista',
-          relationship: 'Daughter',
-          licenseNo: 'N02-23-993811',
-          photoUrl: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=400',
-        ),
       ],
     ),
+
+    // 6. Registered Staff & Logistics Van
     VehicleRecord(
       plateNumber: 'TAA-4432',
       vehicleType: 'Van',
@@ -131,6 +213,8 @@ class MockData {
       ownerIdNumber: 'NCST-STAFF-1002',
       qrPassCode: 'NCST-QR-TAA4432',
       ownerPhotoUrl: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=400',
+      category: CampusUserCategory.employee,
+      isFlagged: false,
       authorizedDrivers: [
         AuthorizedDriver(
           id: 'drv-06',
@@ -138,13 +222,6 @@ class MockData {
           relationship: 'Official Campus Driver',
           licenseNo: 'N01-12-384729',
           photoUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=400',
-        ),
-        AuthorizedDriver(
-          id: 'drv-07',
-          fullName: 'Edgar Ramos',
-          relationship: 'Backup Maintenance Driver',
-          licenseNo: 'N01-14-884712',
-          photoUrl: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=400',
         ),
       ],
     ),

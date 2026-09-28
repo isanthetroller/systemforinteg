@@ -33,16 +33,16 @@
 
   function statusBadge(p) {
     let label = p.status, cls = 'bg-slate-100 text-slate-600 border-slate-200';
-    if (p.status === 'Active' && p.isInside) { label = 'Inside'; cls = 'bg-emerald-50 text-emerald-700 border-emerald-200'; }
-    else if (p.status === 'Active') { label = 'Active'; cls = 'bg-blue-50 text-ncst-navy border-blue-200'; }
-    else if (p.status === 'Revoked') cls = 'bg-rose-50 text-ncst-crimson border-rose-200';
-    else if (p.status === 'Expired') cls = 'bg-amber-50 text-amber-800 border-amber-200';
+    if (p.status === 'Active' && p.isInside) { label = 'Inside'; cls = 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'; }
+    else if (p.status === 'Active') { label = 'Active'; cls = 'bg-ncst-navy/10 text-ncst-navy border-ncst-navy/20'; }
+    else if (p.status === 'Revoked') cls = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30';
+    else if (p.status === 'Expired') cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
     return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${cls}">${esc(label)}</span>`;
   }
 
   function itemsInline(items, max = 3) {
     if (!items || !items.length) return '<span class="text-slate-400">—</span>';
-    const shown = items.slice(0, max).map(i => `<span class="inline-block px-1.5 py-0.5 mr-1 mb-1 rounded bg-sky-50 border border-sky-200 text-sky-900 text-[10px] font-semibold">${esc(i.quantity)}&times; ${esc(i.name)}</span>`).join('');
+    const shown = items.slice(0, max).map(i => `<span class="inline-block px-1.5 py-0.5 mr-1 mb-1 rounded bg-ncst-navy/5 border border-ncst-navy/20 text-ncst-navy text-[10px] font-semibold">${esc(i.quantity)}&times; ${esc(i.name)}</span>`).join('');
     return shown + (items.length > max ? `<span class="text-[10px] text-slate-500">+${items.length - max} more</span>` : '');
   }
 
@@ -56,7 +56,7 @@
       <input type="text" maxlength="100" aria-label="Item ${n} name" placeholder="Item (e.g. Monobloc chairs)" class="vp-item-name col-span-5 px-2 py-1.5 rounded border border-slate-300 bg-white text-xs">
       <input type="number" min="1" max="9999" step="1" value="1" aria-label="Item ${n} quantity" class="vp-item-qty col-span-2 px-2 py-1.5 rounded border border-slate-300 bg-white text-xs text-right">
       <input type="text" maxlength="255" aria-label="Item ${n} note" placeholder="Note (optional)" class="vp-item-desc col-span-4 px-2 py-1.5 rounded border border-slate-300 bg-white text-xs">
-      <button type="button" aria-label="Remove item ${n}" class="col-span-1 h-7 rounded text-slate-400 hover:text-ncst-crimson hover:bg-rose-50 text-base leading-none cursor-pointer">&times;</button>`;
+      <button type="button" aria-label="Remove item ${n}" class="col-span-1 h-7 rounded text-slate-400 hover:text-ncst-crimson hover:bg-ncst-crimsonLight text-base leading-none cursor-pointer">&times;</button>`;
     row.querySelector('.vp-item-name').value = item.name || '';
     if (item.quantity) row.querySelector('.vp-item-qty').value = item.quantity;
     row.querySelector('.vp-item-desc').value = item.description || '';
@@ -124,7 +124,7 @@
         <td class="px-4 py-2.5">
           <div class="flex justify-end gap-1.5">
             <button type="button" data-act="card" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">View Pass</button>
-            ${canRevoke ? '<button type="button" data-act="revoke" class="px-2.5 py-1 rounded border border-rose-300 bg-rose-50 hover:bg-rose-100 text-[11px] font-semibold text-ncst-crimson cursor-pointer">Revoke</button>' : ''}
+            ${canRevoke ? '<button type="button" data-act="revoke" class="px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-[11px] font-semibold text-ncst-crimson cursor-pointer">Revoke</button>' : ''}
           </div>
         </td>`;
       tr.querySelector('[data-act="card"]').addEventListener('click', () => openCard(p));
@@ -135,13 +135,22 @@
   }
 
   async function revoke(p) {
-    if (!confirm(`Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})?\n\nThe QR will be rejected at the gate.`)) return;
+    const confirmed = window.SPAlert
+      ? await SPAlert.confirm({
+          title: 'Revoke Day Pass?',
+          text: `Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})? The QR code will be rejected immediately at the gate.`,
+          confirmText: 'Revoke Pass',
+          icon: 'warning',
+          isDanger: true
+        })
+      : confirm(`Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})?\n\nThe QR will be rejected at the gate.`);
+    if (!confirmed) return;
     try {
       const res = await ApiClient.revokeVisitorPass(p.id);
-      SP.showToast(res.message);
+      SP.showToast(res.message, 'success');
       load();
     } catch (err) {
-      SP.showToast(err.message);
+      SP.showToast(err.message, 'error');
     }
   }
 
@@ -197,7 +206,7 @@
           <div class="w-11 h-11 rounded-full bg-ncst-gold text-ncst-navy font-extrabold text-xs flex items-center justify-center border-2 border-white/70 flex-shrink-0">NCST</div>
           <div class="min-w-0">
             <div class="text-[11px] font-bold leading-tight">National College of Science and Technology</div>
-            <div class="text-[10px] text-blue-100">SecurePark &middot; Campus Security Office</div>
+            <div class="text-[10px] text-white/80">SecurePark &middot; Campus Security Office</div>
           </div>
         </div>
         <div class="mt-3 text-center text-sm font-extrabold tracking-[0.18em]">VISITOR DAY PASS</div>
@@ -221,12 +230,12 @@
         <dt class="text-slate-500">Purpose</dt><dd class="col-span-2 text-slate-700">${esc(p.purposeOfVisit)}</dd>
       </dl>
       ${p.items && p.items.length ? `
-      <div class="mx-5 mb-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
-        <div class="text-[10px] font-extrabold tracking-wider text-sky-800">ITEMS BROUGHT IN (${p.items.length})</div>
+      <div class="mx-5 mb-3 rounded-lg border border-ncst-navy/20 bg-ncst-navy/5 px-3 py-2">
+        <div class="text-[10px] font-extrabold tracking-wider text-ncst-navy">ITEMS BROUGHT IN (${p.items.length})</div>
         <ul class="mt-1 space-y-0.5 text-[11px] text-slate-800">
           ${p.items.map(i => `<li class="flex gap-2"><span class="font-mono font-bold w-10 text-right flex-shrink-0">${esc(i.quantity)}&times;</span><span><span class="font-semibold">${esc(i.name)}</span>${i.description ? ` <span class="text-slate-500">(${esc(i.description)})</span>` : ''}</span></li>`).join('')}
         </ul>
-        <div class="mt-1 text-[10px] text-sky-700">Checked by the guard on entry and exit.</div>
+        <div class="mt-1 text-[10px] text-slate-600">Checked by the guard on entry and exit.</div>
       </div>` : ''}
       <div class="bg-slate-50 border-t border-slate-200 px-5 py-2.5 text-[10px] text-slate-500 leading-snug">
         Present this QR at the gate on entry and exit. Not valid on any other date. Questions: NCST Campus Security Office.
@@ -295,7 +304,7 @@
     ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; ctx.font = `700 24px ${sans}`;
     ctx.fillText('National College of Science', 160, 80);
     ctx.fillText('and Technology', 160, 110);
-    ctx.fillStyle = '#C7D2FE'; ctx.font = `500 20px ${sans}`; ctx.fillText('SecurePark · Campus Security Office', 160, 142);
+    ctx.fillStyle = '#E2E8F0'; ctx.font = `500 20px ${sans}`; ctx.fillText('SecurePark · Campus Security Office', 160, 142);
     ctx.fillStyle = '#ffffff'; ctx.font = `800 34px ${sans}`; ctx.textAlign = 'center'; ctx.fillText('V I S I T O R   D A Y   P A S S', W / 2, 200);
 
     // Validity banner
@@ -330,9 +339,9 @@
     if (items.length) {
       const top = y + 6;
       contentEnd = top + itemsBlock - 16;
-      roundRect(ctx, 40, top, W - 80, itemsBlock - 16, 14); ctx.fillStyle = '#F0F9FF'; ctx.fill();
-      ctx.strokeStyle = '#BAE6FD'; ctx.lineWidth = 2; ctx.stroke();
-      ctx.fillStyle = '#075985'; ctx.font = `800 20px ${sans}`; ctx.textAlign = 'left';
+      roundRect(ctx, 40, top, W - 80, itemsBlock - 16, 14); ctx.fillStyle = '#F8FAFC'; ctx.fill();
+      ctx.strokeStyle = '#CBD5E1'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#1B3676'; ctx.font = `800 20px ${sans}`; ctx.textAlign = 'left';
       ctx.fillText(`ITEMS BROUGHT IN (${items.length})`, 64, top + 36);
       items.forEach((it, idx) => {
         const iy = top + 72 + idx * 32;

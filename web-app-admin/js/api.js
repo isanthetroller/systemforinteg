@@ -402,6 +402,20 @@ const ApiClient = (function() {
         body: { id: id, notes: notes }
       });
       return res.data;
+    },
+
+    // System Settings & Pass Rules
+    getSettings: async () => {
+      const res = await request('settings.php');
+      return res.data;
+    },
+
+    updateSettings: async (settings) => {
+      const res = await request('settings.php', {
+        method: 'POST',
+        body: settings
+      });
+      return res.data;
     }
   };
 })();

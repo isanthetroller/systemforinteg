@@ -35,7 +35,7 @@
   function strikeMeter(count, banned) {
     const n = Math.min(Number(count || 0), STRIKE_LIMIT);
     const pips = Array.from({ length: STRIKE_LIMIT }, (_, i) =>
-      `<span class="w-3 h-3 rounded-full border ${i < n ? (banned || n >= STRIKE_LIMIT ? 'bg-ncst-crimson border-ncst-crimson' : 'bg-amber-400 border-amber-500') : 'bg-white border-slate-300'}"></span>`
+      `<span class="w-3 h-3 rounded-full border ${i < n ? (banned || n >= STRIKE_LIMIT ? 'bg-ncst-crimson border-ncst-crimson' : 'bg-ncst-gold border-ncst-goldDark') : 'bg-white border-slate-300'}"></span>`
     ).join('');
     const label = banned ? 'BANNED' : `Strike ${n} of ${STRIKE_LIMIT}`;
     return `<span class="inline-flex items-center gap-1" title="${label}">${pips}<span class="ml-1 text-[10px] font-extrabold ${banned ? 'text-ncst-crimson' : 'text-slate-600'}">${label}</span></span>`;
@@ -44,12 +44,12 @@
   function severityBadge(sev) {
     return sev === 'Violation'
       ? '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-bold">Violation</span>'
-      : '<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold">Warning</span>';
+      : '<span class="px-1.5 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[10px] font-bold">Warning</span>';
   }
 
   function statusBadge(st) {
-    const cls = st === 'Pending' ? 'bg-rose-50 text-ncst-crimson border-rose-200'
-      : st === 'Resolved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    const cls = st === 'Pending' ? 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30'
+      : st === 'Resolved' ? 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'
       : 'bg-slate-100 text-slate-500 border-slate-200';
     return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${cls}">${esc(st)}</span>`;
   }
@@ -166,7 +166,7 @@
     $('resolveNotes').value = '';
     $('resolveSubmitBtn').textContent = titles[target.action];
     $('resolveSubmitBtn').className = 'px-4 py-2 rounded-md text-white text-xs font-bold cursor-pointer disabled:opacity-60 ' +
-      (target.action === 'dismiss' ? 'bg-slate-700 hover:bg-slate-800' : 'bg-emerald-600 hover:bg-emerald-700');
+      (target.action === 'dismiss' ? 'bg-slate-700 hover:bg-slate-800' : 'bg-ncst-green hover:bg-ncst-greenDark');
     setError('resolveError', '');
     showModal('resolveModal');
     setTimeout(() => $('resolveNotes').focus(), 50);
@@ -239,7 +239,7 @@
         <td class="px-4 py-2.5">${statusBadge(r.status)}</td>
         <td class="px-4 py-2.5 admin-only">
           <div class="flex justify-end gap-1.5">
-            ${admin && r.status === 'Pending' && r.severity === 'Violation' ? '<button type="button" data-act="resolve" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer">Resolve</button>' : ''}
+            ${admin && r.status === 'Pending' && r.severity === 'Violation' ? '<button type="button" data-act="resolve" class="px-2.5 py-1 rounded bg-ncst-green hover:bg-ncst-greenDark text-white text-[11px] font-bold cursor-pointer">Resolve</button>' : ''}
             ${admin && r.status === 'Pending' ? '<button type="button" data-act="dismiss" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">Dismiss</button>' : ''}
           </div>
         </td>`;
@@ -275,8 +275,8 @@
         <span class="text-slate-600 flex-1 min-w-[120px] truncate">${esc(v.ownerName || '')}${v.ownerPhone ? ' &middot; ' + esc(v.ownerPhone) : ''}</span>
         ${strikeMeter(v.warningCount, v.isBanned)}
         <div class="flex gap-1.5">
-          <button type="button" data-act="flag" class="px-2.5 py-1 rounded border border-rose-300 bg-white hover:bg-rose-50 text-[11px] font-semibold text-ncst-crimson cursor-pointer">Flag</button>
-          ${admin ? '<button type="button" data-act="reset" class="px-2.5 py-1 rounded border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[11px] font-semibold text-emerald-800 cursor-pointer">Reset Strikes &amp; Lift Suspension</button>' : ''}
+          <button type="button" data-act="flag" class="px-2.5 py-1 rounded border border-ncst-crimson/30 bg-white hover:bg-ncst-crimsonLight text-[11px] font-semibold text-ncst-crimson cursor-pointer">Flag</button>
+          ${admin ? '<button type="button" data-act="reset" class="px-2.5 py-1 rounded border border-ncst-green/30 bg-ncst-greenLight hover:bg-ncst-greenLight/80 text-[11px] font-semibold text-ncst-greenDark cursor-pointer">Reset Strikes &amp; Lift Suspension</button>' : ''}
         </div>`;
       row.querySelector('[data-act="flag"]').addEventListener('click', () => openFlagModal(v));
       const resetBtn = row.querySelector('[data-act="reset"]');

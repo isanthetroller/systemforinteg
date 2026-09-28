@@ -95,16 +95,19 @@ def collect_uploads():
 
 
 def ensure_remote_dir(ftp, remote_dir, created):
-    if remote_dir in created:
-        return
     ftp.cwd('/')
+    current = ''
     for part in [p for p in remote_dir.split('/') if p]:
-        try:
+        current = f"{current}/{part}" if current else part
+        if current not in created:
+            try:
+                ftp.cwd(part)
+            except ftplib.error_perm:
+                ftp.mkd(part)
+                ftp.cwd(part)
+            created.add(current)
+        else:
             ftp.cwd(part)
-        except ftplib.error_perm:
-            ftp.mkd(part)
-            ftp.cwd(part)
-    created.add(remote_dir)
 
 
 def main():

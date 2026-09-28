@@ -35,8 +35,12 @@
   }
 
   let toastTimer = null;
-  function toast(message) {
+  function toast(message, type = null) {
+    if (window.SPAlert && typeof SPAlert.toast === 'function') {
+      return SPAlert.toast(message, type);
+    }
     const el = $('toast');
+    if (!el) return;
     el.textContent = message;
     el.hidden = false;
     clearTimeout(toastTimer);
@@ -119,7 +123,15 @@
     e.preventDefault();
     if (await changePassword('fpCurrent', 'fpNew', 'fpConfirm', 'firstPasswordError', $('firstPasswordBtn'))) {
       await enterApp();
-      toast('Password saved. Welcome to SecurePark!');
+      if (window.SPAlert) {
+        SPAlert.success({
+          title: 'Welcome to SecurePark!',
+          text: 'Your new password has been saved.',
+          timer: 2500
+        });
+      } else {
+        toast('Password saved. Welcome to SecurePark!', 'success');
+      }
     }
   }
 
@@ -129,10 +141,27 @@
     if (await changePassword('pwCurrent', 'pwNew', 'pwConfirm', 'passwordError', $('passwordBtn'))) {
       $('passwordOk').textContent = 'Password updated. Other devices were signed out.';
       $('passwordOk').hidden = false;
+      if (window.SPAlert) {
+        SPAlert.success({
+          title: 'Password Updated',
+          text: 'Your password was updated successfully. All other devices were signed out.',
+          timer: 2500
+        });
+      }
     }
   }
 
   async function logout() {
+    if (window.SPAlert) {
+      const confirmed = await SPAlert.confirm({
+        title: 'Sign Out?',
+        text: 'Are you sure you want to sign out of the Student Portal?',
+        confirmText: 'Sign Out',
+        cancelText: 'Stay Signed In',
+        icon: 'question'
+      });
+      if (!confirmed) return;
+    }
     await StudentApi.logout();
     data.me = null;
     data.vehicles = [];

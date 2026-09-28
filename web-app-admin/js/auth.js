@@ -176,6 +176,16 @@
   }
 
   async function logout() {
+    if (window.SPAlert) {
+      const confirmed = await SPAlert.confirm({
+        title: 'Sign Out?',
+        text: 'Are you sure you want to sign out of SecurePark?',
+        confirmText: 'Sign Out',
+        cancelText: 'Stay Signed In',
+        icon: 'question'
+      });
+      if (!confirmed) return;
+    }
     await ApiClient.logout();
     // A full reload guarantees no data from this session stays in memory
     window.location.reload();

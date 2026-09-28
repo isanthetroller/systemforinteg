@@ -12,8 +12,9 @@
  *   $student = requireStudent($pdo);               // student portal
  */
 
-const SP_MAX_FAILED_LOGINS = 5;
-const SP_LOCKOUT_MINUTES = 15;
+// Failed login attempt limitation disabled
+const SP_MAX_FAILED_LOGINS = 0;
+const SP_LOCKOUT_MINUTES = 0;
 
 /**
  * Reads the raw bearer token from the request headers.
@@ -245,9 +246,9 @@ function passwordPolicyError($password) {
 }
 
 /**
- * Checks a password against an account row with lockout handling.
+ * Checks a password against an account row without failed attempt lockout limitations.
  * $table is 'system_users' or 'student_accounts'. Returns true on success.
- * On failure it records the attempt and ends the request with the proper error.
+ * On failure it returns an invalid credentials error without locking the account.
  */
 function verifyLoginOrFail($pdo, $table, $row, $password) {
     // Constant-ish time: always run one bcrypt check even for unknown users
@@ -257,20 +258,7 @@ function verifyLoginOrFail($pdo, $table, $row, $password) {
         sendResponse(401, ['code' => 'INVALID_CREDENTIALS'], 'Invalid username or password.');
     }
 
-    if (!empty($row['locked_until']) && strtotime($row['locked_until']) > time()) {
-        $until = date('h:i A', strtotime($row['locked_until']));
-        sendResponse(423, ['code' => 'ACCOUNT_LOCKED'], "Too many failed attempts. Try again after {$until}.");
-    }
-
     if (!password_verify($password, $row['password_hash'])) {
-        $attempts = (int)$row['failed_attempts'] + 1;
-        if ($attempts >= SP_MAX_FAILED_LOGINS) {
-            $stmt = $pdo->prepare("UPDATE `{$table}` SET `failed_attempts` = 0, `locked_until` = ? WHERE `id` = ?");
-            $stmt->execute([nowSql(SP_LOCKOUT_MINUTES * 60), $row['id']]);
-            sendResponse(423, ['code' => 'ACCOUNT_LOCKED'], 'Too many failed attempts. Account locked for ' . SP_LOCKOUT_MINUTES . ' minutes.');
-        }
-        $stmt = $pdo->prepare("UPDATE `{$table}` SET `failed_attempts` = ? WHERE `id` = ?");
-        $stmt->execute([$attempts, $row['id']]);
         sendResponse(401, ['code' => 'INVALID_CREDENTIALS'], 'Invalid username or password.');
     }
 

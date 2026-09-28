@@ -21,12 +21,17 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
-        requireStaff($pdo);
+        $isSingle = !empty($_GET['id']) || !empty($_GET['q']);
+        $actor = $isSingle ? requireStaffOrScanner($pdo) : requireStaff($pdo);
         handleListVisitors($pdo);
         break;
     case 'POST':
-        $actor = requireStaff($pdo);
-        handleCreateVisitor($pdo, $actor);
+        $actor = requireStaffOrScanner($pdo);
+        if (isset($_GET['action']) && $_GET['action'] === 'exit') {
+            handleVisitorExit($pdo, $actor);
+        } else {
+            handleCreateVisitor($pdo, $actor);
+        }
         break;
     case 'PUT':
         $admin = requireStaff($pdo, ['admin']);
@@ -77,6 +82,16 @@ function handleListVisitors($pdo) {
     if (!empty($_GET['id'])) {
         $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `id` = ? LIMIT 1");
         $stmt->execute([(int)$_GET['id']]);
+        $row = $stmt->fetch();
+        if (!$row) sendResponse(404, null, 'Visitor pass not found.');
+        sendResponse(200, formatVisitorPass($row));
+    }
+
+    if (!empty($_GET['q'])) {
+        $q = trim((string)$_GET['q']);
+        $norm = normalizePlate($q);
+        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `pass_code` = ? OR `plate_number` = ? OR REPLACE(REPLACE(`plate_number`, '-', ''), ' ', '') = ? ORDER BY `id` DESC LIMIT 1");
+        $stmt->execute([$q, $q, $norm]);
         $row = $stmt->fetch();
         if (!$row) sendResponse(404, null, 'Visitor pass not found.');
         sendResponse(200, formatVisitorPass($row));
@@ -216,3 +231,34 @@ function handleRevokeVisitor($pdo, $admin) {
     $row['status'] = 'Revoked';
     sendResponse(200, formatVisitorPass($row), "Day pass {$row['pass_code']} revoked by " . actorLabel($admin) . '.');
 }
+
+function handleVisitorExit($pdo, $actor) {
+    $data = getJsonInput();
+    $passId = trim((string)($data['passId'] ?? $data['pass_code'] ?? ''));
+    $plate = trim((string)($data['plateNumber'] ?? $data['plate'] ?? ''));
+
+    if ($passId === '' && $plate === '') {
+        sendResponse(400, null, 'Provide passId or plateNumber for visitor checkout.');
+    }
+
+    $norm = normalizePlate($plate);
+    $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `pass_code` = ? OR `plate_number` = ? OR REPLACE(REPLACE(`plate_number`, '-', ''), ' ', '') = ? ORDER BY `id` DESC LIMIT 1");
+    $stmt->execute([$passId, $plate, $norm]);
+    $pass = $stmt->fetch();
+
+    if (!$pass) {
+        sendResponse(404, null, 'Visitor pass not found.');
+    }
+
+    $now = date('Y-m-d H:i:s', spNow());
+    $upd = $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Used' WHERE `id` = ?");
+    $upd->execute([$now, $pass['id']]);
+
+    sendResponse(200, [
+        'passId' => $pass['pass_code'],
+        'plateNumber' => $pass['plate_number'],
+        'exitTime' => $now,
+        'status' => 'Used',
+    ], 'Visitor checkout confirmed.');
+}
+

@@ -39,14 +39,14 @@
   function standing(v) {
     if (v.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">BANNED</span>';
     const n = Math.min(Number(v.warningCount || 0), STRIKE_LIMIT);
-    if (!n) return '<span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">No strikes</span>';
-    return `<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold">STRIKE ${n} OF ${STRIKE_LIMIT}</span>`;
+    if (!n) return '<span class="px-1.5 py-0.5 rounded bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30 text-[10px] font-bold">No strikes</span>';
+    return `<span class="px-1.5 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[10px] font-extrabold">STRIKE ${n} OF ${STRIKE_LIMIT}</span>`;
   }
 
   function timeChip(flag) {
-    if (flag === 'overnight') return '<span class="px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-extrabold">OVERNIGHT</span>';
-    if (flag === 'overtime') return '<span class="px-1.5 py-0.5 rounded bg-amber-400 text-slate-900 text-[10px] font-extrabold">OVERTIME</span>';
-    if (flag === 'overstayed') return '<span class="px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-extrabold">PASS EXPIRED</span>';
+    if (flag === 'overnight') return '<span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">OVERNIGHT</span>';
+    if (flag === 'overtime') return '<span class="px-1.5 py-0.5 rounded bg-ncst-gold text-slate-900 text-[10px] font-extrabold">OVERTIME</span>';
+    if (flag === 'overstayed') return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">PASS EXPIRED</span>';
     return '';
   }
 
@@ -54,7 +54,7 @@
     if (!items || !items.length) return '';
     return `<div class="mt-2 flex flex-wrap items-center gap-1.5">
       <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Items brought in:</span>
-      ${items.map(i => `<span class="px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-900 text-[11px] font-semibold">${esc(i.quantity)}&times; ${esc(i.name)}${i.description ? ` <span class="font-normal text-sky-700">(${esc(i.description)})</span>` : ''}</span>`).join('')}
+      ${items.map(i => `<span class="px-1.5 py-0.5 rounded bg-ncst-navy/5 border border-ncst-navy/20 text-ncst-navy text-[11px] font-semibold">${esc(i.quantity)}&times; ${esc(i.name)}${i.description ? ` <span class="font-normal text-slate-500">(${esc(i.description)})</span>` : ''}</span>`).join('')}
     </div>`;
   }
 
@@ -117,7 +117,7 @@
 
   function vehicleRow(v) {
     const row = document.createElement('div');
-    const accent = v.isBanned ? 'border-l-ncst-crimson' : v.timeFlag === 'overnight' ? 'border-l-indigo-600' : v.timeFlag === 'overtime' ? 'border-l-amber-400' : v.warningCount > 0 ? 'border-l-amber-300' : 'border-l-emerald-500';
+    const accent = v.isBanned ? 'border-l-ncst-crimson' : v.timeFlag === 'overnight' ? 'border-l-ncst-navy' : v.timeFlag === 'overtime' ? 'border-l-ncst-gold' : v.warningCount > 0 ? 'border-l-ncst-gold' : 'border-l-ncst-green';
     row.className = `px-4 py-3 border-l-4 ${accent} hover:bg-slate-50/60`;
     row.innerHTML = `
       <div class="flex flex-wrap items-center gap-2">
@@ -134,7 +134,7 @@
         <div class="truncate md:col-span-2">Admitted by: <span class="text-slate-700">${esc(v.admittedBy || '—')}</span></div>
       </div>
       <div class="mt-2 flex flex-wrap gap-1.5">
-        <button type="button" data-act="flag" class="px-2.5 py-1 rounded bg-ncst-crimson hover:bg-red-700 text-white text-[11px] font-bold cursor-pointer">Flag Violation / Warning</button>
+        <button type="button" data-act="flag" class="px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer">Flag Violation / Warning</button>
         <button type="button" data-act="dossier" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">Open Dossier</button>
       </div>`;
     row.querySelector('[data-act="flag"]').addEventListener('click', () => {
@@ -155,11 +155,11 @@
 
   function visitorRow(p) {
     const row = document.createElement('div');
-    row.className = `px-4 py-3 border-l-4 ${p.overstayed ? 'border-l-indigo-600 bg-indigo-50/30' : 'border-l-sky-400'} hover:bg-slate-50/60`;
+    row.className = `px-4 py-3 border-l-4 ${p.overstayed ? 'border-l-ncst-crimson bg-ncst-crimsonLight/30' : 'border-l-ncst-navy/40'} hover:bg-slate-50/60`;
     row.innerHTML = `
       <div class="flex flex-wrap items-center gap-2">
         <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-sm tracking-wider">${esc(p.plateNumber)}</span>
-        <span class="px-1.5 py-0.5 rounded bg-sky-600 text-white text-[10px] font-extrabold">VISITOR</span>
+        <span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">VISITOR</span>
         <span class="text-xs font-semibold text-slate-700">${esc(p.vehicleModel || '')}</span>
         ${p.overstayed ? timeChip('overstayed') : ''}
         <span class="ml-auto text-[11px] font-bold text-slate-700">Inside ${esc(duration(p.hoursInside))}</span>
@@ -173,7 +173,7 @@
       </div>
       ${itemsHtml(p.items)}
       <div class="mt-2 flex flex-wrap gap-1.5">
-        <button type="button" data-act="report" class="px-2.5 py-1 rounded bg-ncst-crimson hover:bg-red-700 text-white text-[11px] font-bold cursor-pointer">Report Incident</button>
+        <button type="button" data-act="report" class="px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer">Report Incident</button>
         <button type="button" data-act="pass" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">View Pass</button>
       </div>`;
     row.querySelector('[data-act="report"]').addEventListener('click', () => openIncident(p));
