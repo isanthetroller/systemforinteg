@@ -33,7 +33,6 @@ class StatusBadge extends StatelessWidget {
         text = 'EXITED';
         break;
       case GateStatus.inside:
-      default:
         bgColor = NcstColors.greenLight;
         borderColor = NcstColors.green.withValues(alpha: 0.3);
         textColor = NcstColors.green;

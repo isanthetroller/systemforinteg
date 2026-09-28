@@ -74,7 +74,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     }
     try {
       _cameraController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
+        detectionSpeed: DetectionSpeed.normal,
+        detectionTimeoutMs: 150,
         facing: CameraFacing.back,
         formats: const [BarcodeFormat.qrCode],
         autoStart: true,
@@ -363,6 +364,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       if (shouldProceed != true) {
         return;
       }
+      if (!mounted) return;
     }
 
     final newEntry = AuditLogEntry(

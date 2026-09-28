@@ -460,6 +460,7 @@
   async function afterDecision() {
     resetResult();
     if (window.SP && SP.reload) await SP.reload();
+    document.dispatchEvent(new CustomEvent('sp:gate-passage'));
     renderRecent();
   }
 

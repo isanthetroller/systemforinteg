@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
     vehicles: [...INITIAL_DATA.vehicles],
     auditLogs: [...INITIAL_DATA.auditLogs],
     incidents: [...INITIAL_DATA.incidents],
+    visitors: [],
+    onCampus: null,
+    gateFlowTab: 'inside',
     currentView: 'dashboardView',
     vehicleFilter: {
       search: '',
@@ -65,6 +68,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const kpiTotalLogs = document.getElementById('kpiTotalLogs');
   const kpiRegistered = document.getElementById('kpiRegistered');
   const dashboardActivityBody = document.getElementById('dashboardActivityBody');
+
+  // Gate Flow Operations Center
+  const tabCurrentlyInsideBtn = document.getElementById('tabCurrentlyInsideBtn');
+  const tabEntranceBtn = document.getElementById('tabEntranceBtn');
+  const tabExitBtn = document.getElementById('tabExitBtn');
+  const tabCountInside = document.getElementById('tabCountInside');
+  const tabCountEntrance = document.getElementById('tabCountEntrance');
+  const tabCountExit = document.getElementById('tabCountExit');
+  const paneCurrentlyInside = document.getElementById('paneCurrentlyInside');
+  const paneEntrance = document.getElementById('paneEntrance');
+  const paneExit = document.getElementById('paneExit');
+  const currentlyInsideTableBody = document.getElementById('currentlyInsideTableBody');
+  const entranceTableBody = document.getElementById('entranceTableBody');
+  const exitTableBody = document.getElementById('exitTableBody');
+  const gateFlowSubtext = document.getElementById('gateFlowSubtext');
+  const onCampusSidebarCount = document.getElementById('onCampusSidebarCount');
 
   // Dashboard Visualizations & Attention Panel
   const activityTrendHourlyBtn = document.getElementById('activityTrendHourlyBtn');
@@ -356,19 +375,46 @@ document.addEventListener('DOMContentLoaded', () => {
      2. Metrics & Status Updates
      ========================================================================== */
   function updateCounts() {
-    const insideVehicles = state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length;
-    const insideVisitors = (state.visitors || []).filter(v => {
-      const s = (v.status || '').toLowerCase();
-      return (s === 'active' || s.includes('inside')) && !v.exitTime;
-    }).length;
-    const insideCount = insideVehicles + insideVisitors;
+    let insideVehicles = 0;
+    let insideVisitors = 0;
+    let insideCount = 0;
+
+    if (state.onCampus && state.onCampus.counts) {
+      insideVehicles = state.onCampus.counts.registered || 0;
+      insideVisitors = state.onCampus.counts.visitors || 0;
+      insideCount = state.onCampus.counts.total || (insideVehicles + insideVisitors);
+    } else {
+      insideVehicles = state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length;
+      insideVisitors = (state.visitors || []).filter(v => {
+        const s = (v.status || '').toLowerCase();
+        return (s === 'active' || s.includes('inside')) && v.entryTime && !v.exitTime;
+      }).length;
+      insideCount = insideVehicles + insideVisitors;
+    }
+
     const activeIncidents = state.incidents.filter(i => i.status === 'Held').length;
     const blockedCount = activeIncidents > 0 ? activeIncidents : state.vehicles.filter(v => v.status === 'Blocked / Alert').length;
 
+    const entranceLogs = state.auditLogs.filter(l => l.action === 'Entry Recorded' || l.action === 'Entry Denied' || l.gateType === 'Entry' || l.gateType === 'Ingress' || (l.action && l.action.toLowerCase().includes('entry')));
+    const exitLogs = state.auditLogs.filter(l => l.action === 'Exit Approved' || l.action === 'Exit Denied' || l.gateType === 'Exit' || l.gateType === 'Egress' || (l.action && l.action.toLowerCase().includes('exit')));
+
     if (kpiInside) kpiInside.textContent = insideCount;
     if (kpiBlocked) kpiBlocked.textContent = blockedCount;
-    if (kpiTotalLogs) kpiTotalLogs.textContent = state.auditLogs.length;
+    if (kpiTotalLogs) kpiTotalLogs.textContent = entranceLogs.length;
     if (kpiRegistered) kpiRegistered.textContent = state.vehicles.length;
+
+    if (onCampusSidebarCount) onCampusSidebarCount.textContent = insideCount;
+    if (tabCountInside) tabCountInside.textContent = insideCount;
+    if (tabCountEntrance) tabCountEntrance.textContent = entranceLogs.length;
+    if (tabCountExit) {
+      tabCountExit.textContent = exitLogs.length;
+      const hasBlockedExit = exitLogs.some(l => l.action === 'Exit Denied' || (l.notes && l.notes.toLowerCase().includes('exit denied')));
+      if (hasBlockedExit) {
+        tabCountExit.className = "px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
+      } else {
+        tabCountExit.className = "px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200";
+      }
+    }
 
     if (flaggedSidebarCount) {
       flaggedSidebarCount.textContent = activeIncidents;
@@ -548,8 +594,11 @@ document.addEventListener('DOMContentLoaded', () => {
       charts.gateStatus = null;
     }
 
-    const insideCount = state.vehicles.filter(v => v.status === 'Inside Campus').length;
-    const exitedCount = state.vehicles.filter(v => v.status === 'Exited').length;
+    const insideCount = state.onCampus && state.onCampus.counts
+      ? state.onCampus.counts.total
+      : (state.vehicles.filter(v => v.status === 'Inside Campus').length +
+         (state.visitors || []).filter(v => v.entryTime && !v.exitTime && (v.status === 'Active' || (v.status || '').toLowerCase().includes('inside'))).length);
+    const exitedCount = state.vehicles.filter(v => v.status === 'Exited' || v.status === 'Outside').length;
     const activeIncidents = state.incidents.filter(i => i.status === 'Held').length;
     const blockedCount = activeIncidents > 0 ? activeIncidents : state.vehicles.filter(v => v.status === 'Blocked / Alert').length;
 
@@ -662,17 +711,28 @@ document.addEventListener('DOMContentLoaded', () => {
     attentionPanelContent.innerHTML = '';
 
     const activeIncidents = state.incidents.filter(i => i.status === 'Held');
+    const heldPlates = new Set(activeIncidents.map(i => (i.plateNumber || '').replace(/[-\s]/g, '').toUpperCase()));
+
+    // Also include any recent Exit Denied events that don't have an active incident case yet
+    const unheldExitDeniedLogs = state.auditLogs.filter(l => {
+      const isDenied = l.action === 'Exit Denied' || (l.action && l.action.toLowerCase().includes('exit') && l.action.toLowerCase().includes('denied'));
+      if (!isDenied) return false;
+      const norm = (l.plateNumber || '').replace(/[-\s]/g, '').toUpperCase();
+      return norm && !heldPlates.has(norm);
+    });
+
+    const totalAttention = activeIncidents.length + unheldExitDeniedLogs.length;
 
     if (attentionCountBadge) {
-      attentionCountBadge.textContent = `${activeIncidents.length} Active`;
-      if (activeIncidents.length > 0) {
+      attentionCountBadge.textContent = `${totalAttention} Active`;
+      if (totalAttention > 0) {
         attentionCountBadge.className = "text-[10px] px-1.5 py-0.5 rounded font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
         attentionCountBadge.className = "text-[10px] px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-600 border border-slate-200";
       }
     }
 
-    if (activeIncidents.length === 0) {
+    if (totalAttention === 0) {
       attentionPanelContent.innerHTML = `
         <div class="h-full min-h-[110px] flex items-center justify-center p-3 rounded-lg border border-dashed border-slate-200 bg-slate-50/70 text-center">
           <div>
@@ -718,6 +778,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
       attentionPanelContent.appendChild(card);
     });
+
+    unheldExitDeniedLogs.forEach(log => {
+      const card = document.createElement('div');
+      card.className = 'p-2.5 rounded-r-lg border-y border-r border-ncst-crimson/20 border-l-4 border-l-ncst-crimson bg-ncst-crimsonLight/40 hover:bg-ncst-crimsonLight/70 transition-colors';
+
+      card.innerHTML = `
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="font-mono font-bold text-xs bg-white text-slate-900 px-1.5 py-0.5 rounded border border-slate-200 shadow-xs">${escapeHtml(log.plateNumber)}</span>
+            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30">EXIT BLOCKED</span>
+          </div>
+          <span class="text-[11px] font-mono text-slate-500">${escapeHtml(log.timestamp.replace('Today, ', ''))}</span>
+        </div>
+        <div class="text-xs font-semibold text-ncst-crimson mt-1">${escapeHtml(log.notes || 'Exit Denied at gate')}</div>
+        <div class="grid grid-cols-2 gap-2 mt-1 text-[11px] text-slate-600">
+          <div>Operator: <span class="font-medium text-slate-800">${escapeHtml(log.driverName)}</span></div>
+          <div>Owner: <span class="font-medium text-slate-800">${escapeHtml(log.ownerName)}</span></div>
+        </div>
+        <div class="mt-2 flex items-center justify-between pt-1.5 border-t border-ncst-crimson/20">
+          <span class="text-[10px] text-slate-500 font-mono">Held at ${escapeHtml(log.gatePoint)}</span>
+          <button type="button" class="investigate-log-btn text-xs font-bold text-ncst-navy hover:underline">
+            Inspect Gate Hold →
+          </button>
+        </div>
+      `;
+
+      card.querySelector('.investigate-log-btn').addEventListener('click', () => {
+        openAuditDrawer(log);
+      });
+
+      attentionPanelContent.appendChild(card);
+    });
   }
 
   // 3.5 Bind Dashboard Chart Toggles & Links
@@ -743,7 +835,716 @@ document.addEventListener('DOMContentLoaded', () => {
     viewAllIncidentsLink.addEventListener('click', () => switchView('flaggedView'));
   }
 
-  // 3.6 Overall Dashboard Render
+  // 3.6 Dwell & Time Helpers for Gate Operations
+  function formatDwell(hours) {
+    if (hours == null || isNaN(hours)) return '—';
+    if (hours < (1 / 60)) return '< 1 min';
+    const totalMinutes = Math.round(hours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+  }
+
+  function calcDurationBetween(startStr, endStr) {
+    if (!startStr || !endStr) return '—';
+    try {
+      const s = new Date(String(startStr).replace(' ', 'T').replace(' • ', ' ') + '+08:00').getTime();
+      const e = new Date(String(endStr).replace(' ', 'T').replace(' • ', ' ') + '+08:00').getTime();
+      if (isNaN(s) || isNaN(e) || e < s) return '—';
+      const hours = (e - s) / 3600000;
+      return formatDwell(hours);
+    } catch (_) {
+      return '—';
+    }
+  }
+
+  // 3.7 Gate Flow Operations Center Controller
+  function initGateFlowTabs() {
+    if (tabCurrentlyInsideBtn) {
+      tabCurrentlyInsideBtn.addEventListener('click', () => switchGateFlowTab('inside'));
+    }
+    if (tabEntranceBtn) {
+      tabEntranceBtn.addEventListener('click', () => switchGateFlowTab('entrance'));
+    }
+    if (tabExitBtn) {
+      tabExitBtn.addEventListener('click', () => switchGateFlowTab('exit'));
+    }
+  }
+
+  function switchGateFlowTab(tab) {
+    state.gateFlowTab = tab;
+    const tabs = [
+      { id: 'inside', btn: tabCurrentlyInsideBtn, pane: paneCurrentlyInside, subtext: 'Real-time campus custody: Registered vehicles, visitors, and security-held vehicles currently inside campus' },
+      { id: 'entrance', btn: tabEntranceBtn, pane: paneEntrance, subtext: 'Recent gate ingresses: Vehicles and visitors processed at entrance gates' },
+      { id: 'exit', btn: tabExitBtn, pane: paneExit, subtext: 'Recent gate egresses: Departed vehicles, dwell durations, and blocked or flagged exit attempts' }
+    ];
+
+    tabs.forEach(t => {
+      if (!t.btn || !t.pane) return;
+      const isActive = t.id === tab;
+      t.btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      if (isActive) {
+        t.pane.classList.remove('hidden');
+        t.btn.className = 'gate-flow-tab px-3 py-1.5 rounded-md text-xs font-bold transition-all bg-white text-ncst-navy shadow-xs flex items-center gap-1.5';
+        if (gateFlowSubtext) gateFlowSubtext.textContent = t.subtext;
+      } else {
+        t.pane.classList.add('hidden');
+        t.btn.className = 'gate-flow-tab px-3 py-1.5 rounded-md text-xs font-semibold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5';
+      }
+    });
+  }
+
+  // Security Hold & Flagged Status Resolver
+  function getActiveHoldInfo(plate) {
+    if (!plate) return null;
+    const norm = String(plate).replace(/[-\s]/g, '').toUpperCase();
+
+    // 1. Check active security incidents (status === 'Held')
+    const inc = (state.incidents || []).find(i => 
+      i.status === 'Held' && 
+      (i.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm
+    );
+    if (inc) {
+      return {
+        type: 'incident',
+        badge: 'BLOCKED (HELD)',
+        reason: inc.reason || 'Active Security Hold',
+        caseNumber: inc.caseNumber,
+        notes: inc.notes,
+        id: inc.id,
+        officer: inc.officer,
+        reportedAt: inc.timestamp || inc.reportedAt
+      };
+    }
+
+    // 2. Check recent Exit Denied in auditLogs
+    const deniedExit = (state.auditLogs || []).find(l => 
+      (l.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm &&
+      (l.action === 'Exit Denied' || (l.action && l.action.toLowerCase().includes('exit') && l.action.toLowerCase().includes('denied')))
+    );
+    if (deniedExit) {
+      return {
+        type: 'exit_denied',
+        badge: 'EXIT BLOCKED',
+        reason: deniedExit.notes || 'Exit Denied at gate verification',
+        gatePoint: deniedExit.gatePoint,
+        id: deniedExit.id,
+        guard: deniedExit.guardName
+      };
+    }
+
+    // 3. Check vehicle record standing
+    const veh = (state.vehicles || []).find(v => 
+      (v.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm
+    );
+    if (veh) {
+      if (veh.isBanned) {
+        return {
+          type: 'banned',
+          badge: 'BANNED',
+          reason: 'Vehicle banned from campus (3+ strikes)',
+          id: veh.id
+        };
+      }
+      if (veh.status === 'Blocked / Alert') {
+        return {
+          type: 'blocked',
+          badge: 'BLOCKED',
+          reason: 'Flagged on Security Watchlist',
+          id: veh.id
+        };
+      }
+      if (veh.registrationStatus === 'Suspended') {
+        return {
+          type: 'suspended',
+          badge: 'SUSPENDED',
+          reason: 'Registration Suspended',
+          id: veh.id
+        };
+      }
+    }
+
+    return null;
+  }
+
+  // TABLE 1: CURRENTLY INSIDE / PERMITTED ON CAMPUS (Active Physical Custody)
+  function renderCurrentlyInsideTable() {
+    if (!currentlyInsideTableBody) return;
+    currentlyInsideTableBody.innerHTML = '';
+
+    // Collect registered vehicles currently inside
+    let vehiclesInside = [];
+    if (state.onCampus && Array.isArray(state.onCampus.vehicles)) {
+      vehiclesInside = state.onCampus.vehicles;
+    } else {
+      vehiclesInside = state.vehicles
+        .filter(v => (v.status || '').toLowerCase().includes('inside') || v.status === 'Blocked / Alert')
+        .map(v => ({
+          vehicleId: v.id,
+          plateNumber: v.plateNumber,
+          vehicleType: v.vehicleType,
+          makeModelColor: v.makeModelColor,
+          ownerName: v.ownerName,
+          ownerRole: v.ownerRole,
+          department: v.department,
+          ownerPhone: v.ownerPhone,
+          entryTime: v.entryTime,
+          admittedBy: v.admittedBy || 'Officer',
+          entryGate: v.entryGate || v.gatePoint || 'Gate 1',
+          hoursInside: null,
+          status: v.status
+        }));
+    }
+
+    // Collect visitors currently inside (must have entryTime and no exitTime)
+    let visitorsInside = [];
+    if (state.onCampus && Array.isArray(state.onCampus.visitors)) {
+      visitorsInside = state.onCampus.visitors;
+    } else {
+      visitorsInside = (state.visitors || [])
+        .filter(v => v.entryTime && !v.exitTime && (v.status === 'Active' || (v.status || '').toLowerCase().includes('inside')))
+        .map(v => ({
+          passId: v.id,
+          passCode: v.passCode || v.pass_code,
+          plateNumber: v.plateNumber || v.plate,
+          vehicleModel: v.vehicleModel || v.vehicle_model || 'Visitor Vehicle',
+          visitorName: v.visitorName || v.visitor_name,
+          contactNumber: v.contactNumber || v.contact_number,
+          personToVisit: v.personToVisit || v.person_to_visit,
+          purposeOfVisit: v.purposeOfVisit || v.purpose,
+          entryTime: v.entryTime,
+          hoursInside: null
+        }));
+    }
+
+    const totalInside = vehiclesInside.length + visitorsInside.length;
+
+    if (totalInside === 0) {
+      currentlyInsideTableBody.innerHTML = `
+        <tr>
+          <td colspan="9" class="py-10 text-center text-slate-400 text-xs">
+            <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 mb-2 font-bold">✓</div>
+            <div class="font-semibold text-slate-700">No vehicles or visitors currently inside campus</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">All authorized entries have departed through exit gates.</div>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    // Render registered vehicles inside
+    vehiclesInside.forEach(v => {
+      const tr = document.createElement('tr');
+
+      const hold = (v.activeHold && v.activeHold.caseNumber)
+        ? {
+            type: 'incident',
+            badge: 'BLOCKED (HELD)',
+            reason: v.activeHold.reason,
+            caseNumber: v.activeHold.caseNumber,
+            notes: v.activeHold.notes,
+            id: v.activeHold.id
+          }
+        : getActiveHoldInfo(v.plateNumber);
+
+      const isExitBlocked = Boolean(v.exitDenied || (hold && hold.type === 'exit_denied'));
+      const isBlockedOrHeld = Boolean(hold || v.exitDenied || v.isBanned || v.status === 'Blocked / Alert');
+
+      if (isBlockedOrHeld) {
+        tr.className = 'hover:bg-rose-50/70 bg-rose-50/25 border-l-4 border-l-ncst-crimson transition-colors';
+      } else {
+        tr.className = 'hover:bg-slate-50/80 transition-colors';
+      }
+
+      const fullVeh = state.vehicles.find(x => x.plateNumber === v.plateNumber || x.id === v.vehicleId);
+      const studentId = fullVeh ? (fullVeh.ownerIdNumber || fullVeh.owner_id_number || '') : '';
+      const isStudent = (v.ownerRole || '').toLowerCase().includes('student');
+
+      let statusBadge = `
+        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">
+          INSIDE
+        </span>
+      `;
+
+      if (isExitBlocked) {
+        statusBadge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson animate-ping"></span>
+            EXIT BLOCKED (HELD)
+          </span>
+        `;
+      } else if (isBlockedOrHeld) {
+        const badgeText = hold ? hold.badge : 'BLOCKED (HELD)';
+        statusBadge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson"></span>
+            ${escapeHtml(badgeText)}
+          </span>
+        `;
+      }
+
+      const holdAlertSnippet = isBlockedOrHeld ? `
+        <div class="text-[10px] font-bold text-ncst-crimson mt-0.5 flex items-center gap-1">
+          <svg class="w-3 h-3 text-ncst-crimson shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+          <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit attempt intercepted & blocked at gate' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
+            ${escapeHtml(isExitBlocked ? 'Exit intercepted & blocked at gate' : (hold ? hold.reason : 'Security Hold'))}
+          </span>
+        </div>
+      ` : '';
+
+      let dwellBadge = `
+        <span class="font-mono font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-xs">
+          ${formatDwell(v.hoursInside)}
+        </span>
+      `;
+      if (isBlockedOrHeld) {
+        dwellBadge = `
+          <span class="font-mono font-bold text-ncst-crimson bg-ncst-crimsonLight px-1.5 py-0.5 rounded border border-ncst-crimson/30 text-xs">
+            ${formatDwell(v.hoursInside)} <span class="text-[10px] font-extrabold">(HELD)</span>
+          </span>
+        `;
+      }
+
+      let actionBtn = `
+        <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors">
+          Inspect
+        </button>
+      `;
+      if (isBlockedOrHeld) {
+        actionBtn = `
+          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson text-ncst-crimson hover:text-white text-xs font-bold shadow-xs transition-colors" title="Inspect Security Hold">
+            ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'Inspect Hold'}
+          </button>
+        `;
+      }
+
+      tr.innerHTML = `
+        <td class="py-2.5 px-3.5">
+          ${statusBadge}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono font-extrabold text-slate-900">
+          <div>${escapeHtml(v.plateNumber)}</div>
+          ${holdAlertSnippet}
+        </td>
+        <td class="py-2.5 px-3.5">
+          <div class="font-semibold text-slate-900">${escapeHtml(v.ownerName)}</div>
+          <div class="text-[10px] text-slate-500">${escapeHtml(v.department || v.ownerPhone || '')}</div>
+        </td>
+        <td class="py-2.5 px-3.5">
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isStudent ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}">
+            ${escapeHtml(v.ownerRole || 'Registered')}
+          </span>
+          ${studentId ? `<div class="font-mono text-[10px] text-slate-500 mt-0.5">${escapeHtml(studentId)}</div>` : ''}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-700">
+          <div>${escapeHtml(v.vehicleType || 'Vehicle')}</div>
+          <div class="text-[10px] text-slate-400 truncate max-w-[140px]">${escapeHtml(v.makeModelColor || '')}</div>
+        </td>
+        <td class="py-2.5 px-3.5 font-mono text-slate-600 text-xs">
+          ${escapeHtml(v.entryTime ? String(v.entryTime).replace('Today, ', '') : '—')}
+        </td>
+        <td class="py-2.5 px-3.5">
+          ${dwellBadge}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
+          <div>${escapeHtml(v.entryGate || 'Main Ingress')}</div>
+          <div class="text-slate-400">${escapeHtml(v.admittedBy || 'Officer')}</div>
+        </td>
+        <td class="py-2.5 px-3.5 text-right">
+          ${actionBtn}
+        </td>
+      `;
+
+      tr.querySelector('.inspect-inside-btn').addEventListener('click', () => {
+        if (hold && hold.caseNumber) {
+          const incObj = state.incidents.find(i => i.caseNumber === hold.caseNumber || i.id === hold.id);
+          if (incObj) {
+            openIncidentDrawer(incObj);
+            return;
+          }
+        }
+        if (fullVeh) openVehicleDrawer(fullVeh);
+        else openVehicleDrawer(v);
+      });
+
+      currentlyInsideTableBody.appendChild(tr);
+    });
+
+    // Render visitors inside
+    visitorsInside.forEach(vp => {
+      const tr = document.createElement('tr');
+
+      const hold = (vp.activeHold && vp.activeHold.caseNumber)
+        ? {
+            type: 'incident',
+            badge: 'BLOCKED (HELD)',
+            reason: vp.activeHold.reason,
+            caseNumber: vp.activeHold.caseNumber,
+            notes: vp.activeHold.notes,
+            id: vp.activeHold.id
+          }
+        : getActiveHoldInfo(vp.plateNumber);
+
+      const isExitBlocked = Boolean(vp.exitDenied || (hold && hold.type === 'exit_denied'));
+      const isBlockedOrHeld = Boolean(hold || vp.exitDenied);
+
+      if (isBlockedOrHeld) {
+        tr.className = 'hover:bg-rose-50/70 bg-rose-50/25 border-l-4 border-l-ncst-crimson transition-colors';
+      } else {
+        tr.className = 'hover:bg-slate-50/80 transition-colors bg-blue-50/10';
+      }
+
+      let statusBadge = `
+        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">
+          INSIDE
+        </span>
+      `;
+
+      if (isExitBlocked) {
+        statusBadge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson animate-ping"></span>
+            EXIT BLOCKED (HELD)
+          </span>
+        `;
+      } else if (isBlockedOrHeld) {
+        const badgeText = hold ? hold.badge : 'BLOCKED (HELD)';
+        statusBadge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson"></span>
+            ${escapeHtml(badgeText)}
+          </span>
+        `;
+      }
+
+      const holdAlertSnippet = isBlockedOrHeld ? `
+        <div class="text-[10px] font-bold text-ncst-crimson mt-0.5 flex items-center gap-1">
+          <svg class="w-3 h-3 text-ncst-crimson shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+          <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit attempt intercepted & blocked' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
+            ${escapeHtml(isExitBlocked ? 'Exit intercepted & blocked' : (hold ? hold.reason : 'Security Hold'))}
+          </span>
+        </div>
+      ` : '';
+
+      let dwellBadge = `
+        <span class="font-mono font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-xs">
+          ${formatDwell(vp.hoursInside)}
+        </span>
+      `;
+      if (isBlockedOrHeld) {
+        dwellBadge = `
+          <span class="font-mono font-bold text-ncst-crimson bg-ncst-crimsonLight px-1.5 py-0.5 rounded border border-ncst-crimson/30 text-xs">
+            ${formatDwell(vp.hoursInside)} <span class="text-[10px] font-extrabold">(HELD)</span>
+          </span>
+        `;
+      }
+
+      let actionBtn = `
+        <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors">
+          View Pass
+        </button>
+      `;
+      if (isBlockedOrHeld) {
+        actionBtn = `
+          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson text-ncst-crimson hover:text-white text-xs font-bold shadow-xs transition-colors" title="Inspect Security Hold">
+            ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'Inspect Hold'}
+          </button>
+        `;
+      }
+
+      tr.innerHTML = `
+        <td class="py-2.5 px-3.5">
+          ${statusBadge}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono font-extrabold text-slate-900">
+          <div>${escapeHtml(vp.plateNumber)}</div>
+          ${holdAlertSnippet}
+        </td>
+        <td class="py-2.5 px-3.5">
+          <div class="font-semibold text-slate-900">${escapeHtml(vp.visitorName)}</div>
+          <div class="text-[10px] text-slate-500 font-mono">${escapeHtml(vp.contactNumber || '')}</div>
+        </td>
+        <td class="py-2.5 px-3.5">
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20">
+            Visitor Day Pass
+          </span>
+          <div class="font-mono text-[10px] text-slate-500 mt-0.5">${escapeHtml(vp.passCode || '')}</div>
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-700">
+          <div>${escapeHtml(vp.vehicleModel || 'Visitor Vehicle')}</div>
+          <div class="text-[10px] text-slate-400">Visiting: ${escapeHtml(vp.personToVisit || 'Campus')}</div>
+        </td>
+        <td class="py-2.5 px-3.5 font-mono text-slate-600 text-xs">
+          ${escapeHtml(vp.entryTime ? String(vp.entryTime).replace('Today, ', '') : '—')}
+        </td>
+        <td class="py-2.5 px-3.5">
+          ${dwellBadge}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
+          <div>Gate 1 (Visitor)</div>
+          <div class="text-slate-400">Verified Pass</div>
+        </td>
+        <td class="py-2.5 px-3.5 text-right">
+          ${actionBtn}
+        </td>
+      `;
+
+      tr.querySelector('.inspect-inside-btn').addEventListener('click', () => {
+        if (hold && hold.caseNumber) {
+          const incObj = state.incidents.find(i => i.caseNumber === hold.caseNumber || i.id === hold.id);
+          if (incObj) {
+            openIncidentDrawer(incObj);
+            return;
+          }
+        }
+        switchView('visitorsView');
+      });
+
+      currentlyInsideTableBody.appendChild(tr);
+    });
+  }
+
+  // TABLE 2: ENTRANCE / ENTRY TABLE (Recent Gate Ingresses)
+  function renderEntranceTable() {
+    if (!entranceTableBody) return;
+    entranceTableBody.innerHTML = '';
+
+    const entranceLogs = state.auditLogs
+      .filter(l => l.action === 'Entry Recorded' || l.action === 'Entry Denied' || l.gateType === 'Entry' || l.gateType === 'Ingress' || (l.action && l.action.toLowerCase().includes('entry')))
+      .slice(0, 15);
+
+    if (entranceLogs.length === 0) {
+      entranceTableBody.innerHTML = `
+        <tr>
+          <td colspan="9" class="py-10 text-center text-slate-400 text-xs">
+            No entrance passages recorded today.
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    entranceLogs.forEach(log => {
+      const tr = document.createElement('tr');
+      const isDenied = log.action === 'Entry Denied' || (log.action && log.action.toLowerCase().includes('entry') && log.action.toLowerCase().includes('denied'));
+
+      if (isDenied) {
+        tr.className = 'hover:bg-rose-50/60 bg-rose-50/20 border-l-4 border-l-ncst-crimson transition-colors';
+      } else {
+        tr.className = 'hover:bg-slate-50 transition-colors';
+      }
+
+      const fullVeh = state.vehicles.find(x => x.plateNumber === log.plateNumber);
+      const studentId = fullVeh ? (fullVeh.ownerIdNumber || fullVeh.owner_id_number || '') : '';
+      const passInfo = isDenied 
+        ? `<span class="text-ncst-crimson font-semibold text-xs">${escapeHtml(log.notes ? log.notes.split('|')[0] : 'Entry Denied')}</span>`
+        : (fullVeh ? `Pass ${fullVeh.stickerYear || '2026'}` : (log.notes ? log.notes.split('|')[0] : 'Gate Clearance'));
+
+      const statusBadge = isDenied ? `
+        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
+          <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson"></span>
+          ENTRY DENIED
+        </span>
+      ` : `
+        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">
+          INSIDE
+        </span>
+      `;
+
+      tr.innerHTML = `
+        <td class="py-2.5 px-3.5">
+          ${statusBadge}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono font-bold text-slate-900">
+          ${escapeHtml(log.plateNumber)}
+        </td>
+        <td class="py-2.5 px-3.5">
+          <div class="font-semibold text-slate-800">${escapeHtml(log.ownerName)}</div>
+          ${studentId ? `<div class="text-[10px] text-slate-500 font-mono">ID: ${escapeHtml(studentId)}</div>` : ''}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-700">
+          <div>${escapeHtml(log.driverName)}</div>
+          <div class="text-slate-400 text-[10px]">(${escapeHtml(log.driverRelationship || 'Self')})</div>
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-700">
+          ${escapeHtml(log.vehicleType || 'Vehicle')}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-600 text-xs font-mono">
+          ${passInfo}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono text-slate-500 text-xs">
+          ${escapeHtml(log.timestamp.replace('Today, ', ''))}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
+          <div>${escapeHtml(log.gatePoint)}</div>
+          <div class="text-slate-400">${escapeHtml(log.guardName || 'Officer')}</div>
+        </td>
+        <td class="py-2.5 px-3.5 text-right">
+          <button type="button" class="inspect-entrance-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
+            Inspect
+          </button>
+        </td>
+      `;
+
+      tr.querySelector('.inspect-entrance-btn').addEventListener('click', () => {
+        openAuditDrawer(log);
+      });
+
+      entranceTableBody.appendChild(tr);
+    });
+  }
+
+  // TABLE 3: EXIT / OUT TABLE (Recent Gate Egresses with Duration Inside)
+  function renderExitTable() {
+    if (!exitTableBody) return;
+    exitTableBody.innerHTML = '';
+
+    const exitLogs = state.auditLogs
+      .filter(l => l.action === 'Exit Approved' || l.action === 'Exit Denied' || l.gateType === 'Exit' || l.gateType === 'Egress' || (l.action && l.action.toLowerCase().includes('exit')))
+      .slice(0, 15);
+
+    if (exitLogs.length === 0) {
+      exitTableBody.innerHTML = `
+        <tr>
+          <td colspan="9" class="py-10 text-center text-slate-400 text-xs">
+            No exit passages recorded today.
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    exitLogs.forEach(log => {
+      const tr = document.createElement('tr');
+
+      const isExitDenied = log.action === 'Exit Denied' || 
+                           (log.action && log.action.toLowerCase().includes('exit') && log.action.toLowerCase().includes('denied')) || 
+                           (log.notes && log.notes.toLowerCase().includes('exit denied'));
+      const isFlagged = !isExitDenied && (log.notes && (log.notes.toLowerCase().includes('anti-passback') || log.notes.toLowerCase().includes('attention') || log.notes.toLowerCase().includes('warning') || log.notes.toLowerCase().includes('flagged')));
+
+      if (isExitDenied) {
+        tr.className = 'hover:bg-rose-50/60 bg-rose-50/25 border-l-4 border-l-ncst-crimson transition-colors';
+      } else if (isFlagged) {
+        tr.className = 'hover:bg-amber-50/40 bg-amber-50/10 transition-colors';
+      } else {
+        tr.className = 'hover:bg-slate-50 transition-colors';
+      }
+
+      // Find preceding entry log for this vehicle
+      const priorEntry = state.auditLogs.find(l => 
+        l.plateNumber === log.plateNumber && 
+        (l.action === 'Entry Recorded' || l.gateType === 'Entry' || l.gateType === 'Ingress' || (l.action && l.action.toLowerCase().includes('entry'))) && 
+        (Number(l.id) < Number(log.id) || (l.loggedAt && log.loggedAt && l.loggedAt <= log.loggedAt))
+      );
+
+      const entryTimeStr = priorEntry ? priorEntry.timestamp.replace('Today, ', '') : '—';
+      const durationInside = priorEntry 
+        ? calcDurationBetween(priorEntry.loggedAt || priorEntry.timestamp, log.loggedAt || log.timestamp) 
+        : '—';
+
+      let statusBadge = `
+        <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+          OUTSIDE
+        </span>
+      `;
+      let durationBadge = `
+        <span class="font-mono font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 text-xs">
+          ${durationInside}
+        </span>
+      `;
+
+      if (isExitDenied) {
+        statusBadge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson animate-ping"></span>
+            EXIT BLOCKED
+          </span>
+        `;
+        durationBadge = `
+          <span class="font-mono font-bold text-ncst-crimson bg-ncst-crimsonLight px-1.5 py-0.5 rounded border border-ncst-crimson/30 text-xs inline-flex items-center gap-1">
+            ${durationInside} <span class="text-[10px] font-extrabold">(HELD ON CAMPUS)</span>
+          </span>
+        `;
+      } else if (isFlagged) {
+        statusBadge = `
+          <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+            FLAGGED EXIT
+          </span>
+        `;
+        durationBadge = `
+          <span class="font-mono font-bold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 text-xs">
+            ${durationInside}
+          </span>
+        `;
+      }
+
+      const noteSnippet = isExitDenied ? `
+        <div class="text-[10px] font-semibold text-ncst-crimson mt-0.5 flex items-center gap-1 truncate max-w-[180px]" title="${escapeHtml(log.notes || 'Exit intercepted & blocked')}">
+          ⚠️ ${escapeHtml(log.notes || 'Exit Intercepted & Blocked')}
+        </div>
+      ` : (isFlagged ? `
+        <div class="text-[10px] font-medium text-amber-700 mt-0.5 truncate max-w-[180px]" title="${escapeHtml(log.notes || '')}">
+          ${escapeHtml(log.notes || '')}
+        </div>
+      ` : '');
+
+      let actionBtn = `
+        <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
+          Inspect
+        </button>
+      `;
+
+      if (isExitDenied) {
+        actionBtn = `
+          <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson text-ncst-crimson hover:text-white text-xs font-bold shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
+            Inspect Hold
+          </button>
+        `;
+      }
+
+      tr.innerHTML = `
+        <td class="py-2.5 px-3.5">
+          ${statusBadge}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono font-bold text-slate-900">
+          <div>${escapeHtml(log.plateNumber)}</div>
+          ${noteSnippet}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-800">
+          ${escapeHtml(log.ownerName)}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-700">
+          ${escapeHtml(log.vehicleType || 'Vehicle')}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono text-slate-500 text-xs">
+          ${escapeHtml(entryTimeStr)}
+        </td>
+        <td class="py-2.5 px-3.5 font-mono text-slate-900 font-semibold text-xs">
+          ${escapeHtml(log.timestamp.replace('Today, ', ''))}
+        </td>
+        <td class="py-2.5 px-3.5">
+          ${durationBadge}
+        </td>
+        <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
+          <div>${escapeHtml(log.gatePoint)}</div>
+          <div class="text-slate-400">${escapeHtml(log.guardName || 'Officer')}</div>
+        </td>
+        <td class="py-2.5 px-3.5 text-right">
+          ${actionBtn}
+        </td>
+      `;
+
+      tr.querySelector('.inspect-exit-btn').addEventListener('click', () => {
+        openAuditDrawer(log);
+      });
+
+      exitTableBody.appendChild(tr);
+    });
+  }
+
+  // 3.8 Overall Dashboard Render
   function renderDashboard() {
     updateCounts();
     renderActivityTrendChart();
@@ -751,72 +1552,9 @@ document.addEventListener('DOMContentLoaded', () => {
     renderFleetTypesChart();
     renderAttentionPanel();
 
-    if (!dashboardActivityBody) return;
-    dashboardActivityBody.innerHTML = '';
-
-    const recentLogs = state.auditLogs.slice(0, 6);
-
-    if (recentLogs.length === 0) {
-      dashboardActivityBody.innerHTML = `
-        <tr>
-          <td colspan="7" class="py-8 text-center text-slate-400 text-xs">
-            No gate passage records logged today.
-          </td>
-        </tr>
-      `;
-      return;
-    }
-
-    recentLogs.forEach(log => {
-      const tr = document.createElement('tr');
-      tr.className = 'hover:bg-slate-50 transition-colors';
-
-      let statusBadge = 'bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30';
-      let statusText = 'Inside';
-
-      if (log.status === 'Exited') {
-        statusBadge = 'bg-slate-100 text-slate-600 border border-slate-200';
-        statusText = 'Exited';
-      } else if (log.status === 'Blocked / Alert') {
-        statusBadge = 'bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 font-bold';
-        statusText = 'Flagged';
-      }
-
-      tr.innerHTML = `
-        <td class="py-2.5 px-4">
-          <span class="px-2 py-0.5 rounded text-[11px] font-medium ${statusBadge}">
-            ${statusText}
-          </span>
-        </td>
-        <td class="py-2.5 px-4 font-mono font-bold text-slate-900">
-          ${escapeHtml(log.plateNumber)}
-        </td>
-        <td class="py-2.5 px-4 text-slate-700">
-          ${escapeHtml(log.driverName)}
-          <span class="text-slate-400 text-[11px]">(${escapeHtml(log.driverRelationship || 'Self')})</span>
-        </td>
-        <td class="py-2.5 px-4 text-slate-600">
-          ${escapeHtml(log.ownerName)}
-        </td>
-        <td class="py-2.5 px-4 text-slate-600">
-          ${escapeHtml(log.gatePoint)}
-        </td>
-        <td class="py-2.5 px-4 text-right font-mono text-slate-500">
-          ${escapeHtml(log.timestamp.replace('Today, ', ''))}
-        </td>
-        <td class="py-2.5 px-4 text-right">
-          <button type="button" class="inspect-log-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
-            Inspect
-          </button>
-        </td>
-      `;
-
-      tr.querySelector('.inspect-log-btn').addEventListener('click', () => {
-        openAuditDrawer(log);
-      });
-
-      dashboardActivityBody.appendChild(tr);
-    });
+    renderCurrentlyInsideTable();
+    renderEntranceTable();
+    renderExitTable();
   }
 
   /* ==========================================================================
@@ -3615,6 +4353,7 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ==========================================================================
      Initial Boot
      ========================================================================== */
+  initGateFlowTabs();
   renderDashboard();
   renderVehiclesTable();
   renderIncidentsTable();
@@ -3622,31 +4361,36 @@ document.addEventListener('DOMContentLoaded', () => {
   generateQrPass(true);
 
   // Synchronize with InfinityFree MySQL Backend API
-  async function loadInitialDataFromApi() {
+  async function loadInitialDataFromApi(silent = false) {
     if (!window.ApiClient) return;
     try {
-      const [vehicles, logs, incidents, visitors] = await Promise.all([
+      const [vehicles, logs, incidents, visitors, onCampus] = await Promise.all([
         ApiClient.getVehicles().catch(() => null),
         ApiClient.getLogs().catch(() => null),
         ApiClient.getIncidents().catch(() => null),
-        ApiClient.getVisitorPasses().catch(() => null)
+        ApiClient.getVisitorPasses().catch(() => null),
+        ApiClient.getOnCampus().catch(() => null)
       ]);
 
       let hasUpdate = false;
-      if (vehicles && Array.isArray(vehicles) && vehicles.length > 0) {
+      if (vehicles && Array.isArray(vehicles)) {
         state.vehicles = vehicles.map(v => normalizeVehicle(v));
         hasUpdate = true;
       }
-      if (logs && Array.isArray(logs) && logs.length > 0) {
+      if (logs && Array.isArray(logs)) {
         state.auditLogs = logs;
         hasUpdate = true;
       }
-      if (incidents && Array.isArray(incidents) && incidents.length > 0) {
+      if (incidents && Array.isArray(incidents)) {
         state.incidents = incidents;
         hasUpdate = true;
       }
       if (visitors && Array.isArray(visitors)) {
         state.visitors = visitors;
+        hasUpdate = true;
+      }
+      if (onCampus && onCampus.counts) {
+        state.onCampus = onCampus;
         hasUpdate = true;
       }
 
@@ -3656,7 +4400,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderVehiclesTable();
         renderIncidentsTable();
         renderFullAuditTable();
-        console.log('[App] Synchronized state with InfinityFree backend.');
+        if (!silent) console.log('[App] Synchronized state with backend.');
       }
     } catch (err) {
       console.warn('[App] Backend sync note:', err.message);
@@ -3704,10 +4448,22 @@ document.addEventListener('DOMContentLoaded', () => {
     loadInitialDataFromApi();
   }
 
-  // Periodic background refresh every 30 seconds to maintain real-time synchrony
+  // Real-Time Background Synchronization (10 seconds)
   setInterval(() => {
     if (!window.SPAuth || SPAuth.isAuthenticated()) {
-      loadInitialDataFromApi();
+      loadInitialDataFromApi(true);
     }
-  }, 30000);
+  }, 10000);
+
+  // Instant refresh when user returns to window
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && (!window.SPAuth || SPAuth.isAuthenticated())) {
+      loadInitialDataFromApi(true);
+    }
+  });
+
+  // Instant refresh on gate passage events
+  document.addEventListener('sp:gate-passage', () => {
+    loadInitialDataFromApi(true);
+  });
 });

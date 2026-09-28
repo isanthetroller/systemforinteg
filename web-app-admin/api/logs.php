@@ -181,6 +181,24 @@ function handleCreateLog($pdo, $actor) {
         if ($isApproval && !$vehicle && !$visitor) {
             sendResponse(403, ['code' => 'UNREGISTERED'], "Entry refused: {$plateNumber} has no active registration or visitor pass. Please register visitor first.");
         }
+        if ($isApproval) {
+            if ($vehicle && $vehicle['status'] === 'Inside Campus') {
+                $unregisteredOrOutsideNote = 'Anti-Passback: Vehicle re-entered while recorded inside';
+            }
+            if ($visitor && !empty($visitor['entry_time']) && empty($visitor['exit_time'])) {
+                $unregisteredOrOutsideNote = 'Anti-Passback: Visitor re-entered while recorded inside';
+            }
+        }
+    }
+
+    $unregisteredOrOutsideNote = $unregisteredOrOutsideNote ?? '';
+    if ($action === 'Exit Approved') {
+        if ($vehicle && $vehicle['status'] !== 'Inside Campus') {
+            $unregisteredOrOutsideNote = 'Attention: Vehicle was not recorded as inside campus upon egress';
+        }
+        if ($visitor && (empty($visitor['entry_time']) || !empty($visitor['exit_time']))) {
+            $unregisteredOrOutsideNote = 'Attention: Visitor pass had no prior active entry record';
+        }
     }
 
     /* ---- Items carried by a visitor must be checked on entry and exit ---- */
@@ -192,14 +210,18 @@ function handleCreateLog($pdo, $actor) {
                 sendResponse(400, ['code' => 'ITEMS_CHECK_REQUIRED', 'items' => $items],
                     'Check the items declared on this visitor pass before approving.');
             }
-            $itemsNote = ($gateType === 'Ingress' ? 'Items checked in: ' : 'Items checked out: ')
-                . visitorItemsSummary($items);
+            if ($isScanner && empty($data['items_verified'])) {
+                $itemsNote = 'Declared items not checked by mobile scanner: ' . visitorItemsSummary($items);
+            } else {
+                $itemsNote = ($gateType === 'Ingress' ? 'Items checked in: ' : 'Items checked out: ')
+                    . visitorItemsSummary($items);
+            }
         }
     }
 
     /* ---- Write ---------------------------------------------------------- */
     if ($isApproval) {
-        $status = $gateType === 'Egress' ? 'Outside' : 'Inside Campus';
+        $status = $gateType === 'Egress' ? 'Exited' : 'Inside Campus';
     } else {
         $status = $gateType === 'Egress' ? 'Inside Campus' : 'Outside';
     }
@@ -207,6 +229,9 @@ function handleCreateLog($pdo, $actor) {
     $notes = trim((string)($data['notes'] ?? ''));
     if ($itemsNote !== '') {
         $notes = trim($notes . ' | ' . $itemsNote, ' |');
+    }
+    if (!empty($unregisteredOrOutsideNote)) {
+        $notes = trim($notes . ' | ' . $unregisteredOrOutsideNote, ' |');
     }
     if ($isScanner && !empty($data['guardName'])) {
         $notes = trim($notes . ' [Mobile operator: ' . $data['guardName'] . ']');

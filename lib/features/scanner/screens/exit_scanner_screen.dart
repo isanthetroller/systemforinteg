@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/date_time_utils.dart';
@@ -49,13 +50,26 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   VehicleRecord? _verifiedVehicleRecord;
   String? _statusReason;
 
+  // Camera Stabilization State
+  String? _candidateExitQr;
+  DateTime? _candidateExitStartTime;
+  DateTime? _lastSeenExitTime;
+  double _exitStabilizationProgress = 0.0;
+  Timer? _exitStabilizationTicker;
+  bool _isExitStabilizing = false;
+  bool _isExitLocked = false;
+  bool _exitSteadyMode = true;
+  String _exitStatusPrompt = 'Align QR code inside frame';
+  final Duration _stabilizationDuration = const Duration(milliseconds: 900);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     try {
       _cameraController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
+        detectionSpeed: DetectionSpeed.normal,
+        detectionTimeoutMs: 150,
         facing: CameraFacing.back,
         formats: const [BarcodeFormat.qrCode],
         autoStart: true,
@@ -68,6 +82,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _exitStabilizationTicker?.cancel();
     _cameraController?.dispose();
     super.dispose();
   }
@@ -88,16 +103,103 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   }
 
   void _resetScanner() {
+    _exitStabilizationTicker?.cancel();
     setState(() {
       _resultStatus = null;
       _verifiedVisitorPass = null;
       _verifiedVehicleRecord = null;
       _statusReason = null;
       _isVerifying = false;
+      _candidateExitQr = null;
+      _candidateExitStartTime = null;
+      _lastSeenExitTime = null;
+      _exitStabilizationProgress = 0.0;
+      _isExitStabilizing = false;
+      _isExitLocked = false;
+      _exitStatusPrompt = 'Align QR code inside frame';
     });
     try {
       _cameraController?.start();
     } catch (_) {}
+  }
+
+  void _handleExitBarcodeDetect(String raw) {
+    if (_isExitLocked || _isVerifying || _resultStatus != null) return;
+
+    if (!_exitSteadyMode) {
+      _isExitLocked = true;
+      _verifyPass(raw);
+      return;
+    }
+
+    final now = DateTime.now();
+    if (_candidateExitQr != raw) {
+      _candidateExitQr = raw;
+      _candidateExitStartTime = now;
+      _lastSeenExitTime = now;
+      _exitStabilizationProgress = 0.0;
+      _isExitStabilizing = true;
+      _exitStatusPrompt = 'HOLD CAMERA STEADY...';
+      _startExitStabilizationTimer();
+      if (mounted) setState(() {});
+    } else {
+      _lastSeenExitTime = now;
+    }
+  }
+
+  void _startExitStabilizationTimer() {
+    _exitStabilizationTicker?.cancel();
+    final targetMs = _stabilizationDuration.inMilliseconds;
+    const intervalMs = 30;
+
+    _exitStabilizationTicker = Timer.periodic(const Duration(milliseconds: intervalMs), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_candidateExitQr == null || _candidateExitStartTime == null || _lastSeenExitTime == null) {
+        timer.cancel();
+        return;
+      }
+
+      final now = DateTime.now();
+      // Check if camera moved away (no detection heartbeat for > 400ms)
+      if (now.difference(_lastSeenExitTime!).inMilliseconds > 400) {
+        timer.cancel();
+        setState(() {
+          _candidateExitQr = null;
+          _candidateExitStartTime = null;
+          _isExitStabilizing = false;
+          _exitStabilizationProgress = 0.0;
+          _exitStatusPrompt = 'Camera moved • Hold steady to scan';
+        });
+        return;
+      }
+
+      final elapsedMs = now.difference(_candidateExitStartTime!).inMilliseconds;
+      final progress = (elapsedMs / targetMs).clamp(0.0, 1.0);
+
+      if (progress >= 1.0) {
+        timer.cancel();
+        final capturedCode = _candidateExitQr!;
+        setState(() {
+          _exitStabilizationProgress = 1.0;
+          _isExitStabilizing = false;
+          _isExitLocked = true;
+          _exitStatusPrompt = '✓ CAMERA STABILIZED • QR LOCKED';
+        });
+
+        Future.delayed(const Duration(milliseconds: 120), () {
+          if (!mounted) return;
+          _verifyPass(capturedCode);
+        });
+      } else {
+        setState(() {
+          _exitStabilizationProgress = progress;
+          _exitStatusPrompt = 'Hold steady... ${(progress * 100).toInt()}%';
+        });
+      }
+    });
   }
 
   /// Evaluates scanned QR code against the 6 verification criteria
@@ -346,75 +448,273 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   }
 
   Widget _buildCameraViewfinder(bool isCompact) {
-    return Container(
-      height: 200,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: NcstColors.navyLight, width: 2),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          if (!_cameraHasError && _cameraController != null)
-            MobileScanner(
-              controller: _cameraController!,
-              onDetect: (capture) {
-                final barcodes = capture.barcodes;
-                if (barcodes.isNotEmpty) {
-                  final raw = barcodes.first.rawValue;
-                  if (raw != null && raw.isNotEmpty) {
-                    _verifyPass(raw);
-                  }
-                }
-              },
-            )
-          else
-            const Center(
-              child: Icon(Icons.qr_code_scanner, size: 64, color: NcstColors.slate400),
-            ),
+    Color borderColor;
+    if (_isExitLocked) {
+      borderColor = NcstColors.green;
+    } else if (_isExitStabilizing) {
+      borderColor = const Color(0xFF38BDF8);
+    } else {
+      borderColor = NcstColors.navyLight;
+    }
 
-          // Reticle Viewport
-          Container(
-            width: 220,
-            height: 130,
-            decoration: BoxDecoration(
-              border: Border.all(color: NcstColors.gold, width: 2),
-              borderRadius: BorderRadius.circular(8),
+    return Column(
+      children: [
+        Container(
+          height: 205,
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: borderColor,
+              width: _isExitStabilizing || _isExitLocked ? 2.5 : 2.0,
             ),
-            child: const Center(
-              child: Text(
-                'ALIGN PASS QR CODE',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                  letterSpacing: 0.8,
+            boxShadow: _isExitStabilizing
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF38BDF8).withValues(alpha: 0.35),
+                      blurRadius: 12,
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : null,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (!_cameraHasError && _cameraController != null)
+                MobileScanner(
+                  controller: _cameraController!,
+                  onDetect: (capture) {
+                    final barcodes = capture.barcodes;
+                    if (barcodes.isNotEmpty) {
+                      final raw = barcodes.first.rawValue;
+                      if (raw != null && raw.isNotEmpty) {
+                        _handleExitBarcodeDetect(raw);
+                      }
+                    }
+                  },
+                )
+              else
+                const Center(
+                  child: Icon(Icons.qr_code_scanner, size: 64, color: NcstColors.slate400),
+                ),
+
+              // Reticle Viewport
+              Container(
+                width: 220,
+                height: 130,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: _isExitLocked
+                        ? NcstColors.green
+                        : (_isExitStabilizing ? const Color(0xFF38BDF8) : NcstColors.gold),
+                    width: _isExitStabilizing ? 2.5 : 2,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: _isExitStabilizing
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF38BDF8)),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'STABILIZING CAMERA (${(_exitStabilizationProgress * 100).toInt()}%)',
+                              style: const TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ],
+                        )
+                      : (_isExitLocked
+                          ? const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check_circle_rounded, color: NcstColors.green, size: 26),
+                                SizedBox(height: 4),
+                                Text(
+                                  'QR CODE LOCKED',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w900,
+                                    color: NcstColors.green,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : const Text(
+                              'ALIGN PASS QR CODE',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 0.8,
+                              ),
+                            )),
                 ),
               ),
-            ),
-          ),
 
-          if (_isVerifying)
-            Container(
-              color: Colors.black.withValues(alpha: 0.7),
-              child: const Center(
-                child: Column(
+              // Top HUD Banner with prompt & progress
+              Positioned(
+                top: 8,
+                left: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: _isExitLocked
+                        ? NcstColors.green.withValues(alpha: 0.92)
+                        : (_isExitStabilizing
+                            ? const Color(0xFF0369A1).withValues(alpha: 0.92)
+                            : Colors.black.withValues(alpha: 0.65)),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: _isExitLocked
+                          ? Colors.white
+                          : (_isExitStabilizing ? const Color(0xFF38BDF8) : Colors.white24),
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_isExitStabilizing) ...[
+                        const SizedBox(
+                          width: 11,
+                          height: 11,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ] else if (_isExitLocked) ...[
+                        const Icon(Icons.check_circle_rounded, color: Colors.white, size: 13),
+                        const SizedBox(width: 5),
+                      ] else ...[
+                        const Icon(Icons.center_focus_strong, color: Colors.white70, size: 12),
+                        const SizedBox(width: 5),
+                      ],
+                      Flexible(
+                        child: Text(
+                          _exitStatusPrompt,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.3,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Linear Progress Bar at bottom of viewfinder
+              if (_isExitStabilizing)
+                Positioned(
+                  bottom: 12,
+                  left: 24,
+                  right: 24,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: _exitStabilizationProgress,
+                      backgroundColor: Colors.white24,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF38BDF8)),
+                      minHeight: 4,
+                    ),
+                  ),
+                ),
+
+              if (_isVerifying)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.7),
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(color: NcstColors.gold),
+                        SizedBox(height: 10),
+                        Text(
+                          'VERIFYING PASS ON SERVER...',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        // Guard Stabilization Mode Toggle Pill
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _exitSteadyMode = !_exitSteadyMode;
+                  _exitStabilizationTicker?.cancel();
+                  _isExitStabilizing = false;
+                  _candidateExitQr = null;
+                  _candidateExitStartTime = null;
+                  _lastSeenExitTime = null;
+                  _exitStabilizationProgress = 0.0;
+                  _exitStatusPrompt = _exitSteadyMode ? 'Align QR code inside frame' : 'Instant detection active';
+                });
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _exitSteadyMode ? const Color(0xFFE0F2FE) : NcstColors.slate200,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _exitSteadyMode ? const Color(0xFF0284C7) : NcstColors.slate300,
+                  ),
+                ),
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CircularProgressIndicator(color: NcstColors.gold),
-                    SizedBox(height: 10),
+                    Icon(
+                      _exitSteadyMode ? Icons.motion_photos_paused_rounded : Icons.flash_on_rounded,
+                      size: 13,
+                      color: _exitSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate600,
+                    ),
+                    const SizedBox(width: 5),
                     Text(
-                      'VERIFYING PASS ON SERVER...',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white),
+                      _exitSteadyMode ? 'Camera Steady Hold: ON (~0.9s)' : 'Instant Detection: ON',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: _exitSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate700,
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
-        ],
-      ),
+          ],
+        ),
+      ],
     );
   }
 

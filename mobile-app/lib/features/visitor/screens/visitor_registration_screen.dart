@@ -51,6 +51,18 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   Timer? _autoOcrTimer;
   bool _isOcrBusy = false;
 
+  // OCR Camera Stabilization State
+  String? _candidateOcrText;
+  DateTime? _candidateOcrStartTime;
+  DateTime? _lastSeenOcrTime;
+  double _ocrStabilizationProgress = 0.0;
+  Timer? _ocrStabilizationTicker;
+  bool _isOcrStabilizing = false;
+  bool _isOcrLocked = false;
+  bool _ocrSteadyMode = true;
+  String _ocrStatusPrompt = 'Align card/plate inside guide frame';
+  final Duration _ocrStabilizationDuration = const Duration(milliseconds: 1000);
+
   // Scan Processing & Loading State
   bool _isScanningProcessing = false;
   String? _scanningProcessingMessage;
@@ -171,9 +183,9 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
 
   void _startAutoOcrLoop() {
     _autoOcrTimer?.cancel();
-    _autoOcrTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
+    _autoOcrTimer = Timer.periodic(const Duration(milliseconds: 650), (_) {
       if (!mounted) return;
-      if (_isScanningProcessing || _isOcrBusy) return;
+      if (_isScanningProcessing || _isOcrBusy || _isOcrLocked) return;
       if (_activeScanMode == CameraScanMode.vehiclePhoto) return;
       if (_cameraController == null || !_cameraController!.value.isInitialized) return;
 
@@ -187,9 +199,12 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
 
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _autoOcrTimer?.cancel();
+      _ocrStabilizationTicker?.cancel();
       _cameraController?.dispose();
       setState(() {
         _isCameraInitialized = false;
+        _isOcrStabilizing = false;
+        _candidateOcrText = null;
       });
     } else if (state == AppLifecycleState.resumed) {
       _initCamera();
@@ -200,6 +215,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _autoOcrTimer?.cancel();
+    _ocrStabilizationTicker?.cancel();
     _cameraController?.dispose();
     _textRecognizer.close();
     _purposeController.dispose();
@@ -237,7 +253,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   // AUTOMATED OCR SCANNER DATA EXTRACTION
   // -------------------------------------------------------------
   Future<void> _runOcrOnCurrentFrame({bool isUserTriggered = false}) async {
-    if (_isOcrBusy || _isScanningProcessing) return;
+    if (_isOcrBusy || _isScanningProcessing || _isOcrLocked) return;
     if (_cameraController == null || !_cameraController!.value.isInitialized) return;
 
     _isOcrBusy = true;
@@ -256,7 +272,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             name = _extractNameFromIdPayload(rawText);
           }
           if (name.isNotEmpty && name != _visitorName) {
-            await _processIdScan(name);
+            _handleOcrCandidateDetected(name, isId: true, isUserTriggered: isUserTriggered);
             return;
           }
         } else if (_activeScanMode == CameraScanMode.licensePlate) {
@@ -266,7 +282,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             plate = _extractPlateFromPayload(rawText);
           }
           if (plate.isNotEmpty && plate != _licensePlate) {
-            await _processPlateScan(plate);
+            _handleOcrCandidateDetected(plate, isId: false, isUserTriggered: isUserTriggered);
             return;
           }
         }
@@ -301,6 +317,93 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
     }
   }
 
+  void _handleOcrCandidateDetected(String detectedText, {required bool isId, bool isUserTriggered = false}) {
+    if (_isOcrLocked || _isScanningProcessing) return;
+
+    if (!_ocrSteadyMode || isUserTriggered) {
+      _isOcrLocked = true;
+      if (isId) {
+        _processIdScan(detectedText);
+      } else {
+        _processPlateScan(detectedText);
+      }
+      return;
+    }
+
+    final now = DateTime.now();
+    if (_candidateOcrText != detectedText) {
+      _candidateOcrText = detectedText;
+      _candidateOcrStartTime = now;
+      _lastSeenOcrTime = now;
+      _ocrStabilizationProgress = 0.0;
+      _isOcrStabilizing = true;
+      _ocrStatusPrompt = 'HOLD CAMERA STEADY... PLEASE STABILIZE';
+      _startOcrStabilizationTimer(isId: isId);
+      if (mounted) setState(() {});
+    } else {
+      _lastSeenOcrTime = now;
+    }
+  }
+
+  void _startOcrStabilizationTimer({required bool isId}) {
+    _ocrStabilizationTicker?.cancel();
+    final targetMs = _ocrStabilizationDuration.inMilliseconds;
+    const intervalMs = 35;
+
+    _ocrStabilizationTicker = Timer.periodic(const Duration(milliseconds: intervalMs), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_candidateOcrText == null || _candidateOcrStartTime == null || _lastSeenOcrTime == null) {
+        timer.cancel();
+        return;
+      }
+
+      final now = DateTime.now();
+      // Check if camera moved away (no matching text frame for > 1400ms)
+      if (now.difference(_lastSeenOcrTime!).inMilliseconds > 1400) {
+        timer.cancel();
+        setState(() {
+          _candidateOcrText = null;
+          _candidateOcrStartTime = null;
+          _isOcrStabilizing = false;
+          _ocrStabilizationProgress = 0.0;
+          _ocrStatusPrompt = 'Camera moved • Please stabilize camera on ${isId ? "ID" : "Plate"}';
+        });
+        return;
+      }
+
+      final elapsedMs = now.difference(_candidateOcrStartTime!).inMilliseconds;
+      final progress = (elapsedMs / targetMs).clamp(0.0, 1.0);
+
+      if (progress >= 1.0) {
+        timer.cancel();
+        final capturedText = _candidateOcrText!;
+        setState(() {
+          _ocrStabilizationProgress = 1.0;
+          _isOcrStabilizing = false;
+          _isOcrLocked = true;
+          _ocrStatusPrompt = '✓ CAMERA STABILIZED • CAPTURING';
+        });
+
+        Future.delayed(const Duration(milliseconds: 140), () {
+          if (!mounted) return;
+          if (isId) {
+            _processIdScan(capturedText);
+          } else {
+            _processPlateScan(capturedText);
+          }
+        });
+      } else {
+        setState(() {
+          _ocrStabilizationProgress = progress;
+          _ocrStatusPrompt = 'Hold camera steady... ${(progress * 100).toInt()}%';
+        });
+      }
+    });
+  }
+
   Future<void> _processIdScan(String extractedName) async {
     if (_isScanningProcessing) return;
     if (extractedName.trim().isEmpty) return;
@@ -318,6 +421,13 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       _visitorName = extractedName;
       _isScanningProcessing = false;
       _scanningProcessingMessage = null;
+      _candidateOcrText = null;
+      _candidateOcrStartTime = null;
+      _lastSeenOcrTime = null;
+      _isOcrStabilizing = false;
+      _isOcrLocked = false;
+      _ocrStabilizationProgress = 0.0;
+      _ocrStatusPrompt = 'Align card/plate inside guide frame';
       // Auto-advance checklist to vehicle license plate scan!
       _activeScanMode = CameraScanMode.licensePlate;
     });
@@ -420,6 +530,13 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       _licensePlate = extractedPlate;
       _isScanningProcessing = false;
       _scanningProcessingMessage = null;
+      _candidateOcrText = null;
+      _candidateOcrStartTime = null;
+      _lastSeenOcrTime = null;
+      _isOcrStabilizing = false;
+      _isOcrLocked = false;
+      _ocrStabilizationProgress = 0.0;
+      _ocrStatusPrompt = 'Align card/plate inside guide frame';
       // Auto-advance checklist to security photo if photo not yet taken
       if (!_hasCapturedPhoto) {
         _activeScanMode = CameraScanMode.vehiclePhoto;
@@ -954,19 +1071,32 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
 
           // Live Camera Stream Container
           Container(
-            height: 190,
+            height: 195,
             width: double.infinity,
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: _activeScanMode == CameraScanMode.idCard
-                    ? (_visitorName.isNotEmpty ? NcstColors.green : NcstColors.gold)
-                    : (_activeScanMode == CameraScanMode.licensePlate
-                        ? (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.green)
-                        : (_hasCapturedPhoto ? NcstColors.green : NcstColors.navyLight)),
-                width: 2,
+                color: _isOcrLocked
+                    ? NcstColors.green
+                    : (_isOcrStabilizing
+                        ? const Color(0xFF38BDF8)
+                        : (_activeScanMode == CameraScanMode.idCard
+                            ? (_visitorName.isNotEmpty ? NcstColors.green : NcstColors.gold)
+                            : (_activeScanMode == CameraScanMode.licensePlate
+                                ? (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.green)
+                                : (_hasCapturedPhoto ? NcstColors.green : NcstColors.navyLight)))),
+                width: _isOcrStabilizing || _isOcrLocked ? 2.5 : 2,
               ),
+              boxShadow: _isOcrStabilizing
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF38BDF8).withValues(alpha: 0.35),
+                        blurRadius: 10,
+                        spreadRadius: 2,
+                      ),
+                    ]
+                  : null,
             ),
             clipBehavior: Clip.antiAlias,
             child: Stack(
@@ -997,8 +1127,10 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                     height: 135,
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: _visitorName.isNotEmpty ? NcstColors.green : NcstColors.gold,
-                        width: 2,
+                        color: _isOcrLocked
+                            ? NcstColors.green
+                            : (_isOcrStabilizing ? const Color(0xFF38BDF8) : (_visitorName.isNotEmpty ? NcstColors.green : NcstColors.gold)),
+                        width: _isOcrStabilizing ? 2.5 : 2,
                       ),
                       borderRadius: BorderRadius.circular(8),
                     ),
@@ -1010,8 +1142,10 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                     height: 75,
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: _licensePlate.isNotEmpty ? NcstColors.green : NcstColors.green,
-                        width: 2,
+                        color: _isOcrLocked
+                            ? NcstColors.green
+                            : (_isOcrStabilizing ? const Color(0xFF38BDF8) : (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.green)),
+                        width: _isOcrStabilizing ? 2.5 : 2,
                       ),
                       borderRadius: BorderRadius.circular(8),
                     ),
@@ -1048,6 +1182,83 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                     ),
                   ],
                 ],
+
+                // Top HUD Banner with camera stabilization prompt & progress
+                if (_activeScanMode != CameraScanMode.vehiclePhoto)
+                  Positioned(
+                    top: 8,
+                    left: 10,
+                    right: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: _isOcrLocked
+                            ? NcstColors.green.withValues(alpha: 0.92)
+                            : (_isOcrStabilizing
+                                ? const Color(0xFF0369A1).withValues(alpha: 0.92)
+                                : Colors.black.withValues(alpha: 0.65)),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _isOcrLocked
+                              ? Colors.white
+                              : (_isOcrStabilizing ? const Color(0xFF38BDF8) : Colors.white24),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_isOcrStabilizing) ...[
+                            const SizedBox(
+                              width: 11,
+                              height: 11,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ] else if (_isOcrLocked) ...[
+                            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 13),
+                            const SizedBox(width: 5),
+                          ] else ...[
+                            const Icon(Icons.center_focus_strong, color: Colors.white70, size: 12),
+                            const SizedBox(width: 5),
+                          ],
+                          Flexible(
+                            child: Text(
+                              _ocrStatusPrompt,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // Linear Progress Bar at bottom of camera viewfinder
+                if (_isOcrStabilizing)
+                  Positioned(
+                    bottom: 10,
+                    left: 20,
+                    right: 20,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: _ocrStabilizationProgress,
+                        backgroundColor: Colors.white24,
+                        valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF38BDF8)),
+                        minHeight: 4,
+                      ),
+                    ),
+                  ),
 
                 // Loading Animation Overlay when scan is processing
                 if (_isScanningProcessing)
@@ -1091,6 +1302,58 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             ),
           ),
           const SizedBox(height: 8),
+
+          // Camera Stabilization Mode Toggle Pill
+          if (_activeScanMode != CameraScanMode.vehiclePhoto) ...[
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _ocrSteadyMode = !_ocrSteadyMode;
+                  _ocrStabilizationTicker?.cancel();
+                  _isOcrStabilizing = false;
+                  _isOcrLocked = false;
+                  _candidateOcrText = null;
+                  _candidateOcrStartTime = null;
+                  _lastSeenOcrTime = null;
+                  _ocrStabilizationProgress = 0.0;
+                  _ocrStatusPrompt = _ocrSteadyMode
+                      ? 'Align card/plate inside guide frame'
+                      : 'Instant OCR active';
+                });
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _ocrSteadyMode ? const Color(0xFFE0F2FE) : NcstColors.slate200,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _ocrSteadyMode ? const Color(0xFF0284C7) : NcstColors.slate300,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _ocrSteadyMode ? Icons.motion_photos_paused_rounded : Icons.flash_on_rounded,
+                      size: 13,
+                      color: _ocrSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate600,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      _ocrSteadyMode ? 'Camera Steady Hold: ON (~1.0s)' : 'Instant Detection: ON',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: _ocrSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
 
           // Helper label below viewfinder (matching Scan/Entry)
           Text(
@@ -1197,6 +1460,14 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
         onTap: () {
           setState(() {
             _activeScanMode = mode;
+            _ocrStabilizationTicker?.cancel();
+            _isOcrStabilizing = false;
+            _isOcrLocked = false;
+            _candidateOcrText = null;
+            _candidateOcrStartTime = null;
+            _lastSeenOcrTime = null;
+            _ocrStabilizationProgress = 0.0;
+            _ocrStatusPrompt = 'Align card/plate inside guide frame';
           });
         },
         borderRadius: BorderRadius.circular(8),

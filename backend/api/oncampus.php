@@ -25,8 +25,59 @@ $today = date('Y-m-d', $now);
 
 /* ---------- Registered vehicles ---------- */
 $vehicles = [];
-foreach ($pdo->query("SELECT * FROM `vehicles` WHERE `status` = 'Inside Campus' ORDER BY `plate_number`")->fetchAll() as $v) {
+$candidateVehicles = $pdo->query("
+    SELECT * FROM `vehicles` 
+    WHERE `status` IN ('Inside Campus', 'Blocked / Alert') 
+    ORDER BY `plate_number`
+")->fetchAll();
+
+foreach ($candidateVehicles as $v) {
     $entry = lastEntryLog($pdo, $v);
+    if (!$entry) {
+        if ($v['status'] !== 'Inside Campus') {
+            continue;
+        }
+    } else {
+        // If there was an approved exit after the last entry, vehicle is no longer on campus
+        $exitStmt = $pdo->prepare("
+            SELECT `logged_at` FROM `gate_logs` 
+            WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+              AND `action` = 'Exit Approved'
+              AND `logged_at` >= ?
+            LIMIT 1
+        ");
+        $exitStmt->execute([normalizePlate($v['plate_number']), date('Y-m-d H:i:s', $entry['time'])]);
+        if ($exitStmt->fetch()) {
+            continue;
+        }
+    }
+
+    // Check active security hold
+    $holdStmt = $pdo->prepare("
+        SELECT id, case_number, reason, notes, status 
+        FROM `security_incidents` 
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+          AND `status` = 'Held' 
+        ORDER BY id DESC LIMIT 1
+    ");
+    $holdStmt->execute([normalizePlate($v['plate_number'])]);
+    $activeHold = $holdStmt->fetch() ?: null;
+
+    // Check if exit was denied during egress attempt
+    $deniedStmt = $pdo->prepare("
+        SELECT id, action, notes, logged_at 
+        FROM `gate_logs` 
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+          AND `action` = 'Exit Denied' 
+        ORDER BY id DESC LIMIT 1
+    ");
+    $deniedStmt->execute([normalizePlate($v['plate_number'])]);
+    $lastExitDenied = $deniedStmt->fetch() ?: null;
+    $hasExitDenied = false;
+    if ($lastExitDenied && $entry) {
+        $hasExitDenied = strtotime($lastExitDenied['logged_at']) >= $entry['time'];
+    }
+
     $hours = $entry ? round(max(0, $now - $entry['time']) / 3600, 1) : null;
     $overnight = $entry && $entry['time'] < $nightStart && $now >= $nightStart;
     $vehicles[] = [
@@ -47,6 +98,14 @@ foreach ($pdo->query("SELECT * FROM `vehicles` WHERE `status` = 'Inside Campus' 
         'warningCount' => (int)$v['warning_count'],
         'isBanned' => (int)$v['is_banned'] === 1,
         'registrationStatus' => $v['registration_status'],
+        'status' => $v['status'],
+        'activeHold' => $activeHold ? [
+            'id' => (int)$activeHold['id'],
+            'caseNumber' => $activeHold['case_number'],
+            'reason' => $activeHold['reason'],
+            'notes' => $activeHold['notes'],
+        ] : null,
+        'exitDenied' => $hasExitDenied,
     ];
 }
 usort($vehicles, fn($a, $b) => ($b['hoursInside'] ?? -1) <=> ($a['hoursInside'] ?? -1));
@@ -55,6 +114,32 @@ usort($vehicles, fn($a, $b) => ($b['hoursInside'] ?? -1) <=> ($a['hoursInside'] 
 $visitors = [];
 $stmt = $pdo->query("SELECT * FROM `visitor_passes` WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` = 'Active' ORDER BY `entry_time` ASC");
 foreach ($stmt->fetchAll() as $p) {
+    // Check active security hold
+    $holdStmt = $pdo->prepare("
+        SELECT id, case_number, reason, notes, status 
+        FROM `security_incidents` 
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+          AND `status` = 'Held' 
+        ORDER BY id DESC LIMIT 1
+    ");
+    $holdStmt->execute([normalizePlate($p['plate_number'])]);
+    $activeHold = $holdStmt->fetch() ?: null;
+
+    // Check if exit was denied during egress attempt
+    $deniedStmt = $pdo->prepare("
+        SELECT id, action, notes, logged_at 
+        FROM `gate_logs` 
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+          AND `action` = 'Exit Denied' 
+        ORDER BY id DESC LIMIT 1
+    ");
+    $deniedStmt->execute([normalizePlate($p['plate_number'])]);
+    $lastExitDenied = $deniedStmt->fetch() ?: null;
+    $hasExitDenied = false;
+    if ($lastExitDenied && $p['entry_time']) {
+        $hasExitDenied = strtotime($lastExitDenied['logged_at']) >= strtotime($p['entry_time']);
+    }
+
     $entryTs = strtotime($p['entry_time']);
     $visitors[] = [
         'passId' => (int)$p['id'],
@@ -70,6 +155,13 @@ foreach ($stmt->fetchAll() as $p) {
         'entryTime' => $p['entry_time'],
         'hoursInside' => round(max(0, $now - $entryTs) / 3600, 1),
         'items' => visitorPassItems($pdo, $p['id']),
+        'activeHold' => $activeHold ? [
+            'id' => (int)$activeHold['id'],
+            'caseNumber' => $activeHold['case_number'],
+            'reason' => $activeHold['reason'],
+            'notes' => $activeHold['notes'],
+        ] : null,
+        'exitDenied' => $hasExitDenied,
     ];
 }
 
@@ -79,8 +171,9 @@ sendResponse(200, [
         'total' => count($vehicles) + count($visitors),
         'registered' => count($vehicles),
         'visitors' => count($visitors),
-        'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null)) + count(array_filter($visitors, fn($v) => $v['overstayed'])),
+        'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null || !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => $v['overstayed'] || !empty($v['activeHold']) || $v['exitDenied'])),
         'withStrikes' => count(array_filter($vehicles, fn($v) => $v['warningCount'] > 0 || $v['isBanned'])),
+        'blocked' => count(array_filter($vehicles, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])),
     ],
     'vehicles' => $vehicles,
     'visitors' => $visitors,
