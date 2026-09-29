@@ -7,9 +7,8 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const REFRESH_MS = 60 * 1000;
   const STRIKE_LIMIT = 3;
-  const view = { data: null, filter: 'all', timer: null, incidentTarget: null };
+  const view = { data: null, filter: 'all', incidentTarget: null };
 
   const esc = (v) => (window.SP ? SP.escapeHtml(v == null ? '' : String(v)) : String(v == null ? '' : v));
 
@@ -259,12 +258,18 @@
     $('visitorIncidentForm').addEventListener('submit', submitIncident);
     $('visitorIncidentCancelBtn').addEventListener('click', closeIncident);
 
-    // Gate decisions change who is inside: refresh with the rest of the data
-    document.addEventListener('sp:data-loaded', load);
-    SPAuth.whenAuthenticated(() => {
-      load();
-      if (view.timer) clearInterval(view.timer);
-      view.timer = setInterval(load, REFRESH_MS);
+    // Gate decisions change who is inside. app.js refreshes the same list with the rest of the data
+    // (every 30 s, and right after a gate passage), so reuse it instead of asking the server again.
+    document.addEventListener('sp:data-loaded', () => {
+      const shared = SP.state.onCampus;
+      if (shared && shared.counts) {
+        view.data = shared;
+        updateBadge();
+        if ($('onCampusView').classList.contains('active')) render();
+      } else {
+        load();
+      }
     });
+    SPAuth.whenAuthenticated(load);
   });
 })();
