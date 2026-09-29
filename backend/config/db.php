@@ -65,6 +65,7 @@ try {
         PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci, time_zone = '+08:00'"
     ];
     $pdo = new PDO($dsn, $db_user, $db_pass, $options);
+    ensureMysqlSchemaAndBaseline($pdo);
 } catch (PDOException $e) {
     // -------------------------------------------------------------------------
     // Fallback: Resilient Local SQLite Database
@@ -329,6 +330,74 @@ function initializeSqliteSchema($pdo) {
     if (!$guardCheck->fetch()) {
         $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
         $stmt->execute(['guard2', password_hash('password123', PASSWORD_BCRYPT), 'Officer Elena Torres', 'NCST-SEC-02', 'Gate 2 (Main Egress)']);
+    }
+}
+
+/**
+ * Ensures required baseline tables and accounts exist in MySQL
+ */
+function ensureMysqlSchemaAndBaseline($pdo) {
+    try {
+        // Ensure system_settings table exists
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `system_settings` (
+                `setting_key` VARCHAR(64) PRIMARY KEY,
+                `setting_value` VARCHAR(255) NOT NULL,
+                `description` VARCHAR(255) NULL,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM `system_settings` WHERE `setting_key` = 'visitor_pass_validity_hours'");
+        $stmt->execute();
+        if ((int)$stmt->fetchColumn() === 0) {
+            $pdo->prepare("INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`) VALUES ('visitor_pass_validity_hours', '8', 'Validity duration for temporary visitor passes in hours')")->execute();
+        }
+
+        // Ensure system_users table exists
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `system_users` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `username` VARCHAR(50) NOT NULL UNIQUE,
+                `password_hash` VARCHAR(255) NOT NULL,
+                `full_name` VARCHAR(100) NOT NULL,
+                `role` ENUM('admin', 'guard') NOT NULL DEFAULT 'guard',
+                `badge_number` VARCHAR(50) NULL,
+                `gate_assigned` VARCHAR(100) NULL DEFAULT 'Gate 1 (Main Ingress)',
+                `status` ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
+                `last_login` DATETIME NULL,
+                `failed_attempts` INT NOT NULL DEFAULT 0,
+                `locked_until` DATETIME NULL,
+                `must_change_password` TINYINT(1) NOT NULL DEFAULT 0,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        // Clear any previous failed attempts or lockouts
+        $pdo->exec("UPDATE `system_users` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
+        $pdo->exec("UPDATE `system_users` SET `must_change_password` = 0 WHERE `role` = 'guard'");
+
+        // Seed baseline administrator if missing
+        $adminCheck = $pdo->prepare("SELECT `id` FROM `system_users` WHERE `username` = ? LIMIT 1");
+        $adminCheck->execute(['admin']);
+        if (!$adminCheck->fetch()) {
+            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 0)");
+            $stmt->execute(['admin', password_hash('Password123!', PASSWORD_BCRYPT), 'System Administrator', 'NCST-SEC-01']);
+        }
+
+        // Ensure default guard accounts exist
+        $guardCheck = $pdo->prepare("SELECT `id` FROM `system_users` WHERE `username` = ? LIMIT 1");
+        $guardCheck->execute(['guard1']);
+        if (!$guardCheck->fetch()) {
+            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
+            $stmt->execute(['guard1', password_hash('password123', PASSWORD_BCRYPT), 'Officer Ramon Gomez', 'NCST-SEC-01', 'Gate 1 (Main Ingress)']);
+        }
+        $guardCheck->execute(['guard2']);
+        if (!$guardCheck->fetch()) {
+            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
+            $stmt->execute(['guard2', password_hash('password123', PASSWORD_BCRYPT), 'Officer Elena Torres', 'NCST-SEC-02', 'Gate 2 (Main Egress)']);
+        }
+    } catch (Exception $ex) {
+        error_log('[DB] ensureMysqlSchemaAndBaseline notice: ' . $ex->getMessage());
     }
 }
 
