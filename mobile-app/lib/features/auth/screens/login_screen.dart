@@ -88,6 +88,22 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
+      // A temporary password (set by the administrator) must be replaced before the terminal can be used:
+      // until then the server refuses most requests with "password change required".
+      if (user.mustChangePassword) {
+        final changed = await _forcePasswordChange(_passwordController.text.trim());
+        if (!mounted) return;
+        if (!changed) {
+          await AuthService().logout();
+          if (!mounted) return;
+          setState(() {
+            _errorMessage = 'You must choose your own password before using the terminal. Sign in again to set it.';
+            _isLoading = false;
+          });
+          return;
+        }
+      }
+
       // Navigate to shared guard interface with user context
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
@@ -102,6 +118,101 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     }
+  }
+
+  /// Asks the guard to replace the temporary password. Returns true once the server has accepted the new one.
+  Future<bool> _forcePasswordChange(String currentPassword) async {
+    final newController = TextEditingController();
+    final confirmController = TextEditingController();
+    String? error;
+    bool saving = false;
+
+    final changed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Choose a new password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'You signed in with a temporary password. Set your own to continue '
+                '(at least 8 characters, with letters and numbers).',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: newController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'New password'),
+              ),
+              TextField(
+                controller: confirmController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Confirm new password'),
+              ),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    error!,
+                    style: const TextStyle(color: NcstColors.crimson, fontWeight: FontWeight.w600),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('CANCEL'),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final password = newController.text;
+                      if (password.length < 8 ||
+                          !RegExp(r'[A-Za-z]').hasMatch(password) ||
+                          !RegExp(r'\d').hasMatch(password)) {
+                        setDialogState(() => error = 'Use at least 8 characters, with letters and numbers.');
+                        return;
+                      }
+                      if (password == currentPassword) {
+                        setDialogState(() => error = 'The new password must be different from the temporary one.');
+                        return;
+                      }
+                      if (password != confirmController.text) {
+                        setDialogState(() => error = 'The two passwords do not match.');
+                        return;
+                      }
+                      setDialogState(() {
+                        saving = true;
+                        error = null;
+                      });
+                      final problem = await ApiService.changePassword(
+                        currentPassword: currentPassword,
+                        newPassword: password,
+                      );
+                      if (problem == null) {
+                        if (ctx.mounted) Navigator.of(ctx).pop(true);
+                      } else {
+                        setDialogState(() {
+                          saving = false;
+                          error = problem;
+                        });
+                      }
+                    },
+              child: Text(saving ? 'SAVING...' : 'CHANGE PASSWORD'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    newController.dispose();
+    confirmController.dispose();
+    return changed == true;
   }
 
   void _showServerConfigDialog() {

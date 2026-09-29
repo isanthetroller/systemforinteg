@@ -21,6 +21,12 @@ A specialized cross-platform mobile application engineered for National College 
   - Visitor passes can be issued offline: the pass and its QR work on this phone straight away and sync to the server later,
     keeping the same pass code. A pass the server refuses (a registered vehicle's plate, or a duplicate pass for the day) is
     only refused while online; the guard sees the reason.
+  - A refused entry (banned, unregistered) is not kept in the phone's audit list; the guard sees "NOT RECORDED" with the
+    server's reason.
+- **First sign-in**: a guard whose account has a temporary password (set by an administrator) is asked to choose their own
+  before using the terminal.
+- **Visitor pass validity**: a day pass is valid all day on its date (until midnight). A visitor still on campus after
+  midnight is let out at the exit gate, with a note for the guard.
   - Dynamically synthesizes unverified guest passes for unregistered visitor vehicles.
 - **Audit Logging**:
   - Instantly logs entries and exits (time, guard officer, lane direction, vehicle metadata) to live MySQL database.

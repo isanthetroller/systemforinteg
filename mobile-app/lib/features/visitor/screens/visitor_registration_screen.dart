@@ -12,7 +12,6 @@ import '../../../models/user_model.dart';
 import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
-import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
 import 'visitor_pass_confirmation_screen.dart';
 
@@ -907,7 +906,8 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
 
     final now = DateTime.now();
     final passId = _newPassCode(now);
-    final validityHours = LocalCacheService.getVisitorPassValidityHours();
+    // A day pass is valid all day on the day it is issued (until midnight): no hour limit
+    final validUntil = DateTime(now.year, now.month, now.day, 23, 59, 59);
 
     final newPass = VisitorPass(
       passId: passId,
@@ -919,7 +919,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       plateNumber: plateNumber,
       vehiclePhotoUrl: _hasCapturedPhoto ? 'assets/images/kriz_monares.jpg' : null,
       entryTime: now,
-      expiryTime: now.add(Duration(hours: validityHours)), // Dynamic duration fetched from settings
+      expiryTime: validUntil,
       status: VisitorPassStatus.active,
       registeredByGuard: widget.currentGuard.fullName,
       gatePoint: widget.currentGuard.assignedGate,
@@ -971,7 +971,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       action: 'Entry Recorded',
       status: 'Inside Campus',
       guardName: widget.currentGuard.fullName,
-      notes: 'Temporary pass ${registeredPass.passId} generated at gate (valid for $validityHours hrs)$itemsNote',
+      notes: 'Temporary pass ${registeredPass.passId} generated at gate (valid all day today)$itemsNote',
       vehicleType: registeredPass.vehicleModel ?? 'Visitor Vehicle',
       ownerName: registeredPass.visitorName,
     );
@@ -1624,7 +1624,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    'Pass Expiration Policy: Valid for ${LocalCacheService.getVisitorPassValidityHours()} hours from entry (Admin Rule)',
+                    'Pass Validity: valid all day today, until midnight (the pass works with no connection and syncs later)',
                     style: const TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w700,

@@ -14,6 +14,9 @@ class GuardUser {
   final String assignedGate;
   final DateTime loginTime;
 
+  /// True while the account still has a temporary password the guard must replace before using the terminal.
+  final bool mustChangePassword;
+
   const GuardUser({
     required this.id,
     required this.username,
@@ -22,6 +25,7 @@ class GuardUser {
     required this.role,
     required this.assignedGate,
     required this.loginTime,
+    this.mustChangePassword = false,
   });
 
   bool get isEntranceGuard => role == GuardRole.entrance;
@@ -66,6 +70,7 @@ class GuardUser {
       loginTime: json['loginTime'] != null
           ? DateTime.tryParse(json['loginTime'].toString()) ?? DateTime.now()
           : DateTime.now(),
+      mustChangePassword: json['mustChangePassword'] == true,
     );
   }
 }

@@ -116,8 +116,9 @@ local SQLite database first. Requires `SP_DEBUG` (time-travel checks use `?now=`
 | Setting | Purpose |
 |---|---|
 | `SP_QR_SECRET` | HMAC key that signs every QR pass. **Set once and never change in production** — changing it invalidates every issued pass. |
-| `SP_SCANNER_API_KEY` | Device key for the mobile scanner app (`X-Api-Key` header). |
-| `SP_SCANNER_KEY_REQUIRED` | `false` keeps the scanner endpoints (plate / QR lookup, gate log, incident) open to the current mobile app, which does not send the key yet. Set `true` after the app is updated. |
+| `SP_SCANNER_API_KEY` | Device key for the mobile scanner app (`X-Api-Key` header). Build the app with the same value: `flutter build apk --dart-define=SCANNER_API_KEY=<key>` (never commit it). |
+| `SP_OFFLINE_MAX_HOURS` | How old (hours) an event the mobile app recorded offline may be when it syncs (default 24). Older events are refused and stay on the phone. |
+| `SP_SCANNER_KEY_REQUIRED` | **`true` (the default, keep it)**: the scanner endpoints (plate / QR lookup, verify, gate log, incident, sync) need a staff sign-in or the device key. `false` opens them to anyone on the internet and is for local testing only. |
 | `SP_LEGACY_QR_CUTOFF` | Last day old unsigned (pre-v2) passes are accepted with a "reissue" warning. |
 | `SP_CURFEW_TIME`, `SP_OVERTIME_HOURS` | Overnight curfew (default `22:00`) and overtime threshold (default 12 h). |
 | `SP_STAFF_TOKEN_HOURS`, `SP_STUDENT_TOKEN_HOURS` | Session lifetimes (12 h staff, 7 days students). |
@@ -186,9 +187,11 @@ are always allowed (with a hold alert) so vehicles are never trapped on campus.
 
 ## Known limitations & follow-ups
 
-- **Mobile app (not changed in v2)**: still works through the open scanner endpoints. Recommended
-  update: send `X-Api-Key`, call `verify.php` instead of decoding the QR itself, then set
-  `SP_SCANNER_KEY_REQUIRED = true`.
+- **Mobile app**: it sends the device key and calls `verify.php` for every scan, and it syncs offline
+  events (see Offline sync). It does not know about VIP vehicles or about passes scheduled for a later day yet.
+  It cannot be built or tested without the Flutter SDK (run `flutter analyze` and `flutter test` in `mobile-app/`).
+- **Rejected offline events**: an event the server refuses for good (for example older than 24 hours) is kept
+  in the phone's local "rejected" list; there is no screen to review it yet.
 - **No cron on InfinityFree**: the overnight check runs whenever a staff member has the portal open
   (on sign-in and every 10 minutes).
 - **Password resets** are done by an admin (Staff Accounts / "Student Login" in the vehicle dossier);

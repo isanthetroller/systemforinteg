@@ -448,6 +448,21 @@ class ApiService {
     }
   }
 
+  /// Changes the signed-in guard's own password (needed at first sign-in, when the account still has a temporary one).
+  /// Returns null on success, otherwise a message the guard can read.
+  static Future<String?> changePassword({required String currentPassword, required String newPassword}) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.baseUrl}/auth.php?action=change_password');
+      final res = await _post(uri, jsonEncode({'current_password': currentPassword, 'new_password': newPassword}));
+      if (res.statusCode == 200) return null;
+      if (res.statusCode >= 500) return 'No connection to the server. Try again.';
+      return _messageOf(res) ?? 'The password could not be changed (HTTP ${res.statusCode}).';
+    } catch (e) {
+      debugPrint('[ApiService] changePassword note: $e');
+      return 'No connection to the server. Try again.';
+    }
+  }
+
   /// Sends queued offline events to /api/sync.php in one request.
   /// Returns one result per event (`accepted`, `duplicate` or `rejected`), or null when the server
   /// could not be reached or could not process the batch, in which case everything stays queued.
@@ -538,6 +553,10 @@ class ApiService {
     }
     if (outcome == WriteOutcome.refused) {
       debugPrint('[ApiService] Server refused the gate passage for $plateNumber: $lastWriteError');
+      // It was NOT recorded: take our own copy back out, so the guard's list and inside-count do not show a
+      // passage the server never accepted, and let the dashboard reload from the cache.
+      await LocalCacheService.removeLocalLog(localEntry.id);
+      SyncQueueService().lastSyncTimeNotifier.value = DateTime.now();
       return false;
     }
 

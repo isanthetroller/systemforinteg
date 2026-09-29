@@ -109,6 +109,20 @@ void main() {
           await request.response.close();
           return;
         }
+
+        if (request.uri.queryParameters['action'] == 'change_password' && method == 'POST') {
+          final body = jsonDecode(await utf8.decoder.bind(request).join());
+          final newPassword = (body['new_password'] ?? '').toString();
+          if (body['current_password'] == 'temp-pass-1' && newPassword.length >= 8) {
+            request.response.statusCode = HttpStatus.ok;
+            request.response.write(jsonEncode({'status': 'success', 'message': 'Password changed successfully.'}));
+          } else {
+            request.response.statusCode = HttpStatus.badRequest;
+            request.response.write(jsonEncode({'status': 'error', 'message': 'Current password is incorrect.'}));
+          }
+          await request.response.close();
+          return;
+        }
       }
 
       // 2. Vehicles Endpoint: /api/vehicles.php
@@ -642,6 +656,38 @@ void main() {
       expect(await SyncQueueService().processQueue(), isTrue);
       expect(SyncQueueService().pendingCount, equals(0));
       expect(webDbLogs.where((l) => l['plate_number'] == 'RETRY-1').length, equals(1));
+    });
+
+    test('14. An entry the server refuses is taken back out of the phone\'s own audit list', () async {
+      await SyncQueueService().clearQueue();
+      final ok = await ApiService.postGateLog(plateNumber: 'BANNED-1', driverName: 'Banned Driver', action: 'Entry Recorded');
+      expect(ok, isFalse);
+      expect(LocalCacheService.getCachedLogs().any((l) => l.plateNumber == 'BANNED-1'), isFalse);
+      expect(SyncQueueService().pendingCount, equals(0));
+    });
+
+    test('15. An idle sync tick does not flip the status to "syncing"', () async {
+      await SyncQueueService().clearQueue();
+      // First tick with nothing queued does the (due) cache refresh and marks it done
+      expect(await SyncQueueService().processQueue(), isTrue);
+
+      final seen = <SyncStatus>[];
+      void listener() => seen.add(SyncQueueService().status);
+      SyncQueueService().statusNotifier.addListener(listener);
+      expect(await SyncQueueService().processQueue(), isTrue); // nothing queued, refresh not due yet
+      SyncQueueService().statusNotifier.removeListener(listener);
+
+      expect(seen, isEmpty);
+    });
+
+    test('16. A guard on a temporary password can set their own from the phone', () async {
+      final temp = GuardUser.fromJson({'id': 7, 'username': 'guard.new', 'fullName': 'New Guard', 'role': 'guard', 'mustChangePassword': true});
+      expect(temp.mustChangePassword, isTrue);
+      final normal = GuardUser.fromJson({'id': 8, 'username': 'guard.old', 'fullName': 'Old Guard', 'role': 'guard'});
+      expect(normal.mustChangePassword, isFalse);
+
+      expect(await ApiService.changePassword(currentPassword: 'wrong', newPassword: 'Str0ngPass99'), contains('incorrect'));
+      expect(await ApiService.changePassword(currentPassword: 'temp-pass-1', newPassword: 'Str0ngPass99'), isNull);
     });
   });
 }

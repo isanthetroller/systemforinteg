@@ -413,9 +413,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
     widget.onDecision(newEntry);
 
-    // Asynchronously synchronize with InfinityFree MySQL Backend API
+    // Asynchronously synchronize with InfinityFree MySQL Backend API. If the server REFUSES the entry (banned,
+    // unregistered...) it is not recorded anywhere: say so loudly, the guard must not treat it as cleared.
+    final plateForLog = _scannedVehicle!.plateNumber;
     ApiService.postGateLog(
-      plateNumber: _scannedVehicle!.plateNumber,
+      plateNumber: plateForLog,
       driverName: _selectedDriverName,
       driverRelationship: _selectedRelationship,
       gatePoint: 'Gate 1 (Main Ingress)',
@@ -423,7 +425,21 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       status: 'Inside Campus',
       vehicleType: _scannedVehicle!.vehicleType,
       ownerName: _scannedVehicle!.ownerName,
-    );
+    ).then((recorded) {
+      if (recorded) return;
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.crimson,
+          duration: const Duration(seconds: 10),
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'NOT RECORDED: $plateForLog was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
+            'Do not admit this vehicle; contact the security office.',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+        ),
+      );
+    });
 
     messenger.showSnackBar(
       SnackBar(

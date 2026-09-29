@@ -182,6 +182,13 @@ class SyncQueueService {
   /// Returns true when nothing is left in the queue.
   Future<bool> processQueue() async {
     if (_isSyncing) return false;
+
+    // The worker ticks every few seconds: with nothing queued and no refresh due there is nothing to do, and the
+    // status (and anything listening to it) must not flicker to "syncing" for no reason.
+    final nothingQueued = LocalCacheService.getSyncQueue().isEmpty;
+    final refreshDue = DateTime.now().difference(_lastFetch) >= _fetchEvery;
+    if (nothingQueued && !refreshDue) return true;
+
     _isSyncing = true;
     statusNotifier.value = SyncStatus.syncing;
 

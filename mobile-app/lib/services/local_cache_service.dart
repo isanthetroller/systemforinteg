@@ -181,6 +181,17 @@ class LocalCacheService {
     }
   }
 
+  /// Removes one entry from the local audit log (for example a passage the server refused).
+  static Future<void> removeLocalLog(String id) async {
+    try {
+      final current = getCachedLogs();
+      current.removeWhere((l) => l.id == id);
+      await saveLogs(current.map((e) => e.toJson()).toList());
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error removing local log: $e');
+    }
+  }
+
   // ---- 3. Visitor Passes Cache ----
   static Future<void> saveVisitorPasses(List<dynamic> jsonList) async {
     try {

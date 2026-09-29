@@ -10,7 +10,6 @@ import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
-import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../dialogs/manual_qr_dialog.dart';
 
@@ -269,9 +268,11 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       status = ExitVerificationStatus.alreadyUsed;
       reason = 'This pass was already checked out at ${pass.exitTime != null ? DateTimeUtils.formatTime(pass.exitTime!) : 'earlier today'}.';
     } else if (pass.isExpired) {
-      status = ExitVerificationStatus.expired;
-      final validityHours = LocalCacheService.getVisitorPassValidityHours();
-      reason = 'Stay duration exceeded permitted $validityHours-hour limit. Expired at ${DateTimeUtils.formatTime(pass.expiryTime)}.';
+      // A day pass is valid all day on its date; there is no hour limit. A visitor who is still on campus after
+      // midnight must never be trapped, so they are let out, with a note for the guard (the server does the same).
+      status = ExitVerificationStatus.valid;
+      final passDate = pass.expiryTime.toIso8601String().substring(0, 10);
+      reason = 'This pass was valid on $passDate and the visitor is still on campus. Allow the exit and tell the security office.';
     } else {
       status = ExitVerificationStatus.valid;
     }
@@ -282,6 +283,21 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _resultStatus = status;
       _statusReason = reason;
     });
+  }
+
+  /// The server refused to record this exit, so it exists nowhere but on this phone's screen: tell the guard.
+  void _showNotRecorded(String plate) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: NcstColors.crimson,
+        duration: const Duration(seconds: 10),
+        content: Text(
+          'NOT RECORDED: the exit of $plate was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
+          'Tell the security office.',
+        ),
+      ),
+    );
   }
 
   void _evaluateRegisteredVehicle(VehicleRecord vehicle) {
@@ -327,7 +343,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         status: GateStatus.exited,
       );
 
-      await ApiService.postGateLog(
+      final recorded = await ApiService.postGateLog(
         plateNumber: pass.plateNumber,
         driverName: pass.visitorName,
         driverRelationship: 'Visitor / Temporary Pass',
@@ -339,6 +355,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         vehicleType: 'Visitor Vehicle',
         ownerName: pass.visitorName,
       );
+      if (!recorded) _showNotRecorded(pass.plateNumber);
     } else if (_verifiedVehicleRecord != null) {
       final v = _verifiedVehicleRecord!;
       final driver = v.authorizedDrivers.isNotEmpty ? v.authorizedDrivers.first.fullName : v.ownerName;
@@ -357,7 +374,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         blockReason: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : null,
       );
 
-      await ApiService.postGateLog(
+      final recorded = await ApiService.postGateLog(
         plateNumber: v.plateNumber,
         driverName: driver,
         driverRelationship: rel,
@@ -369,6 +386,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         vehicleType: v.vehicleType,
         ownerName: v.ownerName,
       );
+      if (!recorded) _showNotRecorded(v.plateNumber);
     }
 
     if (exitEntry != null) {
