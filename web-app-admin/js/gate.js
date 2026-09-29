@@ -103,6 +103,11 @@
     try {
       // Server decides whether the text is a signed pass, legacy pass, pass code or plate
       gate.result = await ApiClient.verifyPass({ qrCode: value }, gate.mode);
+      if (document.body.classList.contains('role-guard2') && gate.result && gate.result.visitor) {
+        gate.result = null;
+        renderError('Visitor passes cannot be processed at Guard 2 / Gate 2 (Exit). Guard 2 is dedicated to Registered Student/Faculty Vehicle QR Exit scans.');
+        return;
+      }
       autoSelectDriver();
       renderResult();
     } catch (err) {
@@ -568,6 +573,16 @@
     document.querySelectorAll('#gateModeToggle .gate-mode-btn').forEach(btn => {
       btn.addEventListener('click', () => setMode(btn.dataset.mode));
     });
+
+    if (window.SPAuth) {
+      SPAuth.whenAuthenticated(user => {
+        if (user && (user.username === 'guard2' || (user.gateAssigned && (user.gateAssigned.includes('2') || user.gateAssigned.toLowerCase().includes('exit'))))) {
+          setMode('Egress');
+          const ingressBtn = document.querySelector('#gateModeToggle .gate-mode-btn[data-mode="Ingress"]');
+          if (ingressBtn) ingressBtn.classList.add('hidden');
+        }
+      });
+    }
     $('gateManualForm').addEventListener('submit', (e) => {
       e.preventDefault();
       verify($('gateManualInput').value);
