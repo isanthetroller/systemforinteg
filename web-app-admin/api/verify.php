@@ -117,12 +117,14 @@ if ($qrCode !== '') {
                 $result = 'FORGED';
                 $reasonDetail = 'Unsigned (legacy) passes are no longer accepted since ' . SP_LEGACY_QR_CUTOFF . '.';
             } elseif (!legacyPayloadMatches($parsed['json'], $vehicle['qr_pass_code'])) {
-                if (normalizePlate($vehicle['plate_number']) === normalizePlate($claimedPlate)) {
+                if (legacyOwnerMatches($parsed['json'], $vehicle['owner_id_number'])) {
+                    // Same owner, but the sticker is out of date: the server's record wins
                     $result = 'LEGACY';
-                    $reasonDetail = 'Structured pass accepted for registered vehicle.';
+                    $reasonDetail = 'Old pass accepted for the registered owner.';
+                    $warnings[] = 'The details printed on this old pass are out of date. Check the driver against the roster shown here.';
                 } else {
                     $result = 'REVOKED';
-                    $reasonDetail = 'This legacy pass does not match the pass on record (outdated or altered).';
+                    $reasonDetail = 'This legacy pass does not identify the registered owner (altered or not issued by the office).';
                 }
             } else {
                 $result = 'LEGACY';
@@ -170,7 +172,6 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
         $reasonDetail = "No registered vehicle or visitor pass found for plate {$plateInput}.";
     } else {
         $result = 'MANUAL';
-        $warnings[] = 'Manual lookup: no pass was scanned. Verify the driver\'s identity and photo before approving.';
     }
 }
 
@@ -239,6 +240,10 @@ $accepted = in_array($result, $alwaysAccepted, true) || $egressHold;
 
 if ($accepted && $egressHold) {
     $warnings[] = 'HOLD ALERT: exit allowed so the vehicle is not trapped, but ' . lcfirst($reasonDetail ?: 'this pass is not valid') . ' Notify an administrator.';
+}
+
+if ($result === 'MANUAL') {
+    $warnings[] = 'Manual lookup: no pass was scanned. Verify the driver\'s identity and photo before approving.';
 }
 
 $currentlyInside = false;

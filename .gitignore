@@ -51,4 +51,5 @@ app.*.map.json
 # SecurePark secrets and local SQLite fallback data
 **/config/secret.php
 **/config/secret.production.php
-**/data/
+backend/data/
+web-app-admin/data/

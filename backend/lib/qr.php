@@ -110,6 +110,19 @@ function legacyPayloadMatches($scannedJson, $storedPayload) {
     return canonicalJson($stored) === canonicalJson($scannedJson);
 }
 
+/**
+ * A legacy pass is only trusted when it names the vehicle's registered owner ID. Printed stickers
+ * go stale (renamed owner, new model, changed driver list) so the rest of the payload is ignored
+ * and the server's record wins; but JSON that merely names a plate is not a pass.
+ */
+function legacyOwnerMatches($scannedJson, $ownerIdNumber) {
+    if (!is_array($scannedJson)) return false;
+    $claimed = $scannedJson['ownerStudentId'] ?? $scannedJson['owner_id_number'] ?? $scannedJson['ownerIdNumber'] ?? '';
+    $claimed = is_string($claimed) ? strtoupper(trim($claimed)) : '';
+    $actual = strtoupper(trim((string)$ownerIdNumber));
+    return $claimed !== '' && $actual !== '' && hash_equals($actual, $claimed);
+}
+
 function canonicalJson($value) {
     if (is_array($value)) {
         $isList = array_keys($value) === range(0, count($value) - 1);
