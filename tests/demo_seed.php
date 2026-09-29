@@ -144,6 +144,32 @@ addVisitor($pdo, "VP-{$day}-EVT1", 'Eventos Catering Services', '0917 321 0000',
 addVisitor($pdo, "VP-{$day}-DEMO", 'Liza Soberano', '0917 000 1111', 'VIS2026', 'White Nissan Almera',
     'Enrollment inquiry', "Registrar's Office", $today, null, [['Document box', 1, 'transcripts']], $now);
 
+/* ---------- VIP vehicle, scheduled pass, and an offline-issued pass ---------- */
+// The school president's car: inside since this morning. A normal vehicle in that state would be flagged
+// overnight / overtime; a VIP is exempt (and needs no driver check at the gate).
+$pres = addVehicle($pdo, ['plate' => 'PRES 001', 'type' => '4-Wheel (Sedan)', 'category' => 'plated', 'model' => 'Black Toyota Camry',
+    'owner' => 'Dr. Rosa Villanueva', 'role' => 'Faculty', 'dept' => 'Office of the President', 'id' => 'NCST-PRES-001',
+    'phone' => '0917 000 0001', 'email' => null, 'status' => 'Inside Campus'],
+    [['Dr. Rosa Villanueva', 'Self (Owner)', 'N07-10-000001']]);
+$pdo->prepare("UPDATE vehicles SET pass_class = 'VIP', pass_class_by = 'Demo Seed', pass_class_at = ? WHERE id = ?")
+    ->execute([date('Y-m-d H:i:s', $now), $pres['id']]);
+logGate($pdo, 'PRES 001', 'Dr. Rosa Villanueva', 'VIP (driver not checked)', 'VIP (driver not checked)', 'Entry Recorded', max($now - 14 * 3600, $nightStart - 3600));
+$pdo->prepare("UPDATE gate_logs SET notes = 'VIP pass | Verified (VALID)' WHERE plate_number = 'PRES 001'")->execute();
+
+// A pass an administrator scheduled for a later day: shown under "Upcoming", refused as "not yet valid" until then
+$later = date('Y-m-d', strtotime('+2 days', $now));
+addVisitor($pdo, 'VP-' . str_replace('-', '', $later) . '-SCH1', 'Accreditation Team (PAASCU)', '0917 555 0303', 'ACC2030', 'Silver Toyota Innova',
+    'Accreditation visit', 'Office of the President', $later, null, [['Laptop bags', 4]], $now);
+
+// A visitor pass a guard issued on a phone with no connection: the pass and its entry keep the real time,
+// and reached the server later (the list marks it "ISSUED OFFLINE")
+addVisitor($pdo, "VP-{$day}-OFFL", 'Olga Offline', '0917 000 4444', 'OFF5005', 'Red Toyota Vios',
+    'Enrollment', "Registrar's Office", $today, $now - 3 * 3600, [['Boxes', 3]], $now);
+$pdo->prepare("UPDATE visitor_passes SET created_at = ?, synced_at = ?, created_by = 'Mobile Scanner / Jose Rizal Bautista' WHERE pass_code = ?")
+    ->execute([date('Y-m-d H:i:s', $now - 3 * 3600 - 60), date('Y-m-d H:i:s', $now - 45 * 60), "VP-{$day}-OFFL"]);
+$pdo->prepare("UPDATE gate_logs SET synced_at = ?, guard_name = 'Mobile Scanner', notes = notes || ' | Recorded offline: event ' || logged_at WHERE plate_number = 'OFF5005'")
+    ->execute([date('Y-m-d H:i:s', $now - 45 * 60)]);
+
 /* ---------- Student portal logins ---------- */
 foreach ([[$juan, 'Juan Dela Cruz'], [$carlo, 'Carlo Reyes']] as [$veh, $name]) {
     $acct = ensureStudentAccount($pdo, $veh['owner_id_number'], $name, $veh['owner_email']);
