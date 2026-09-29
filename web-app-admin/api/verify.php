@@ -13,7 +13,8 @@
  *   FORGED        Bad / missing signature, or legacy pass after the cutoff      -> incident
  *   REVOKED       Pass was reissued or cancelled (old pass id / outdated pass)   -> incident
  *   EXPIRED       Permanent pass past its validity date
- *   EXPIRED_TEMP  Visitor day pass scanned on another date ("EXPIRED TEMPORARY PASS")
+ *   EXPIRED_TEMP  Visitor day pass scanned after its date ("EXPIRED TEMPORARY PASS")
+ *   NOT_YET_VALID Visitor day pass scheduled for a later date
  *   BANNED        Vehicle banned by the 3-strike policy / violation
  *   SUSPENDED     Registration suspended by an administrator
  *   NOT_FOUND     No matching vehicle or visitor pass
@@ -161,13 +162,8 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
     $claimedPlate = $plateInput;
     $vehicle = findVehicleByPlate($pdo, $plateInput);
     if (!$vehicle) {
-        // A visitor with a day pass for today may be looked up by plate
-        // Today's pass, or an older pass whose visitor entered and has not exited yet
-        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `plate_number` = ?
-            AND (`valid_date` = ? OR (`entry_time` IS NOT NULL AND `exit_time` IS NULL))
-            AND `status` IN ('Active', 'Used') ORDER BY `id` DESC LIMIT 1");
-        $stmt->execute([normalizePlate($plateInput), $today]);
-        $visitor = $stmt->fetch() ?: null;
+        // Today's pass, a pass whose visitor is still inside, or an upcoming pass (reported as "not yet valid")
+        $visitor = findVisitorPassByPlate($pdo, $plateInput, $today);
     }
     if (!$vehicle && !$visitor) {
         $result = 'NOT_FOUND';
@@ -181,15 +177,24 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
 /* --------------------------------------------------------------------------
    2. Visitor pass rules
    -------------------------------------------------------------------------- */
+// A revoked pass whose visitor is still on campus must still be able to leave (with a hold alert)
+$revokedInside = $visitor && $visitor['status'] === 'Revoked'
+    && !empty($visitor['entry_time']) && empty($visitor['exit_time']);
+
 if ($visitor && ($result === null || $result === 'MANUAL')) {
     $passType = $passType === 'manual' ? 'manual' : 'visitor_temp';
     $claimedPlate = $visitor['plate_number'];
     if ($visitor['status'] === 'Revoked') {
         $result = 'REVOKED';
-        $reasonDetail = 'This visitor pass was revoked.';
+        $reasonDetail = $revokedInside
+            ? 'This visitor pass was revoked while the visitor was on campus.'
+            : 'This visitor pass was revoked.';
     } elseif ($visitor['status'] === 'Used' || !empty($visitor['exit_time'])) {
         $result = 'REVOKED';
         $reasonDetail = 'This single-day pass has already been used (entry and exit recorded).';
+    } elseif ($visitor['valid_date'] > $today) {
+        $result = 'NOT_YET_VALID';
+        $reasonDetail = "This day pass becomes active on {$visitor['valid_date']}.";
     } elseif ($visitor['valid_date'] !== $today) {
         if ($gateType === 'Ingress' || empty($visitor['entry_time'])) {
             $result = 'EXPIRED_TEMP';
@@ -228,10 +233,11 @@ if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
 $alwaysAccepted = ['VALID', 'LEGACY', 'MANUAL'];
 // A vehicle already inside is allowed to leave (with an alert) so it is never trapped on campus
 $egressAlsoAccepted = ['BANNED', 'SUSPENDED', 'EXPIRED', 'EXPIRED_TEMP'];
-$accepted = in_array($result, $alwaysAccepted, true)
-    || ($gateType === 'Egress' && in_array($result, $egressAlsoAccepted, true));
+$egressHold = $gateType === 'Egress'
+    && (in_array($result, $egressAlsoAccepted, true) || ($result === 'REVOKED' && $revokedInside));
+$accepted = in_array($result, $alwaysAccepted, true) || $egressHold;
 
-if ($accepted && in_array($result, $egressAlsoAccepted, true)) {
+if ($accepted && $egressHold) {
     $warnings[] = 'HOLD ALERT: exit allowed so the vehicle is not trapped, but ' . lcfirst($reasonDetail ?: 'this pass is not valid') . ' Notify an administrator.';
 }
 
@@ -301,6 +307,7 @@ $messages = [
     'REVOKED' => 'REVOKED PASS - access denied.',
     'EXPIRED' => 'EXPIRED PASS.',
     'EXPIRED_TEMP' => 'EXPIRED TEMPORARY PASS.',
+    'NOT_YET_VALID' => 'PASS NOT YET VALID.',
     'BANNED' => 'VEHICLE BANNED.',
     'SUSPENDED' => 'REGISTRATION SUSPENDED.',
     'NOT_FOUND' => 'No matching vehicle or pass.',

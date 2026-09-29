@@ -3,19 +3,28 @@
  * SecurePark API - Single-Day Visitor Passes
  *
  * GET  /api/visitors.php?date=YYYY-MM-DD&status=Active   List passes for a day (staff; default today)
+ * GET  /api/visitors.php?upcoming=1                       Active passes scheduled for a later day (staff)
  * GET  /api/visitors.php?id=123                           One pass with its signed QR payload (staff)
  * POST /api/visitors.php  { visitor_name, contact_number, plate, vehicle_model?, purpose, person_to_visit,
- *                           items?: [{ name, quantity, description? }] }   (up to 20 items brought in)
- *        Admins and guards. valid_date is ALWAYS today (server clock) and cannot be chosen.
+ *                           items?: [{ name, quantity, description? }] (up to 20 items brought in),
+ *                           valid_date?: "YYYY-MM-DD" }
+ *        Admins and guards can issue a pass for today. Only an admin may pass valid_date for a
+ *        later day (up to SP_VISITOR_MAX_ADVANCE_DAYS ahead); past dates are refused.
+ *        A pass is valid all day on its date, from midnight to midnight (Asia/Manila).
  * PUT  /api/visitors.php  { id, action: "revoke", notes? }   (admin)
+ *        Revoking a pass whose visitor is on campus opens a Held incident; the visitor can still leave.
  *
- * The QR is signed as type "visitor_temp" (lib/qr.php). verify.php rejects it on any
- * other date as "EXPIRED TEMPORARY PASS".
+ * The QR is signed as type "visitor_temp" (lib/qr.php). verify.php rejects it before its date
+ * as "NOT_YET_VALID" and after its date as "EXPIRED TEMPORARY PASS".
  */
 
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
+require_once __DIR__ . '/../lib/records.php';
+
+// How far ahead an admin may schedule a day pass
+const SP_VISITOR_MAX_ADVANCE_DAYS = 60;
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -97,6 +106,12 @@ function handleListVisitors($pdo) {
         sendResponse(200, formatVisitorPass($row));
     }
 
+    if (!empty($_GET['upcoming'])) {
+        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `valid_date` > ? AND `status` = 'Active' ORDER BY `valid_date` ASC, `id` ASC");
+        $stmt->execute([date('Y-m-d', spNow())]);
+        sendResponse(200, array_map('formatVisitorPass', $stmt->fetchAll()));
+    }
+
     $date = $_GET['date'] ?? date('Y-m-d', spNow());
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
         sendResponse(400, null, 'date must be YYYY-MM-DD.');
@@ -167,19 +182,22 @@ function handleCreateVisitor($pdo, $actor) {
     }
 
     $today = date('Y-m-d', spNow());
+    $validDate = resolveValidDate($data, $today, $actor);
+
     $dup = $pdo->prepare("SELECT `pass_code` FROM `visitor_passes` WHERE `plate_number` = ? AND `valid_date` = ? AND `status` = 'Active' LIMIT 1");
-    $dup->execute([$plate, $today]);
+    $dup->execute([$plate, $validDate]);
     if ($existing = $dup->fetchColumn()) {
-        sendResponse(409, ['code' => 'PASS_EXISTS', 'passCode' => $existing], "An active day pass ({$existing}) already exists for {$plate} today.");
+        $when = $validDate === $today ? 'today' : "on {$validDate}";
+        sendResponse(409, ['code' => 'PASS_EXISTS', 'passCode' => $existing], "An active day pass ({$existing}) already exists for {$plate} {$when}.");
     }
 
     $clientCode = trim((string)($data['passCode'] ?? $data['passId'] ?? $data['pass_code'] ?? ''));
-    $code = $clientCode !== '' ? $clientCode : newVisitorPassCode($pdo, $today);
+    $code = $clientCode !== '' ? $clientCode : newVisitorPassCode($pdo, $validDate);
     $stmt = $pdo->prepare("INSERT INTO `visitor_passes`
         (`pass_code`, `visitor_name`, `contact_number`, `plate_number`, `vehicle_model`, `purpose_of_visit`,
          `person_to_visit`, `valid_date`, `status`, `created_by`, `created_by_user_id`, `created_at`)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)");
-    $stmt->execute([$code, $visitorName, $contact, $plate, $vehicleModel ?: null, $purpose, $host, $today,
+    $stmt->execute([$code, $visitorName, $contact, $plate, $vehicleModel ?: null, $purpose, $host, $validDate,
         actorLabel($actor), actorUserId($actor), date('Y-m-d H:i:s', spNow())]);
 
     $passId = (int)$pdo->lastInsertId();
@@ -191,7 +209,33 @@ function handleCreateVisitor($pdo, $actor) {
     $row = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `id` = ?");
     $row->execute([$passId]);
     $itemNote = $items ? ' Items declared: ' . count($items) . '.' : '';
-    sendResponse(201, formatVisitorPass($row->fetch()), "Day pass {$code} issued. Valid only on {$today}.{$itemNote}");
+    sendResponse(201, formatVisitorPass($row->fetch()), "Day pass {$code} issued. Valid only on {$validDate}.{$itemNote}");
+}
+
+/**
+ * The day a new pass is valid on: today unless an admin schedules a later day.
+ * Ends the request with 400 / 403 when the requested date is not allowed.
+ */
+function resolveValidDate($data, $today, $actor) {
+    $requested = trim((string)($data['valid_date'] ?? $data['validDate'] ?? ''));
+    if ($requested === '' || $requested === $today) return $today;
+
+    if (($actor['role'] ?? '') !== 'admin') {
+        sendResponse(403, ['code' => 'ADMIN_ONLY_SCHEDULE'], 'Only an administrator can issue a pass for another day.');
+    }
+    $d = DateTime::createFromFormat('Y-m-d', $requested);
+    $errors = DateTime::getLastErrors();
+    if (!$d || $d->format('Y-m-d') !== $requested || ($errors && ($errors['warning_count'] || $errors['error_count']))) {
+        sendResponse(400, null, 'valid_date must be a real date in YYYY-MM-DD format.');
+    }
+    if ($requested < $today) {
+        sendResponse(400, ['code' => 'DATE_IN_PAST'], 'A pass cannot be issued for a past date.');
+    }
+    $latest = date('Y-m-d', strtotime($today . ' +' . SP_VISITOR_MAX_ADVANCE_DAYS . ' days'));
+    if ($requested > $latest) {
+        sendResponse(400, ['code' => 'DATE_TOO_FAR'], 'A pass can be scheduled at most ' . SP_VISITOR_MAX_ADVANCE_DAYS . " days ahead (until {$latest}).");
+    }
+    return $requested;
 }
 
 /**
@@ -230,7 +274,26 @@ function handleRevokeVisitor($pdo, $admin) {
 
     $pdo->prepare("UPDATE `visitor_passes` SET `status` = 'Revoked' WHERE `id` = ?")->execute([$row['id']]);
     $row['status'] = 'Revoked';
-    sendResponse(200, formatVisitorPass($row), "Day pass {$row['pass_code']} revoked by " . actorLabel($admin) . '.');
+
+    $message = "Day pass {$row['pass_code']} revoked by " . actorLabel($admin) . '.';
+    if (!empty($row['entry_time']) && empty($row['exit_time'])) {
+        // The visitor is on campus: flag it so the gate sees a hold. The visitor may still leave.
+        $notes = trim((string)($data['notes'] ?? ''));
+        $incident = openSecurityIncident($pdo, $admin, [
+            'plate' => $row['plate_number'],
+            'vehicleType' => 'Visitor Vehicle',
+            'ownerName' => $row['visitor_name'],
+            'ownerRole' => 'Visitor',
+            'driverName' => $row['visitor_name'],
+            'driverRelationship' => 'Visitor (Day Pass)',
+            'reason' => 'Visitor pass revoked while on campus',
+            'gatePoint' => 'Campus Security Office',
+            'notes' => "Pass {$row['pass_code']} revoked by " . actorLabel($admin) . ($notes !== '' ? ": {$notes}" : '.')
+                . ' Visitor is still inside; escort to the exit gate.',
+        ], 10);
+        $message .= " The visitor is still on campus: hold {$incident['caseNumber']} opened.";
+    }
+    sendResponse(200, formatVisitorPass($row), $message);
 }
 
 function handleVisitorExit($pdo, $actor) {
@@ -252,14 +315,14 @@ function handleVisitorExit($pdo, $actor) {
     }
 
     $now = date('Y-m-d H:i:s', spNow());
-    $upd = $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Used' WHERE `id` = ?");
+    $upd = $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?");
     $upd->execute([$now, $pass['id']]);
 
     sendResponse(200, [
         'passId' => $pass['pass_code'],
         'plateNumber' => $pass['plate_number'],
         'exitTime' => $now,
-        'status' => 'Used',
+        'status' => $pass['status'] === 'Revoked' ? 'Revoked' : 'Used',
     ], 'Visitor checkout confirmed.');
 }
 

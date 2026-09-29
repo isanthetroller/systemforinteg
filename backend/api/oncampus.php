@@ -112,7 +112,7 @@ usort($vehicles, fn($a, $b) => ($b['hoursInside'] ?? -1) <=> ($a['hoursInside'] 
 
 /* ---------- Visitors on day passes ---------- */
 $visitors = [];
-$stmt = $pdo->query("SELECT * FROM `visitor_passes` WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` = 'Active' ORDER BY `entry_time` ASC");
+$stmt = $pdo->query("SELECT * FROM `visitor_passes` WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` IN ('Active', 'Revoked') ORDER BY `entry_time` ASC");
 foreach ($stmt->fetchAll() as $p) {
     // Check active security hold
     $holdStmt = $pdo->prepare("
@@ -152,6 +152,7 @@ foreach ($stmt->fetchAll() as $p) {
         'purposeOfVisit' => $p['purpose_of_visit'],
         'validDate' => $p['valid_date'],
         'overstayed' => $p['valid_date'] < $today,
+        'revoked' => $p['status'] === 'Revoked',
         'entryTime' => $p['entry_time'],
         'hoursInside' => round(max(0, $now - $entryTs) / 3600, 1),
         'items' => visitorPassItems($pdo, $p['id']),
@@ -171,7 +172,7 @@ sendResponse(200, [
         'total' => count($vehicles) + count($visitors),
         'registered' => count($vehicles),
         'visitors' => count($visitors),
-        'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null || !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => $v['overstayed'] || !empty($v['activeHold']) || $v['exitDenied'])),
+        'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null || !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => $v['overstayed'] || $v['revoked'] || !empty($v['activeHold']) || $v['exitDenied'])),
         'withStrikes' => count(array_filter($vehicles, fn($v) => $v['warningCount'] > 0 || $v['isBanned'])),
         'blocked' => count(array_filter($vehicles, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])),
     ],

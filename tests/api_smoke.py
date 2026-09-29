@@ -343,7 +343,7 @@ def test_gate_flow(admin):
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
     check('egress with confirmed driver -> 201', code == 201 and res['data']['status'] == 'Exited' and res['data']['gateType'] == 'Egress', res)
     _, res = call('GET', 'vehicles.php?plate=NDK4821', token=admin)
-    check('vehicle now Exited', res['data']['status'] == 'Exited', res['data']['status'])
+    check('vehicle now Outside (never "Exited")', res['data']['status'] == 'Outside', res['data']['status'])
 
     _, logs = call('GET', 'logs.php?plate=NDK%204821', token=admin)
     latest = logs['data'][0]
@@ -353,7 +353,7 @@ def test_gate_flow(admin):
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Denied', 'gate_type': 'Ingress', 'driverName': 'Unknown Person', 'notes': 'Unauthorized / Unregistered Driver'}, guard)
     check('denial recorded without changing vehicle status', code == 201 and res['data']['status'] == 'Outside', res)
     _, res = call('GET', 'vehicles.php?plate=NDK4821', token=admin)
-    check('vehicle status unchanged by denial', res['data']['status'] == 'Exited', res['data']['status'])
+    check('vehicle status unchanged by denial', res['data']['status'] == 'Outside', res['data']['status'])
 
     # Server-side ban / suspension re-check cannot be bypassed by the client
     call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
@@ -508,7 +508,7 @@ def test_overnight(admin):
 
     # A vehicle that exits is no longer reported
     db = sqlite3.connect(SQLITE_DB)
-    db.execute("UPDATE vehicles SET status = 'Exited' WHERE id = ?", (night_id,))
+    db.execute("UPDATE vehicles SET status = 'Outside' WHERE id = ?", (night_id,))
     db.commit()
     db.close()
     code, res = report('2026-09-22 23:00:00', 'POST')
@@ -540,7 +540,9 @@ def test_visitor_passes(admin):
     code, res = call('POST', 'visitors.php', dict(base, visitor_name='Someone Else'), guard)
     check('second active pass for the same plate today -> 409', code == 409 and res['data']['code'] == 'PASS_EXISTS', res)
     code, res = call('POST', 'visitors.php', dict(base, plate='VIS 9002', valid_date='2030-01-01'), guard)
-    check('client cannot choose the validity date', code == 201 and res['data']['validDate'] == today.isoformat(), res)
+    check('a guard cannot choose the validity date -> 403', code == 403 and res['data']['code'] == 'ADMIN_ONLY_SCHEDULE', res)
+    code, res = call('POST', 'visitors.php', dict(base, plate='VIS 9002'), guard)
+    check('the pass a guard issues is valid today', code == 201 and res['data']['validDate'] == today.isoformat(), res)
     other = res['data']
 
     code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Ingress'}, guard)
@@ -721,6 +723,113 @@ def test_visitor_items_and_on_campus(admin):
     code, _ = call('GET', 'oncampus.php')
     check('on-campus list requires sign-in -> 401', code == 401, code)
 
+
+def test_scheduled_and_revoked_passes(admin):
+    section('Scheduled day passes, revoke while inside, retired setting')
+    import datetime
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    today = datetime.date.today()
+    day = lambda n: (today + datetime.timedelta(days=n)).isoformat()
+    base = {'visitor_name': 'Sofia Scheduled', 'contact_number': '0917 555 0101', 'plate': 'SCH 5001',
+            'purpose': 'Board meeting', 'person_to_visit': 'Office of the President'}
+
+    # --- who may pick a day, and which days are allowed
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=day(3)), guard)
+    check('guard cannot schedule another day -> 403', code == 403 and res['data']['code'] == 'ADMIN_ONLY_SCHEDULE', res)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=day(-1)), admin)
+    check('past date refused -> 400', code == 400 and res['data']['code'] == 'DATE_IN_PAST', res)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=day(61)), admin)
+    check('more than 60 days ahead refused -> 400', code == 400 and res['data']['code'] == 'DATE_TOO_FAR', res)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date='2026-02-30'), admin)
+    check('impossible date refused -> 400', code == 400, res)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date='soon'), admin)
+    check('malformed date refused -> 400', code == 400, res)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=today.isoformat()), guard)
+    check('guard may still pass today explicitly -> 201', code == 201 and res['data']['validDate'] == today.isoformat(), res)
+    today_pass = res['data']
+
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=day(3)), admin)
+    check('admin schedules a pass 3 days ahead -> 201', code == 201 and res['data']['validDate'] == day(3), res)
+    future = res['data']
+    check('pass code carries the chosen day', future['passCode'].startswith('VP-' + day(3).replace('-', '') + '-'), future['passCode'])
+    payload = json.loads(future['qrPayload'])
+    check('QR is signed for the chosen day', payload['valid'] == day(3) and payload['type'] == 'visitor_temp', payload)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=day(3)), admin)
+    check('second pass for the same plate and day -> 409', code == 409 and res['data']['code'] == 'PASS_EXISTS', res)
+    code, res = call('POST', 'visitors.php', dict(base, valid_date=day(5)), admin)
+    check('same plate on a different day is allowed', code == 201, res)
+
+    # --- before its day the pass is "not yet valid", never "forged" or "expired"
+    code, v = verify({'qr_code': future['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('future pass at entrance -> NOT_YET_VALID, refused', v.get('result') == 'NOT_YET_VALID' and v.get('accepted') is False, v)
+    check('  ...with the date in the reason', day(3) in v.get('reason', ''), v)
+    check('  ...no security incident for an early visitor', v.get('incident') is None and v.get('autoLogged') is True, v)
+    code, v = verify({'qr_code': future['qrPayload'], 'gate_type': 'Egress'}, guard)
+    check('future pass at exit gate -> refused too', v.get('result') == 'NOT_YET_VALID' and v.get('accepted') is False, v)
+    code, res = call('POST', 'logs.php', {'plate': 'SCH 5001', 'action': 'Entry Recorded', 'gate_type': 'Ingress',
+                                          'visitor_pass_id': future['id']}, guard)
+    check('server refuses to log the entry -> 403 NOT_YET_VALID', code == 403 and res['data']['code'] == 'NOT_YET_VALID', res)
+    code, v = verify({'qr_code': future['qrPayload'], 'gate_type': 'Ingress'}, guard, now=day(3) + ' 08:00:00')
+    check('on its day the same QR verifies', v.get('result') == 'VALID' and v.get('accepted') is True, v)
+    code, v = verify({'qr_code': future['qrPayload'], 'gate_type': 'Ingress'}, guard, now=day(4) + ' 08:00:00')
+    check('the day after it is EXPIRED_TEMP', v.get('result') == 'EXPIRED_TEMP', v)
+    code, v = verify({'qr_code': future['qrPayload'], 'gate_type': 'Ingress'}, guard, now=day(3) + ' 23:59:00')
+    check('valid all day: still accepted at 23:59', v.get('result') == 'VALID', v)
+
+    # --- manual plate lookup
+    code, v = verify({'plate': 'SCH 5001', 'gate_type': 'Ingress'}, guard)
+    check('plate lookup finds today\'s pass, not the upcoming ones', v.get('accepted') is True and v['visitor']['validDate'] == today.isoformat(), v)
+    code, v = verify({'plate': 'SCH 5001', 'gate_type': 'Ingress'}, guard, now=day(1) + ' 09:00:00')
+    check('plate lookup with only upcoming passes -> NOT_YET_VALID', v.get('result') == 'NOT_YET_VALID', v)
+
+    # --- listing
+    code, res = call('GET', 'visitors.php?upcoming=1', token=guard)
+    plates = [x['validDate'] for x in res['data']]
+    check('upcoming list: future active passes, soonest first', code == 200 and day(3) in plates and day(5) in plates
+          and plates == sorted(plates) and today.isoformat() not in plates, res)
+    code, res = call('GET', f'visitors.php?date={day(3)}', token=guard)
+    check('day list shows the scheduled pass on its day', any(x['id'] == future['id'] for x in res['data']), res)
+    code, res = call('GET', 'visitors.php', token=guard)
+    check('default list (today) does not include future passes', not any(x['id'] == future['id'] for x in res['data']), res)
+
+    # --- revoke a visitor who is on campus: hold + can still leave
+    code, res = call('POST', 'logs.php', {'plate': 'SCH 5001', 'action': 'Entry Recorded', 'gate_type': 'Ingress',
+                                          'visitor_pass_id': today_pass['id']}, guard)
+    check('visitor with today\'s pass enters', code == 201, res)
+    code, res = call('GET', 'oncampus.php', token=guard)
+    check('visitor is on the campus list', any(x['plateNumber'] == 'SCH5001' for x in res['data']['visitors']), res['data']['visitors'])
+    code, res = call('PUT', 'visitors.php', {'id': today_pass['id'], 'action': 'revoke', 'notes': 'Disruptive behaviour'}, guard)
+    check('guard cannot revoke -> 403', code == 403, code)
+    code, res = call('PUT', 'visitors.php', {'id': today_pass['id'], 'action': 'revoke', 'notes': 'Disruptive behaviour'}, admin)
+    check('admin revokes a pass whose visitor is inside -> 200', code == 200 and res['data']['status'] == 'Revoked', res)
+    check('  ...a security hold is opened', 'hold CASE-' in res['message'], res['message'])
+    held = open_incidents_for(admin, 'SCH5001')
+    check('  ...the incident is in the Held queue with the reason', held and held[0]['reason'] == 'Visitor pass revoked while on campus'
+          and 'Disruptive behaviour' in (held[0].get('notes') or ''), held)
+    code, res = call('GET', 'oncampus.php', token=guard)
+    row = next((x for x in res['data']['visitors'] if x['plateNumber'] == 'SCH5001'), None)
+    check('revoked visitor stays on the campus list, flagged', row is not None and row['revoked'] is True and row['activeHold'], row)
+    code, v = verify({'qr_code': today_pass['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('revoked pass is refused at the entrance', v.get('result') == 'REVOKED' and v.get('accepted') is False, v)
+    code, v = verify({'qr_code': today_pass['qrPayload'], 'gate_type': 'Egress'}, guard)
+    check('revoked visitor inside may still leave, with a hold alert',
+          v.get('accepted') is True and v.get('result') == 'REVOKED' and any('HOLD ALERT' in w for w in v.get('warnings', [])), v)
+    code, res = call('POST', 'logs.php', {'plate': 'SCH 5001', 'action': 'Exit Approved', 'gate_type': 'Egress',
+                                          'visitor_pass_id': today_pass['id']}, guard)
+    check('exit is logged', code == 201 and res['data']['status'] == 'Exited', res)
+    code, res = call('GET', f'visitors.php?id={today_pass["id"]}', token=guard)
+    check('the pass stays Revoked after the exit', res['data']['status'] == 'Revoked' and res['data']['exitTime'], res['data'])
+    code, res = call('GET', 'oncampus.php', token=guard)
+    check('visitor leaves the campus list after exit', not any(x['plateNumber'] == 'SCH5001' for x in res['data']['visitors']), res['data']['visitors'])
+
+    # --- a vehicle's state is "Outside", and the retired setting is gone
+    code, res = call('GET', 'settings.php')
+    check('settings: read-only policy values', code == 200 and 'curfew_time' in res['data'], res)
+    check('settings: no visitor pass hour limit any more', 'visitor_pass_validity_hours' not in res['data'], res['data'])
+    code, _ = call('POST', 'settings.php', {'visitor_pass_validity_hours': 4}, admin)
+    check('settings cannot be written -> 405', code == 405, code)
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -744,6 +853,7 @@ def main():
     test_visitor_passes(admin)
     test_student_portal(admin)
     test_visitor_items_and_on_campus(admin)
+    test_scheduled_and_revoked_passes(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
 

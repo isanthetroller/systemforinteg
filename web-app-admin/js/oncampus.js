@@ -46,6 +46,7 @@
   function timeChip(flag) {
     if (flag === 'overnight') return '<span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">OVERNIGHT</span>';
     if (flag === 'overtime') return '<span class="px-1.5 py-0.5 rounded bg-ncst-gold text-slate-900 text-[10px] font-extrabold">OVERTIME</span>';
+    if (flag === 'revoked') return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">PASS REVOKED</span>';
     if (flag === 'overstayed') return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">PASS EXPIRED</span>';
     return '';
   }
@@ -99,7 +100,7 @@
       (view.filter === 'all' || view.filter === 'registered' || (view.filter === 'attention' && (v.timeFlag || v.warningCount > 0 || v.isBanned))) &&
       match(v.plateNumber, v.ownerName, v.enteredBy, v.makeModelColor, v.department));
     const visitors = d.visitors.filter(p =>
-      (view.filter === 'all' || view.filter === 'visitors' || (view.filter === 'attention' && p.overstayed)) &&
+      (view.filter === 'all' || view.filter === 'visitors' || (view.filter === 'attention' && (p.overstayed || p.revoked))) &&
       match(p.plateNumber, p.visitorName, p.personToVisit, p.purposeOfVisit));
 
     const list = $('ocList');
@@ -155,13 +156,14 @@
 
   function visitorRow(p) {
     const row = document.createElement('div');
-    row.className = `px-4 py-3 border-l-4 ${p.overstayed ? 'border-l-ncst-crimson bg-ncst-crimsonLight/30' : 'border-l-ncst-navy/40'} hover:bg-slate-50/60`;
+    row.className = `px-4 py-3 border-l-4 ${p.overstayed || p.revoked ? 'border-l-ncst-crimson bg-ncst-crimsonLight/30' : 'border-l-ncst-navy/40'} hover:bg-slate-50/60`;
     row.innerHTML = `
       <div class="flex flex-wrap items-center gap-2">
         <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-sm tracking-wider">${esc(p.plateNumber)}</span>
         <span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">VISITOR</span>
         <span class="text-xs font-semibold text-slate-700">${esc(p.vehicleModel || '')}</span>
         ${p.overstayed ? timeChip('overstayed') : ''}
+        ${p.revoked ? timeChip('revoked') : ''}
         <span class="ml-auto text-[11px] font-bold text-slate-700">Inside ${esc(duration(p.hoursInside))}</span>
       </div>
       <div class="mt-1.5 grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-0.5 text-[11px] text-slate-600">

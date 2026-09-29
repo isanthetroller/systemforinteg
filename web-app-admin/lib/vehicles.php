@@ -160,3 +160,35 @@ function visitorItemsSummary($items) {
         return $i['quantity'] . 'x ' . $i['name'] . ($i['description'] ? " ({$i['description']})" : '');
     }, $items));
 }
+
+/**
+ * Finds the visitor day pass that applies to a plate right now.
+ * Preference order: today's pass (or one whose visitor is still inside) > the next upcoming
+ * pass > (only when $includeStale) the most recent pass of any date, so the guard gets an
+ * "expired" message instead of "not found". Revoked passes are included so a visitor who is
+ * still on campus can be checked out.
+ */
+function findVisitorPassByPlate($pdo, $plate, $today, $includeStale = false) {
+    $norm = normalizePlate($plate);
+    $plateSql = "REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?";
+
+    $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE {$plateSql}
+        AND `status` IN ('Active', 'Used', 'Revoked')
+        AND (`valid_date` = ? OR (`entry_time` IS NOT NULL AND `exit_time` IS NULL))
+        ORDER BY CASE WHEN `status` = 'Used' THEN 1 ELSE 0 END, `id` DESC LIMIT 1");
+    $stmt->execute([$norm, $today]);
+    if ($row = $stmt->fetch()) return $row;
+
+    $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE {$plateSql}
+        AND `status` = 'Active' AND `valid_date` > ?
+        ORDER BY `valid_date` ASC, `id` ASC LIMIT 1");
+    $stmt->execute([$norm, $today]);
+    if ($row = $stmt->fetch()) return $row;
+
+    if ($includeStale) {
+        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE {$plateSql} ORDER BY `valid_date` DESC, `id` DESC LIMIT 1");
+        $stmt->execute([$norm]);
+        if ($row = $stmt->fetch()) return $row;
+    }
+    return null;
+}

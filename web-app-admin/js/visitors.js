@@ -3,12 +3,14 @@
  *
  *   SPVisitors.openCreate({ plate })   open the "New Day Pass" form (used by the Gate Monitor)
  *
- * The server fixes the validity to today and signs the QR (type visitor_temp).
+ * A pass is valid all day on its date. Guards issue passes for today; an admin can pick a later day.
+ * The server validates the date and signs the QR (type visitor_temp).
  * The card is screenshot-ready and can also be downloaded as a PNG / shared.
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const state = { passes: [], current: null };
+  const state = { passes: [], current: null, upcoming: false };
+  const MAX_ADVANCE_DAYS = 60;
 
   const esc = (v) => (window.SP ? SP.escapeHtml(v == null ? '' : String(v)) : String(v == null ? '' : v));
   const isAdmin = () => !!(window.SPAuth && SPAuth.hasRole('admin'));
@@ -18,6 +20,12 @@
     new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' })
       .formatToParts(new Date()).forEach(x => { p[x.type] = x.value; });
     return `${p.year}-${p.month}-${p.day}`;
+  }
+
+  function addDays(ymd, n) {
+    const d = new Date(`${ymd}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
   }
 
   function longDate(ymd) {
@@ -34,6 +42,8 @@
   function statusBadge(p) {
     let label = p.status, cls = 'bg-slate-100 text-slate-600 border-slate-200';
     if (p.status === 'Active' && p.isInside) { label = 'Inside'; cls = 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'; }
+    else if (p.status === 'Active' && p.validDate > manilaToday()) { label = 'Upcoming'; cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40'; }
+    else if (p.status === 'Revoked' && p.isInside) { label = 'Revoked (inside)'; cls = 'bg-ncst-crimson text-white border-ncst-crimson'; }
     else if (p.status === 'Active') { label = 'Active'; cls = 'bg-ncst-navy/10 text-ncst-navy border-ncst-navy/20'; }
     else if (p.status === 'Revoked') cls = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30';
     else if (p.status === 'Expired') cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
@@ -82,8 +92,13 @@
   async function load() {
     const body = $('visitorsTableBody');
     if (!$('visitorsDate').value) $('visitorsDate').value = manilaToday();
+    const upBtn = $('visitorsUpcomingBtn');
+    upBtn.setAttribute('aria-pressed', String(state.upcoming));
+    upBtn.className = `px-3 py-1.5 rounded-md border text-xs font-semibold cursor-pointer ${state.upcoming ? 'border-ncst-navy bg-ncst-navy text-white' : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'}`;
     try {
-      state.passes = await ApiClient.getVisitorPasses($('visitorsDate').value);
+      state.passes = state.upcoming
+        ? await ApiClient.getVisitorPasses('', true)
+        : await ApiClient.getVisitorPasses($('visitorsDate').value);
       render();
     } catch (err) {
       body.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
@@ -93,7 +108,7 @@
   function render() {
     const body = $('visitorsTableBody');
     if (!state.passes.length) {
-      body.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">No visitor passes for this day.</td></tr>';
+      body.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">${state.upcoming ? 'No upcoming passes are scheduled.' : 'No visitor passes for this day.'}</td></tr>`;
       return;
     }
     body.innerHTML = '';
@@ -138,7 +153,9 @@
     const confirmed = window.SPAlert
       ? await SPAlert.confirm({
           title: 'Revoke Day Pass?',
-          text: `Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})? The QR code will be rejected immediately at the gate.`,
+          text: p.isInside
+            ? `${p.visitorName} (${p.plateNumber}) is on campus now. Revoking pass ${p.passCode} opens a security hold, but the visitor is still allowed to leave. Continue?`
+            : `Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})? The QR code will be rejected immediately at the gate.`,
           confirmText: 'Revoke Pass',
           icon: 'warning',
           isDanger: true
@@ -161,7 +178,15 @@
     ['vpName', 'vpContact', 'vpPlate', 'vpModel', 'vpHost', 'vpPurpose'].forEach(id => { $(id).value = ''; });
     $('vpItems').innerHTML = '';
     if (prefill.plate) $('vpPlate').value = String(prefill.plate).toUpperCase();
-    $('visitorModalDate').textContent = `Valid only today: ${longDate(manilaToday())}.`;
+    const today = manilaToday();
+    const dateWrap = $('vpDateWrap');
+    dateWrap.classList.toggle('hidden', !isAdmin());
+    $('vpDate').min = today;
+    $('vpDate').max = addDays(today, MAX_ADVANCE_DAYS);
+    $('vpDate').value = prefill.date || today;
+    $('visitorModalDate').textContent = isAdmin()
+      ? 'Valid all day on the day you choose (default: today).'
+      : `Valid all day today: ${longDate(today)}.`;
     $('visitorFormError').classList.add('hidden');
     showModal('visitorModal');
     setTimeout(() => $('vpName').focus(), 50);
@@ -178,6 +203,7 @@
       purpose: $('vpPurpose').value.trim(),
       items: readItems()
     };
+    if (isAdmin() && $('vpDate').value) payload.valid_date = $('vpDate').value;
     const err = $('visitorFormError');
     $('visitorSubmitBtn').disabled = true;
     try {
@@ -199,7 +225,8 @@
      ------------------------------------------------------------------------ */
   function openCard(p) {
     state.current = p;
-    const expired = p.validDate !== manilaToday() || p.status !== 'Active';
+    const expired = p.validDate < manilaToday() || p.status !== 'Active';
+    const upcoming = p.status === 'Active' && p.validDate > manilaToday();
     $('visitorCard').innerHTML = `
       <div class="bg-ncst-navy px-5 pt-4 pb-3 text-white border-b-4 border-ncst-gold">
         <div class="flex items-center gap-3">
@@ -213,7 +240,7 @@
       </div>
       <div class="px-4 pt-3">
         <div class="rounded-lg ${expired ? 'bg-slate-200 text-slate-600' : 'bg-ncst-gold text-slate-900'} text-center py-2.5 px-2">
-          <div class="text-[10px] font-bold tracking-widest">VALID ONLY ON:</div>
+          <div class="text-[10px] font-bold tracking-widest">${upcoming ? 'ACTIVATES ON (VALID ALL DAY):' : 'VALID ALL DAY ON:'}</div>
           <div class="text-2xl font-extrabold font-mono leading-tight">${esc(p.validDate)}</div>
           <div class="text-[10px] font-semibold">${esc(longDate(p.validDate))}</div>
         </div>
@@ -238,7 +265,7 @@
         <div class="mt-1 text-[10px] text-slate-600">Checked by the guard on entry and exit.</div>
       </div>` : ''}
       <div class="bg-slate-50 border-t border-slate-200 px-5 py-2.5 text-[10px] text-slate-500 leading-snug">
-        Present this QR at the gate on entry and exit. Not valid on any other date. Questions: NCST Campus Security Office.
+        Present this QR at the gate on entry and exit. Valid all day on the date shown; not valid on any other date. Questions: NCST Campus Security Office.
       </div>`;
 
     const qrBox = $('visitorCardQr');
@@ -293,7 +320,7 @@
     const ctx = c.getContext('2d');
     const sans = '"Plus Jakarta Sans", system-ui, sans-serif';
     const mono = '"JetBrains Mono", ui-monospace, monospace';
-    const expired = p.validDate !== manilaToday() || p.status !== 'Active';
+    const expired = p.validDate < manilaToday() || p.status !== 'Active';
 
     ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
     // Header
@@ -397,7 +424,8 @@
   document.addEventListener('sp:app-ready', () => {
     SP.registerView('visitorsView', $('navVisitorsBtn'), load);
     $('visitorsNewBtn').addEventListener('click', () => openCreate());
-    $('visitorsDate').addEventListener('change', load);
+    $('visitorsDate').addEventListener('change', () => { state.upcoming = false; load(); });
+    $('visitorsUpcomingBtn').addEventListener('click', () => { state.upcoming = !state.upcoming; load(); });
     $('visitorForm').addEventListener('submit', submitCreate);
     $('vpAddItemBtn').addEventListener('click', () => addItemRow());
     $('visitorCancelBtn').addEventListener('click', () => hideModal('visitorModal'));

@@ -5,6 +5,7 @@
  * (role-admin / role-guard) and the sidebar profile. Other scripts use:
  *
  *   SPAuth.whenAuthenticated(fn)  run fn after every successful sign-in
+ *   SPAuth.isAuthenticated()      true once signed in and past any forced password change
  *   SPAuth.hasRole('admin')       role check for UI decisions (server enforces too)
  *   SPAuth.label()                "Full Name (BADGE)" for display
  *   SPAuth.user()                 current profile object
@@ -227,6 +228,8 @@
       session.callbacks.push(fn);
       if (session.user && !session.user.mustChangePassword) fn(session.user);
     },
+    // Signed in and past any forced password change: the data pollers run only then
+    isAuthenticated: () => !!session.user && !session.user.mustChangePassword,
     hasRole,
     label,
     user: () => session.user

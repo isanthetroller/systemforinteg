@@ -28,7 +28,8 @@ visitors get **single-day passes**.
   who drove in, who admitted it, contact and strike standing; flag a warning / violation or report a visitor
   incident straight from the list.
 - **Overtime & overnight detection** after the 22:00 curfew, with an attention panel (call owner, flag strike).
-- **Visitor day passes**: valid only on the day issued, screenshot-ready card / PNG. Passes can list the
+- **Visitor day passes**: valid all day on one date. Guards issue passes for today; an admin can pick a later day
+  (up to 60 days ahead) and the QR is refused as "not yet valid" before it. Screenshot-ready card / PNG. Passes can list the
   **items the visitor brings in** (e.g. 40 event chairs); guards must tick them off on entry and exit and the
   item list is written to the gate log.
 - **CCTV simulation widget** (`web-app-admin/assets/cctv_simulation.mp4`, shows "NO SIGNAL" until added).
@@ -49,7 +50,7 @@ backend/                  <- the ONLY place PHP is edited
   api/                    endpoints (see API reference below)
   lib/                    auth, qr, vehicles, records, strikes, students
   config/                 db.php, secret.example.php, secret.php (git-ignored)
-  database/               schema.sql (fresh install), migrations/ 001_v2.sql, 002_visitor_items.sql (existing DB)
+  database/               schema.sql (fresh install), migrations/ 001 to 004 (existing DB)
 web-app-admin/            admin & guard portal (+ generated copy of backend/api, lib, config, database)
 web-app-student/          student portal (own HTML / CSS / JS, calls ../api)
 tests/api_smoke.py        API smoke test (local only)
@@ -117,7 +118,8 @@ Nothing is deployed automatically. Steps, in order:
 
 1. **Back up** the live database (phpMyAdmin → Export).
 2. **Migrate the existing database** — phpMyAdmin → SQL → run, in order and **once each**,
-   `backend/database/migrations/001_v2.sql` then `002_visitor_items.sql`. Both are non-destructive
+   `backend/database/migrations/001_v2.sql`, `002_visitor_items.sql`, `003_system_settings.sql`, then
+   `004_vehicle_status_outside.sql`. All are non-destructive
    (keep vehicles, drivers, logs, incidents).
    Do **not** run `schema.sql` on the live database: it drops every table (fresh installs only).
 3. Create **`backend/config/secret.production.php`** (git-ignored) from `secret.example.php` with
@@ -156,12 +158,12 @@ Staff and students authenticate with `Authorization: Bearer <token>` (fallback h
 | `violations.php` | GET / POST (guards: warnings only) · PUT resolve / dismiss / reset: admin | staff |
 | `overnight_check.php` | GET report · POST run / `{ vehicle_id }` flag | staff |
 | `oncampus.php` | GET registered vehicles + visitors currently inside | staff |
-| `visitors.php` | GET / POST `{ ..., items: [{ name, quantity, description }] }`: staff · PUT revoke: admin | staff |
+| `visitors.php` | GET (`?date=` / `?upcoming=1` / `?id=`) / POST `{ ..., items: [{ name, quantity, description }], valid_date? }`: staff (only an admin may set `valid_date` to a later day) · PUT revoke: admin (a visitor still inside gets a Held incident and may still leave) | staff |
 | `students.php` | GET / POST issue login | admin |
 | `student.php?action=me|vehicles|violations|activity` | GET | student (own data only) |
 | `stats.php`, `status.php` | GET | staff / public health check |
 
-Verification results: `VALID`, `LEGACY`, `MANUAL`, `FORGED`, `REVOKED`, `EXPIRED`, `EXPIRED_TEMP`,
+Verification results: `VALID`, `LEGACY`, `MANUAL`, `FORGED`, `REVOKED`, `EXPIRED`, `EXPIRED_TEMP`, `NOT_YET_VALID`,
 `BANNED`, `SUSPENDED`, `NOT_FOUND`. Entries are refused for banned / suspended / expired passes; exits
 are always allowed (with a hold alert) so vehicles are never trapped on campus.
 

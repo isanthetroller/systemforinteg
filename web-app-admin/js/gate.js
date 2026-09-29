@@ -168,7 +168,7 @@
 
   const RESULT_LABELS = {
     VALID: 'Signed pass', LEGACY: 'Legacy pass', MANUAL: 'Manual lookup', FORGED: 'Forged / tampered',
-    REVOKED: 'Revoked pass', EXPIRED: 'Expired pass', EXPIRED_TEMP: 'Expired day pass',
+    REVOKED: 'Revoked pass', EXPIRED: 'Expired pass', EXPIRED_TEMP: 'Expired day pass', NOT_YET_VALID: 'Pass not yet valid',
     BANNED: 'Banned vehicle', SUSPENDED: 'Suspended registration', NOT_FOUND: 'Not found'
   };
 

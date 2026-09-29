@@ -288,11 +288,6 @@ function initializeSqliteSchema($pdo) {
         );
     ");
 
-    $pdo->exec("
-        INSERT OR IGNORE INTO `system_settings` (`setting_key`, `setting_value`, `description`)
-        VALUES ('visitor_pass_validity_hours', '8', 'Validity duration for temporary visitor passes in hours');
-    ");
-
     // Bring older SQLite databases up to the v2 structure
     ensureColumn($pdo, 'system_users', 'last_login', 'TEXT NULL');
     ensureColumn($pdo, 'system_users', 'failed_attempts', 'INTEGER NOT NULL DEFAULT 0');
@@ -311,6 +306,8 @@ function initializeSqliteSchema($pdo) {
     $pdo->exec("UPDATE `system_users` SET `role` = 'admin' WHERE `role` NOT IN ('admin', 'guard') AND (LOWER(`role`) LIKE '%admin%')");
     $pdo->exec("UPDATE `system_users` SET `role` = 'guard' WHERE `role` NOT IN ('admin', 'guard')");
     $pdo->exec("UPDATE `gate_logs` SET `action` = 'Entry Denied' WHERE `action` NOT IN ('Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied')");
+    // A vehicle that left campus is "Outside" (mirrors migrations/004_vehicle_status_outside.sql)
+    $pdo->exec("UPDATE `vehicles` SET `status` = 'Outside' WHERE `status` = 'Exited'");
 
     // Seed the first administrator only on a brand-new database. The password is a well-known
     // default, so the account must change it at first sign-in. No other default accounts exist.
@@ -335,11 +332,6 @@ function ensureMysqlSchemaAndBaseline($pdo) {
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM `system_settings` WHERE `setting_key` = 'visitor_pass_validity_hours'");
-        $stmt->execute();
-        if ((int)$stmt->fetchColumn() === 0) {
-            $pdo->prepare("INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`) VALUES ('visitor_pass_validity_hours', '8', 'Validity duration for temporary visitor passes in hours')")->execute();
-        }
 
         // Ensure system_users table exists
         $pdo->exec("

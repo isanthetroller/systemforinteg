@@ -127,9 +127,7 @@ function handleCreateLog($pdo, $actor) {
         $visitor = $stmt->fetch() ?: null;
         if (!$visitor) sendResponse(404, null, 'Visitor pass not found.');
     } elseif (!$vehicle) {
-        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `plate_number` = ? AND `status` IN ('Active', 'Used') ORDER BY `valid_date` DESC, `id` DESC LIMIT 1");
-        $stmt->execute([normalizePlate($plateNumber)]);
-        $visitor = $stmt->fetch() ?: null;
+        $visitor = findVisitorPassByPlate($pdo, $plateNumber, date('Y-m-d'), true);
     }
 
     /* ---- Driver confirmation ------------------------------------------- */
@@ -171,6 +169,12 @@ function handleCreateLog($pdo, $actor) {
             sendResponse(403, ['code' => 'VEHICLE_SUSPENDED'], "Entry refused: registration of {$vehicle['plate_number']} is suspended.");
         }
         if (!$vehicle && $visitor) {
+            if ($visitor['status'] === 'Revoked') {
+                sendResponse(403, ['code' => 'REVOKED'], 'Entry refused: this visitor pass was revoked.');
+            }
+            if ($visitor['valid_date'] > $today) {
+                sendResponse(403, ['code' => 'NOT_YET_VALID'], "PASS NOT YET VALID - it becomes active on {$visitor['valid_date']}.");
+            }
             if ($visitor['valid_date'] !== $today) {
                 sendResponse(403, ['code' => 'EXPIRED_TEMP'], "EXPIRED TEMPORARY PASS - valid only on {$visitor['valid_date']}.");
             }
@@ -220,6 +224,9 @@ function handleCreateLog($pdo, $actor) {
     }
 
     /* ---- Write ---------------------------------------------------------- */
+    // gate_logs.status is the outcome label of this passage; vehicles.status is the vehicle's
+    // current state, which is "Outside" (never "Exited") once it has left.
+    $vehicleState = $gateType === 'Egress' ? 'Outside' : 'Inside Campus';
     if ($isApproval) {
         $status = $gateType === 'Egress' ? 'Exited' : 'Inside Campus';
     } else {
@@ -256,10 +263,10 @@ function handleCreateLog($pdo, $actor) {
         if ($isApproval && $vehicle) {
             if ($gateType === 'Ingress') {
                 $upd = $pdo->prepare("UPDATE `vehicles` SET `status` = ?, `last_entry_time` = ?, `last_gate_point` = ? WHERE `id` = ?");
-                $upd->execute([$status, date('Y-m-d H:i:s'), $gatePoint, $vehicle['id']]);
+                $upd->execute([$vehicleState, date('Y-m-d H:i:s'), $gatePoint, $vehicle['id']]);
             } else {
                 $upd = $pdo->prepare("UPDATE `vehicles` SET `status` = ?, `last_gate_point` = ? WHERE `id` = ?");
-                $upd->execute([$status, $gatePoint, $vehicle['id']]);
+                $upd->execute([$vehicleState, $gatePoint, $vehicle['id']]);
             }
         }
         if ($isApproval && !$vehicle && $visitor) {
@@ -267,7 +274,7 @@ function handleCreateLog($pdo, $actor) {
                 $pdo->prepare("UPDATE `visitor_passes` SET `entry_time` = COALESCE(`entry_time`, ?) WHERE `id` = ?")
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             } else {
-                $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = ?, `status` = 'Used' WHERE `id` = ?")
+                $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = ?, `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?")
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             }
         }

@@ -301,8 +301,10 @@ const ApiClient = (function() {
     },
 
     // Visitor day passes (valid only on the day issued; server sets the date)
-    getVisitorPasses: async (date = '') => {
-      const res = await request(`visitors.php${date ? '?date=' + encodeURIComponent(date) : ''}`);
+    getVisitorPasses: async (date = '', upcoming = false) => {
+      const res = await request(upcoming
+        ? 'visitors.php?upcoming=1'
+        : `visitors.php${date ? '?date=' + encodeURIComponent(date) : ''}`);
       return res.data;
     },
 
@@ -400,20 +402,6 @@ const ApiClient = (function() {
       const res = await request('incidents.php', {
         method: 'PUT',
         body: { id: id, notes: notes }
-      });
-      return res.data;
-    },
-
-    // System Settings & Pass Rules
-    getSettings: async () => {
-      const res = await request('settings.php');
-      return res.data;
-    },
-
-    updateSettings: async (settings) => {
-      const res = await request('settings.php', {
-        method: 'POST',
-        body: settings
       });
       return res.data;
     }

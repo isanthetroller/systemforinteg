@@ -166,7 +166,7 @@ def main():
 
     # 7. Verify Vehicle is now OUTSIDE and removed from oncampus.php
     veh_after_exit = request(f"vehicles.php?plate={plate}", token=token)
-    assert veh_after_exit["data"]["status"] == "Exited", f"Vehicle status should be Exited: {veh_after_exit}"
+    assert veh_after_exit["data"]["status"] == "Outside", f"Vehicle status should be Outside after exit: {veh_after_exit}"
 
     oc3 = request("oncampus.php", token=token)
     stats3 = request("stats.php", token=token)
