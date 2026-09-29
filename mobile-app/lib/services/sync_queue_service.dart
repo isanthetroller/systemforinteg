@@ -1,14 +1,22 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'api_service.dart';
 import 'local_cache_service.dart';
 
-/// Represents a pending outbound database operation queued while offline
+/// One event that happened at the gate and is waiting to reach the server.
 class QueueItem {
   final String id;
-  final String type; // 'gate_log', 'visitor_pass', 'visitor_exit', 'incident'
+  final String type; // 'gate_log', 'visitor_exit', 'incident' (visitor passes are issued online only)
   final Map<String, dynamic> payload;
   final DateTime createdAt;
+
+  /// Unique reference of this event. The server ignores a repeat, so sending it twice can never
+  /// create a second log (for example when the reply to the first attempt was lost).
+  final String clientRef;
+
+  /// When it really happened at the gate. The server records this time, not the time it syncs.
+  final DateTime occurredAt;
   int retryCount;
 
   QueueItem({
@@ -16,26 +24,46 @@ class QueueItem {
     required this.type,
     required this.payload,
     required this.createdAt,
+    String? clientRef,
+    DateTime? occurredAt,
     this.retryCount = 0,
-  });
+  })  : clientRef = clientRef ?? SyncQueueService.safeRef(id),
+        occurredAt = occurredAt ?? createdAt;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'type': type,
         'payload': payload,
         'createdAt': createdAt.toIso8601String(),
+        'clientRef': clientRef,
+        'occurredAt': occurredAt.toUtc().toIso8601String(),
         'retryCount': retryCount,
       };
 
-  factory QueueItem.fromJson(Map<String, dynamic> json) => QueueItem(
-        id: json['id']?.toString() ?? 'q-${DateTime.now().millisecondsSinceEpoch}',
-        type: json['type']?.toString() ?? 'gate_log',
-        payload: Map<String, dynamic>.from(json['payload'] as Map? ?? {}),
-        createdAt: json['createdAt'] != null
-            ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
-            : DateTime.now(),
-        retryCount: (json['retryCount'] as num?)?.toInt() ?? 0,
-      );
+  /// The shape /api/sync.php expects.
+  Map<String, dynamic> toSyncEvent() => {
+        'client_ref': clientRef,
+        'type': type,
+        'occurred_at': occurredAt.toUtc().toIso8601String(),
+        'payload': payload,
+      };
+
+  factory QueueItem.fromJson(Map<String, dynamic> json) {
+    final created = json['createdAt'] != null
+        ? DateTime.tryParse(json['createdAt'].toString()) ?? DateTime.now()
+        : DateTime.now();
+    final id = json['id']?.toString() ?? 'q-${DateTime.now().millisecondsSinceEpoch}';
+    return QueueItem(
+      id: id,
+      type: json['type']?.toString() ?? 'gate_log',
+      payload: Map<String, dynamic>.from(json['payload'] as Map? ?? {}),
+      createdAt: created,
+      // Items queued by an older version of the app have neither: fall back to the queue id / creation time
+      clientRef: json['clientRef']?.toString(),
+      occurredAt: json['occurredAt'] != null ? DateTime.tryParse(json['occurredAt'].toString()) : null,
+      retryCount: (json['retryCount'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 enum SyncStatus {
@@ -44,32 +72,60 @@ enum SyncStatus {
   offline,
 }
 
-/// Automated offline queue manager.
-/// When Wi-Fi disconnects or backend calls fail, mutations are saved to persistent disk.
-/// As soon as Wi-Fi returns, the queue automatically syncs everything in order to the database,
-/// and fetches back the latest database records from the web application.
+/// Offline queue manager.
+///
+/// When the connection drops, gate events are saved on the phone with the time they happened.
+/// The queue is checked every few seconds (and when the app comes back to the foreground), so the
+/// moment a connection is back everything is sent, oldest first, in batches to /api/sync.php.
+///
+/// - Only a genuine connection problem keeps an event queued and retried.
+/// - An event the server refuses for good (for example older than 24 hours) is taken out of the
+///   queue and kept in [LocalCacheService.getRejectedSync] so it can be reviewed, instead of
+///   blocking everything behind it.
+/// - A resend is harmless: the server recognises the event's [QueueItem.clientRef].
 class SyncQueueService {
   static final SyncQueueService _instance = SyncQueueService._internal();
   factory SyncQueueService() => _instance;
 
   SyncQueueService._internal();
 
+  static const int _batchSize = 50;
+  static const Duration _fetchEvery = Duration(seconds: 30);
+  static final Random _random = Random();
+
   Timer? _syncTimer;
   bool _isSyncing = false;
+  DateTime _lastFetch = DateTime.fromMillisecondsSinceEpoch(0);
   final ValueNotifier<int> pendingCountNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<int> rejectedCountNotifier = ValueNotifier<int>(0);
   final ValueNotifier<SyncStatus> statusNotifier = ValueNotifier<SyncStatus>(SyncStatus.synced);
   final ValueNotifier<DateTime?> lastSyncTimeNotifier = ValueNotifier<DateTime?>(null);
 
   int get pendingCount => pendingCountNotifier.value;
+  int get rejectedCount => rejectedCountNotifier.value;
   SyncStatus get status => statusNotifier.value;
   DateTime? get lastSyncTime => lastSyncTimeNotifier.value;
 
-  /// Start automated background sync polling (e.g. every 10 seconds)
-  void startAutoSync({Duration interval = const Duration(seconds: 10)}) {
+  /// A new unique reference for an event (letters, digits and dashes; 8 to 64 characters).
+  static String newClientRef() {
+    final time = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final salt = _random.nextInt(1 << 30).toRadixString(36);
+    return 'm-$time-$salt';
+  }
+
+  /// Turns an old queue id into a reference the server accepts.
+  static String safeRef(String raw) {
+    final cleaned = raw.replaceAll(RegExp(r'[^A-Za-z0-9._:-]'), '_');
+    final padded = cleaned.length < 8 ? cleaned.padRight(8, '_') : cleaned;
+    return padded.length > 64 ? padded.substring(padded.length - 64) : padded;
+  }
+
+  /// Start the background worker. It ticks every few seconds; a tick with nothing to send does no network work.
+  void startAutoSync({Duration interval = const Duration(seconds: 5)}) {
     _updatePendingCount();
     _syncTimer?.cancel();
     _syncTimer = Timer.periodic(interval, (_) => processQueue());
-    debugPrint('[SyncQueueService] Automated offline sync worker started (interval: ${interval.inSeconds}s)');
+    debugPrint('[SyncQueueService] Offline sync worker started (checks every ${interval.inSeconds}s)');
   }
 
   void stopAutoSync() {
@@ -80,81 +136,116 @@ class SyncQueueService {
   @visibleForTesting
   Future<void> clearQueue() async {
     await LocalCacheService.saveSyncQueue([]);
+    _lastFetch = DateTime.fromMillisecondsSinceEpoch(0);
     _updatePendingCount();
   }
 
   void _updatePendingCount() {
     final queue = LocalCacheService.getSyncQueue();
     pendingCountNotifier.value = queue.length;
+    rejectedCountNotifier.value = LocalCacheService.getRejectedSync().length;
     if (!_isSyncing) {
-      if (queue.isNotEmpty) {
-        statusNotifier.value = SyncStatus.offline;
-      } else {
-        statusNotifier.value = SyncStatus.synced;
-      }
+      statusNotifier.value = queue.isNotEmpty ? SyncStatus.offline : SyncStatus.synced;
     }
   }
 
-  /// Enqueue an action when offline or network write failed
+  /// Save an event that could not be sent because the server was unreachable.
   Future<void> enqueue({
     required String type,
     required Map<String, dynamic> payload,
+    String? clientRef,
+    DateTime? occurredAt,
   }) async {
     final plateStr = payload['plate'] ?? payload['plateNumber'] ?? 'item';
+    final now = DateTime.now();
     final item = QueueItem(
-      id: 'q-${DateTime.now().millisecondsSinceEpoch}-$plateStr',
+      id: 'q-${now.millisecondsSinceEpoch}-$plateStr',
       type: type,
       payload: payload,
-      createdAt: DateTime.now(),
+      createdAt: now,
+      clientRef: clientRef ?? newClientRef(),
+      occurredAt: occurredAt ?? now,
     );
 
     final currentQueue = LocalCacheService.getSyncQueue();
     currentQueue.add(item.toJson());
     await LocalCacheService.saveSyncQueue(currentQueue);
     _updatePendingCount();
-    debugPrint('[SyncQueueService] Queued offline $type for $plateStr (Total pending in queue: ${currentQueue.length})');
+    debugPrint('[SyncQueueService] Queued offline $type for $plateStr (pending: ${currentQueue.length})');
   }
 
-  /// Automatically drains and transmits all pending offline items to the live database/web app,
-  /// then automatically fetches back the latest records from the web application.
+  /// Sends everything waiting, oldest first, then (at most every 30 s) refreshes the local cache.
+  /// Returns true when nothing is left in the queue.
   Future<bool> processQueue() async {
     if (_isSyncing) return false;
     _isSyncing = true;
     statusNotifier.value = SyncStatus.syncing;
 
-    final rawQueue = LocalCacheService.getSyncQueue();
-    final remaining = <Map<String, dynamic>>[];
-    bool connectionHealthy = true;
+    var connectionHealthy = true;
+    var delivered = false;
 
-    // 1. PUSH: Drain pending queue items to the web application
-    if (rawQueue.isNotEmpty) {
-      debugPrint('[SyncQueueService] Wi-Fi sync triggered: pushing ${rawQueue.length} pending items to web app...');
+    try {
+      var pending = LocalCacheService.getSyncQueue();
+      while (pending.isNotEmpty && connectionHealthy) {
+        final batchRaw = pending.take(_batchSize).toList();
+        final rest = pending.skip(batchRaw.length).toList();
+        final items = batchRaw.map(QueueItem.fromJson).toList();
 
-      for (int i = 0; i < rawQueue.length; i++) {
-        final raw = rawQueue[i];
-        final item = QueueItem.fromJson(raw);
-
-        if (!connectionHealthy) {
-          // If connection dropped during processing, retain remaining items for next cycle
-          remaining.add(raw);
-          continue;
-        }
-
-        final success = await _dispatchItem(item);
-        if (success) {
-          debugPrint('[SyncQueueService] Successfully synced offline ${item.type} [ID: ${item.id}]');
-        } else {
-          item.retryCount++;
+        final results = await ApiService.syncEvents(items.map((i) => i.toSyncEvent()).toList());
+        if (results == null) {
+          // No connection (or the server could not process the batch): keep everything, try again next tick
           connectionHealthy = false;
-          remaining.add(item.toJson());
+          break;
         }
-      }
 
-      await LocalCacheService.saveSyncQueue(remaining);
+        final byRef = <String, Map<String, dynamic>>{};
+        for (final r in results) {
+          final ref = r['client_ref']?.toString();
+          if (ref != null) byRef[ref] = r;
+        }
+
+        final unanswered = <Map<String, dynamic>>[];
+        final refused = <Map<String, dynamic>>[];
+        for (final item in items) {
+          final result = byRef[item.clientRef];
+          final status = result?['status']?.toString();
+          if (status == 'accepted' || status == 'duplicate') {
+            delivered = true;
+            continue;
+          }
+          if (status == 'rejected') {
+            // The server will never take this one: keep it for review instead of retrying forever
+            refused.add({
+              'clientRef': item.clientRef,
+              'type': item.type,
+              'occurredAt': item.occurredAt.toUtc().toIso8601String(),
+              'code': result?['code']?.toString() ?? 'REJECTED',
+              'message': result?['message']?.toString() ?? '',
+              'payload': item.payload,
+              'rejectedAt': DateTime.now().toIso8601String(),
+            });
+            continue;
+          }
+          item.retryCount++;
+          unanswered.add(item.toJson());
+        }
+
+        if (refused.isNotEmpty) {
+          await LocalCacheService.addRejectedSyncEvents(refused);
+          debugPrint('[SyncQueueService] Server refused ${refused.length} event(s): ${refused.map((r) => r['code']).join(', ')}');
+        }
+        pending = [...unanswered, ...rest];
+        await LocalCacheService.saveSyncQueue(pending);
+        pendingCountNotifier.value = pending.length;
+        if (unanswered.isNotEmpty) connectionHealthy = false;
+      }
+    } catch (e) {
+      connectionHealthy = false;
+      debugPrint('[SyncQueueService] Sync error: $e');
     }
 
-    // 2. FETCH: Automatically pull fresh records from web application if network is active
-    if (connectionHealthy) {
+    var fetched = false;
+    if (connectionHealthy && DateTime.now().difference(_lastFetch) >= _fetchEvery) {
       try {
         final freshVehicles = await ApiService.fetchVehicles();
         if (freshVehicles.isNotEmpty) {
@@ -172,42 +263,20 @@ class SyncQueueService {
       } catch (e) {
         debugPrint('[SyncQueueService] Auto-fetch logs notice: $e');
       }
+      _lastFetch = DateTime.now();
+      fetched = true;
+    }
 
+    // Listeners (the dashboard) refresh only when something was actually delivered or fetched
+    if (connectionHealthy && (delivered || fetched)) {
       lastSyncTimeNotifier.value = DateTime.now();
     }
 
     _isSyncing = false;
     _updatePendingCount();
 
-    if (!connectionHealthy || remaining.isNotEmpty) {
-      statusNotifier.value = SyncStatus.offline;
-    } else {
-      statusNotifier.value = SyncStatus.synced;
-    }
-
+    final remaining = LocalCacheService.getSyncQueue();
+    statusNotifier.value = (!connectionHealthy || remaining.isNotEmpty) ? SyncStatus.offline : SyncStatus.synced;
     return remaining.isEmpty;
-  }
-
-  Future<bool> _dispatchItem(QueueItem item) async {
-    try {
-      switch (item.type) {
-        case 'gate_log':
-          return await ApiService.postGateLogDirect(item.payload);
-        case 'visitor_pass':
-          return await ApiService.postVisitorPassDirect(item.payload);
-        case 'visitor_exit':
-          return await ApiService.postVisitorExitDirect(
-            item.payload['passId']?.toString() ?? '',
-            item.payload['plateNumber']?.toString() ?? '',
-          );
-        case 'incident':
-          return await ApiService.reportIncidentDirect(item.payload);
-        default:
-          return true; // Unknown type, drop to avoid blocking queue
-      }
-    } catch (e) {
-      debugPrint('[SyncQueueService] Dispatch error for ${item.type}: $e');
-      return false;
-    }
   }
 }

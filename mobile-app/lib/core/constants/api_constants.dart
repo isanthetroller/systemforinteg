@@ -17,6 +17,7 @@ class ApiConstants {
   static const String authEndpoint = '/auth.php';
   static const String visitorsEndpoint = '/visitors.php';
   static const String verifyEndpoint = '/verify.php';
+  static const String syncEndpoint = '/sync.php';
 
   static const Duration timeout = Duration(seconds: 8);
 

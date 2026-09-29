@@ -15,6 +15,7 @@ class LocalCacheService {
   static const String keyLogs = 'sp_cached_logs_v2';
   static const String keyVisitorPasses = 'sp_cached_visitor_passes_v2';
   static const String keySyncQueue = 'sp_offline_sync_queue_v2';
+  static const String keyRejectedSync = 'sp_rejected_sync_events_v1';
   static const String keyVisitorPassValidityHours = 'sp_visitor_pass_validity_hours';
   static const String keyServerBaseUrl = 'sp_server_base_url_v2';
 
@@ -223,6 +224,29 @@ class LocalCacheService {
       }
     } catch (e) {
       debugPrint('[LocalCacheService] Error reading sync queue: $e');
+    }
+    return [];
+  }
+
+  // Events the server refused for good (for example older than 24 hours). Kept for review, newest first.
+  static Future<void> addRejectedSyncEvents(List<Map<String, dynamic>> events) async {
+    try {
+      final all = [...events, ...getRejectedSync()];
+      await _setString(keyRejectedSync, jsonEncode(all.take(100).toList()));
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error saving rejected sync events: $e');
+    }
+  }
+
+  static List<Map<String, dynamic>> getRejectedSync() {
+    try {
+      final raw = _getString(keyRejectedSync);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List;
+        return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error reading rejected sync events: $e');
     }
     return [];
   }

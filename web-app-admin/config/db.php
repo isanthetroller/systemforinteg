@@ -303,6 +303,11 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'gate_logs', 'verified_driver_name', 'TEXT NULL');
     ensureColumn($pdo, 'gate_logs', 'gate_type', "TEXT NOT NULL DEFAULT 'Ingress'");
     ensureColumn($pdo, 'gate_logs', 'logged_by_user_id', 'INTEGER NULL');
+    ensureColumn($pdo, 'gate_logs', 'synced_at', 'TEXT NULL');
+    ensureColumn($pdo, 'gate_logs', 'client_ref', 'TEXT NULL');
+    ensureColumn($pdo, 'security_incidents', 'client_ref', 'TEXT NULL');
+    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_gate_logs_client_ref` ON `gate_logs` (`client_ref`)");
+    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_incidents_client_ref` ON `security_incidents` (`client_ref`)");
     ensureColumn($pdo, 'security_incidents', 'logged_by_user_id', 'INTEGER NULL');
 
     // Normalize legacy values (mirrors migrations/001_v2.sql)

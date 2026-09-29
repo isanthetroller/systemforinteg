@@ -15,6 +15,10 @@ A specialized cross-platform mobile application engineered for National College 
   - Built-in AES decryption engine solving InfinityFree anti-bot JavaScript challenges (`slowAES.decrypt`) automatically on live endpoints.
 - **Offline / Standalone Resilience**:
   - Robust mock dataset and offline fallbacks when Wi-Fi or cellular networks drop.
+  - Gate passages, visitor checkouts and incident reports made offline are queued with the time they happened and sent to
+    `/api/sync.php` as soon as the connection is back (checked every 5 seconds and when the app returns to the foreground).
+    A resend never duplicates a log, and a refused event never blocks the ones behind it (it is kept for review).
+  - Visitor passes can only be issued while online: the server signs the QR.
   - Dynamically synthesizes unverified guest passes for unregistered visitor vehicles.
 - **Audit Logging**:
   - Instantly logs entries and exits (time, guard officer, lane direction, vehicle metadata) to live MySQL database.

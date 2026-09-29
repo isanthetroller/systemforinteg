@@ -43,6 +43,8 @@ function handleGetLogs($pdo) {
     }
 
     $whereSql = !empty($where) ? "WHERE " . implode(' AND ', $where) : "";
+    // Rows recorded offline carry the time they reached the server (migration 006)
+    $syncedSelect = columnExists($pdo, 'gate_logs', 'synced_at') ? ",\n            synced_at AS syncedAt" : '';
     $sql = "
         SELECT 
             id,
@@ -59,7 +61,7 @@ function handleGetLogs($pdo) {
             status,
             guard_name AS guardName,
             notes,
-            logged_at AS loggedAt
+            logged_at AS loggedAt{$syncedSelect}
         FROM `gate_logs`
         {$whereSql}
         ORDER BY `id` DESC
@@ -71,24 +73,6 @@ function handleGetLogs($pdo) {
     $logs = $stmt->fetchAll();
 
     sendResponse(200, $logs);
-}
-
-function gateActions() {
-    return ['Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied'];
-}
-
-/**
- * Maps legacy / free-text action names onto the four allowed gate actions.
- */
-function normalizeGateAction($action) {
-    if (in_array($action, gateActions(), true)) return $action;
-    $legacy = [
-        'Flagged & Held' => 'Entry Denied',
-        'Blocked' => 'Entry Denied',
-        'Entry Blocked' => 'Entry Denied',
-        'Exit Recorded' => 'Exit Approved',
-    ];
-    return $legacy[$action] ?? null;
 }
 
 /**
@@ -103,6 +87,19 @@ function normalizeGateAction($action) {
 function handleCreateLog($pdo, $actor) {
     $data = getJsonInput();
     $isScanner = !empty($actor['is_scanner']);
+
+    // A retry of a write that already reached the server (reply lost) must not log twice
+    $clientRef = trim((string)($data['client_ref'] ?? ''));
+    if (!preg_match('/^[A-Za-z0-9._:-]{8,64}$/', $clientRef) || !columnExists($pdo, 'gate_logs', 'client_ref')) {
+        $clientRef = '';
+    }
+    if ($clientRef !== '') {
+        $dup = $pdo->prepare("SELECT `id` FROM `gate_logs` WHERE `client_ref` = ? LIMIT 1");
+        $dup->execute([$clientRef]);
+        if ($existingId = $dup->fetchColumn()) {
+            sendResponse(200, ['id' => (int)$existingId, 'duplicate' => true], 'Already recorded.');
+        }
+    }
 
     $plateNumber = strtoupper(trim((string)($data['plate'] ?? $data['plateNumber'] ?? $data['plate_number'] ?? '')));
     $action = normalizeGateAction(trim((string)($data['action'] ?? 'Entry Recorded')));
@@ -266,6 +263,7 @@ function handleCreateLog($pdo, $actor) {
             'gateType' => $gateType,
             'status' => $status,
             'notes' => $notes,
+            'clientRef' => $clientRef,
         ]);
 
         if ($isApproval && $vehicle) {

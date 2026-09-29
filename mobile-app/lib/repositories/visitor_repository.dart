@@ -99,15 +99,18 @@ class VisitorRepository {
     return _passes.where((p) => p.isActive).toList();
   }
 
-  /// Registers a newly created visitor pass, saves to local repository,
-  /// and forwards to backend API when online.
+  /// Issues a visitor pass. The server signs the QR and must accept the pass first, so this needs a
+  /// connection: without one nothing is saved and a [VisitorPassNotIssued] is thrown for the guard to see.
   Future<VisitorPass> registerPass(VisitorPass pass) async {
+    final issued = await ApiService.postVisitorPass(pass);
+    if (!issued) {
+      throw VisitorPassNotIssued(ApiService.lastWriteError ??
+          'The pass could not be issued. Visitor passes can only be issued while online.');
+    }
+
     _passes.insert(0, pass);
     passesNotifier.value = List.unmodifiable(_passes);
     await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toJson()).toList());
-
-    // Forward to backend service
-    await ApiService.postVisitorPass(pass);
 
     return pass;
   }
@@ -183,4 +186,13 @@ class VisitorRepository {
     }
     return false;
   }
+}
+
+/// Thrown when a visitor pass could not be issued (no connection, or the server refused it).
+class VisitorPassNotIssued implements Exception {
+  final String message;
+  const VisitorPassNotIssued(this.message);
+
+  @override
+  String toString() => message;
 }

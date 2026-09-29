@@ -81,6 +81,18 @@ function handleCreateIncident($pdo, $actor) {
         sendResponse(400, null, "Plate number is required to flag vehicle");
     }
 
+    $clientRef = trim((string)($data['client_ref'] ?? ''));
+    if (!preg_match('/^[A-Za-z0-9._:-]{8,64}$/', $clientRef) || !columnExists($pdo, 'security_incidents', 'client_ref')) {
+        $clientRef = '';
+    }
+    if ($clientRef !== '') {
+        $dup = $pdo->prepare("SELECT `id`, `case_number`, `status` FROM `security_incidents` WHERE `client_ref` = ? LIMIT 1");
+        $dup->execute([$clientRef]);
+        if ($row = $dup->fetch()) {
+            sendResponse(200, ['id' => (int)$row['id'], 'caseNumber' => $row['case_number'], 'plateNumber' => $plateNumber, 'status' => $row['status'], 'duplicate' => true], 'Already recorded.');
+        }
+    }
+
     $caseNumber = newCaseNumber($pdo);
     $vehicleType = isset($data['vehicleType']) ? $data['vehicleType'] : 'Vehicle';
     $ownerName = isset($data['ownerName']) ? $data['ownerName'] : 'Unknown';
@@ -108,6 +120,9 @@ function handleCreateIncident($pdo, $actor) {
             $driverName, $driverRelationship, $reason, $gatePoint, $officer, $loggedByUserId, $notes
         ]);
         $newId = $pdo->lastInsertId();
+        if ($clientRef !== '') {
+            $pdo->prepare("UPDATE `security_incidents` SET `client_ref` = ? WHERE `id` = ?")->execute([$clientRef, $newId]);
+        }
 
         // Update vehicle status to Blocked / Alert
         $upd = $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `plate_number` = ?");

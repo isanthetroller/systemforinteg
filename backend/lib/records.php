@@ -13,11 +13,9 @@ require_once __DIR__ . '/auth.php';
  */
 function recordGateLog($pdo, $actor, array $f) {
     $gateType = $f['gateType'] ?? 'Ingress';
-    $stmt = $pdo->prepare("INSERT INTO `gate_logs` (
-        `plate_number`, `vehicle_type`, `owner_name`, `driver_name`, `driver_relationship`, `verified_driver_name`,
-        `gate_point`, `action`, `gate_type`, `status`, `guard_name`, `logged_by_user_id`, `notes`, `logged_at`
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    $stmt->execute([
+    $columns = ['plate_number', 'vehicle_type', 'owner_name', 'driver_name', 'driver_relationship', 'verified_driver_name',
+        'gate_point', 'action', 'gate_type', 'status', 'guard_name', 'logged_by_user_id', 'notes', 'logged_at'];
+    $values = [
         normalizePlateForLog($f['plate'] ?? 'UNKNOWN'),
         $f['vehicleType'] ?? null,
         $f['ownerName'] ?? null,
@@ -31,8 +29,20 @@ function recordGateLog($pdo, $actor, array $f) {
         gateActorLabel($actor),
         actorUserId($actor),
         $f['notes'] ?? '',
-        date('Y-m-d H:i:s'),
-    ]);
+        $f['loggedAt'] ?? date('Y-m-d H:i:s'),
+    ];
+    // Offline sync / retries: the device's reference makes a resend harmless, syncedAt marks late arrivals
+    if (!empty($f['clientRef'])) {
+        $columns[] = 'client_ref';
+        $values[] = $f['clientRef'];
+    }
+    if (!empty($f['syncedAt'])) {
+        $columns[] = 'synced_at';
+        $values[] = $f['syncedAt'];
+    }
+    $marks = implode(', ', array_fill(0, count($columns), '?'));
+    $stmt = $pdo->prepare("INSERT INTO `gate_logs` (`" . implode('`, `', $columns) . "`) VALUES ({$marks})");
+    $stmt->execute($values);
     return (int)$pdo->lastInsertId();
 }
 
@@ -57,11 +67,13 @@ function openSecurityIncident($pdo, $actor, array $f, $dedupeMinutes = 0) {
     }
 
     $caseNumber = newCaseNumber($pdo);
+    $extraColumns = !empty($f['clientRef']) ? ', `client_ref`' : '';
+    $extraMarks = !empty($f['clientRef']) ? ', ?' : '';
     $stmt = $pdo->prepare("INSERT INTO `security_incidents` (
         `case_number`, `plate_number`, `vehicle_type`, `owner_name`, `owner_role`, `driver_name`,
-        `driver_relationship`, `reason`, `gate_point`, `officer`, `logged_by_user_id`, `status`, `notes`, `reported_at`
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Held', ?, ?)");
-    $stmt->execute([
+        `driver_relationship`, `reason`, `gate_point`, `officer`, `logged_by_user_id`, `status`, `notes`, `reported_at`{$extraColumns}
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Held', ?, ?{$extraMarks})");
+    $stmt->execute(array_merge([
         $caseNumber,
         $plate,
         $f['vehicleType'] ?? null,
@@ -74,8 +86,8 @@ function openSecurityIncident($pdo, $actor, array $f, $dedupeMinutes = 0) {
         gateActorLabel($actor),
         actorUserId($actor),
         $f['notes'] ?? '',
-        date('Y-m-d H:i:s'),
-    ]);
+        $f['reportedAt'] ?? date('Y-m-d H:i:s'),
+    ], !empty($f['clientRef']) ? [$f['clientRef']] : []));
     return ['id' => (int)$pdo->lastInsertId(), 'caseNumber' => $caseNumber, 'duplicate' => false];
 }
 
@@ -103,4 +115,47 @@ function defaultGatePoint($gateType) {
 function normalizePlateForLog($plate) {
     $plate = strtoupper(trim((string)$plate));
     return $plate === '' ? 'UNKNOWN' : substr($plate, 0, 20);
+}
+
+/**
+ * The four gate actions a log may carry, and the mapping of legacy / free-text names onto them.
+ */
+function gateActions() {
+    return ['Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied'];
+}
+
+function normalizeGateAction($action) {
+    if (in_array($action, gateActions(), true)) return $action;
+    $legacy = [
+        'Flagged & Held' => 'Entry Denied',
+        'Blocked' => 'Entry Denied',
+        'Entry Blocked' => 'Entry Denied',
+        'Exit Recorded' => 'Exit Approved',
+    ];
+    return $legacy[$action] ?? null;
+}
+
+/**
+ * True when a table has the column. Lets code that depends on a newer migration degrade gracefully
+ * (for example the live database before migration 006 has been run).
+ */
+function columnExists($pdo, $table, $column) {
+    static $cache = [];
+    $key = "{$table}.{$column}";
+    if (isset($cache[$key])) return $cache[$key];
+    try {
+        if ($GLOBALS['db_driver'] === 'sqlite') {
+            $found = false;
+            foreach ($pdo->query("PRAGMA table_info(`{$table}`)")->fetchAll() as $c) {
+                if ($c['name'] === $column) $found = true;
+            }
+        } else {
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+            $stmt->execute([$table, $column]);
+            $found = (int)$stmt->fetchColumn() > 0;
+        }
+    } catch (Exception $e) {
+        $found = false;
+    }
+    return $cache[$key] = $found;
 }

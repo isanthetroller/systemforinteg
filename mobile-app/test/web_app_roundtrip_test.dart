@@ -18,6 +18,7 @@ void main() {
   final List<Map<String, dynamic>> webDbLogs = [];
   final List<Map<String, dynamic>> webDbVisitors = [];
   final List<Map<String, dynamic>> webDbIncidents = [];
+  final Set<String> webDbSyncedRefs = {}; // client_refs the server has already recorded
   final List<Map<String, dynamic>> webDbVehicles = [
     {
       'id': 'veh-101',
@@ -132,10 +133,48 @@ void main() {
         return;
       }
 
+      // Offline sync: POST /api/sync.php. Like the real endpoint: one result per event,
+      // a repeated client_ref is a duplicate, and an event can be refused for good.
+      if (path == '/api/sync.php' && method == 'POST') {
+        final body = jsonDecode(await utf8.decoder.bind(request).join());
+        final results = <Map<String, dynamic>>[];
+        for (final e in (body['events'] as List)) {
+          final ref = e['client_ref'] as String;
+          final payload = Map<String, dynamic>.from(e['payload'] as Map);
+          final plate = (payload['plateNumber'] ?? payload['plate'] ?? '').toString();
+          if (webDbSyncedRefs.contains(ref)) {
+            results.add({'client_ref': ref, 'status': 'duplicate'});
+          } else if (plate == 'REJECT-1') {
+            results.add({'client_ref': ref, 'status': 'rejected', 'code': 'EVENT_TOO_OLD', 'message': 'Too old to sync'});
+          } else {
+            webDbSyncedRefs.add(ref);
+            webDbLogs.insert(0, {
+              'id': 'LOG-$ref',
+              'plate_number': plate,
+              'driver_name': payload['driverName'] ?? '',
+              'action': payload['action'] ?? 'Entry Recorded',
+              'occurred_at': e['occurred_at'],
+              'client_ref': ref,
+            });
+            results.add({'client_ref': ref, 'status': 'accepted'});
+          }
+        }
+        request.response.statusCode = HttpStatus.ok;
+        request.response.write(jsonEncode({'status': 'success', 'data': {'results': results}}));
+        await request.response.close();
+        return;
+      }
+
       // 3. Gate Logs Endpoint: /api/logs.php
       if (path == '/api/logs.php') {
         if (method == 'POST') {
           final payload = jsonDecode(await utf8.decoder.bind(request).join());
+          if ((payload['plateNumber'] ?? payload['plate']) == 'BANNED-1') {
+            request.response.statusCode = HttpStatus.forbidden;
+            request.response.write(jsonEncode({'status': 'error', 'message': 'Entry refused: vehicle is banned.'}));
+            await request.response.close();
+            return;
+          }
           final logId = 'LOG-${DateTime.now().millisecondsSinceEpoch}';
           final newRecord = {
             'id': logId,
@@ -395,7 +434,7 @@ void main() {
       expect(updatedOnServer['exitTime'], isNotNull);
     });
 
-    test('8. Offline Queue to Web App Sync: Enqueued offline data flushes to web app when online', () async {
+    test('8. Offline Queue to Web App Sync: gate events flush when the connection is back; visitor passes are online-only', () async {
       await SyncQueueService().clearQueue();
       expect(SyncQueueService().pendingCount, equals(0));
 
@@ -404,7 +443,7 @@ void main() {
       // 1. Simulate Wi-Fi drop by setting unreachable baseUrl
       ApiConstants.baseUrl = 'http://127.0.0.1:49999/api';
 
-      // 2. Action while offline: Post a gate entry log
+      // 2. Action while offline: Post a gate entry log (queued)
       await ApiService.postGateLog(
         plateNumber: 'OFFLINE-999',
         driverName: 'Carlos Offline Driver',
@@ -416,7 +455,7 @@ void main() {
         ownerName: 'Carlos Offline Driver',
       );
 
-      // Action while offline: Register a visitor pass
+      // 3. A visitor pass cannot be issued offline: the server signs the QR. It is refused and NOT queued.
       final offlinePass = VisitorPass(
         passId: 'NCST-VIS-OFFLINE-777',
         visitorName: 'Ana Offline Visitor',
@@ -431,27 +470,97 @@ void main() {
         registeredByGuard: 'Officer J. Hernandez',
         gatePoint: 'Gate 1',
       );
-      await ApiService.postVisitorPass(offlinePass);
+      final issued = await ApiService.postVisitorPass(offlinePass);
+      expect(issued, isFalse);
+      expect(ApiService.lastWriteError, isNotNull);
 
-      // Verify items are queued in offline storage
-      expect(SyncQueueService().pendingCount, equals(2));
+      // Only the gate log is waiting
+      expect(SyncQueueService().pendingCount, equals(1));
 
-      // 3. Simulate Wi-Fi restoration by pointing back to the web application server
+      // 4. Simulate Wi-Fi restoration by pointing back to the web application server
       ApiConstants.baseUrl = originalUrl;
 
-      // 4. Trigger automated background sync
+      // 5. Trigger the sync
       final syncCompleted = await SyncQueueService().processQueue();
       expect(syncCompleted, isTrue);
 
       // Verify local queue is completely drained
       expect(SyncQueueService().pendingCount, equals(0));
 
-      // Verify the web application backend actually received the enqueued data!
+      // The web application received the gate log, and never a visitor pass made offline
       expect(webDbLogs.any((l) => l['plate_number'] == 'OFFLINE-999'), isTrue);
-      expect(webDbVisitors.any((v) => v['passId'] == 'NCST-VIS-OFFLINE-777'), isTrue);
-      final syncedVisitor = webDbVisitors.firstWhere((v) => v['passId'] == 'NCST-VIS-OFFLINE-777');
-      expect(syncedVisitor['visitorName'], equals('Ana Offline Visitor'));
-      expect(syncedVisitor['plateNumber'], equals('OFF-7777'));
+      expect(webDbVisitors.any((v) => v['passId'] == 'NCST-VIS-OFFLINE-777'), isFalse);
+    });
+
+    test('9. Offline events keep the time they happened, and sending one twice never duplicates a log', () async {
+      await SyncQueueService().clearQueue();
+      final originalUrl = ApiConstants.baseUrl;
+      ApiConstants.baseUrl = 'http://127.0.0.1:49999/api';
+
+      final before = DateTime.now();
+      await ApiService.postGateLog(plateNumber: 'TIME-001', driverName: 'Test Driver', action: 'Entry Recorded');
+      ApiConstants.baseUrl = originalUrl;
+
+      final snapshot = LocalCacheService.getSyncQueue();
+      expect(snapshot.length, equals(1));
+      final queuedOccurred = DateTime.parse(snapshot.first['occurredAt'] as String);
+      expect(queuedOccurred.isBefore(before.subtract(const Duration(seconds: 1))), isFalse);
+
+      // The phone waits a while before it syncs: the server must still get the original time
+      await Future.delayed(const Duration(milliseconds: 300));
+      expect(await SyncQueueService().processQueue(), isTrue);
+      final stored = webDbLogs.firstWhere((l) => l['plate_number'] == 'TIME-001');
+      expect(DateTime.parse(stored['occurred_at'] as String).isAtSameMomentAs(queuedOccurred), isTrue);
+
+      // A lost reply means the same event is sent again: the server recognises it
+      await LocalCacheService.saveSyncQueue(snapshot);
+      expect(await SyncQueueService().processQueue(), isTrue);
+      expect(webDbLogs.where((l) => l['plate_number'] == 'TIME-001').length, equals(1));
+    });
+
+    test('10. An event the server refuses for good does not block the ones behind it', () async {
+      await SyncQueueService().clearQueue();
+      final originalUrl = ApiConstants.baseUrl;
+      ApiConstants.baseUrl = 'http://127.0.0.1:49999/api';
+
+      await ApiService.postGateLog(plateNumber: 'REJECT-1', driverName: 'Too Old', action: 'Entry Recorded');
+      await ApiService.postGateLog(plateNumber: 'AFTER-001', driverName: 'Next Driver', action: 'Entry Recorded');
+      expect(SyncQueueService().pendingCount, equals(2));
+
+      ApiConstants.baseUrl = originalUrl;
+      final rejectedBefore = LocalCacheService.getRejectedSync().length;
+      expect(await SyncQueueService().processQueue(), isTrue);
+
+      expect(SyncQueueService().pendingCount, equals(0));
+      expect(webDbLogs.any((l) => l['plate_number'] == 'AFTER-001'), isTrue);
+      expect(webDbLogs.any((l) => l['plate_number'] == 'REJECT-1'), isFalse);
+      // The refused event is kept for review instead of being retried forever
+      expect(LocalCacheService.getRejectedSync().length, equals(rejectedBefore + 1));
+      expect(LocalCacheService.getRejectedSync().first['code'], equals('EVENT_TOO_OLD'));
+    });
+
+    test('11. While there is still no connection nothing is lost, and it syncs the moment the connection returns', () async {
+      await SyncQueueService().clearQueue();
+      final originalUrl = ApiConstants.baseUrl;
+      ApiConstants.baseUrl = 'http://127.0.0.1:49999/api';
+
+      await ApiService.postGateLog(plateNumber: 'STILL-OFF', driverName: 'Waiting Driver', action: 'Entry Recorded');
+      expect(await SyncQueueService().processQueue(), isFalse);
+      expect(SyncQueueService().pendingCount, equals(1));
+      expect(SyncQueueService().status, equals(SyncStatus.offline));
+
+      ApiConstants.baseUrl = originalUrl;
+      expect(await SyncQueueService().processQueue(), isTrue);
+      expect(SyncQueueService().pendingCount, equals(0));
+      expect(webDbLogs.any((l) => l['plate_number'] == 'STILL-OFF'), isTrue);
+    });
+
+    test('12. A refusal from the server is not queued for retry', () async {
+      await SyncQueueService().clearQueue();
+      final ok = await ApiService.postGateLog(plateNumber: 'BANNED-1', driverName: 'Banned Driver', action: 'Entry Recorded');
+      expect(ok, isFalse);
+      expect(ApiService.lastWriteError, contains('banned'));
+      expect(SyncQueueService().pendingCount, equals(0));
     });
   });
 }

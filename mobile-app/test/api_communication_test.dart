@@ -117,6 +117,22 @@ void main() {
         return;
       }
 
+      // POST /api/sync.php (the offline queue flushes here): every event is accepted
+      if (path == '/api/sync.php' && method == 'POST') {
+        final content = await utf8.decoder.bind(request).join();
+        final body = jsonDecode(content);
+        final results = (body['events'] as List)
+            .map((e) => {'client_ref': e['client_ref'], 'status': 'accepted'})
+            .toList();
+        request.response.statusCode = HttpStatus.ok;
+        request.response.write(jsonEncode({
+          'status': 'success',
+          'data': {'results': results},
+        }));
+        await request.response.close();
+        return;
+      }
+
       // 3. POST /api/incidents.php
       if (path == '/api/incidents.php' && method == 'POST') {
         final content = await utf8.decoder.bind(request).join();

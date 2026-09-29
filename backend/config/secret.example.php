@@ -35,6 +35,10 @@ define('SP_LEGACY_QR_CUTOFF', '2026-12-31');
 define('SP_CURFEW_TIME', '22:00');
 define('SP_OVERTIME_HOURS', 12);
 
+// How old (hours) an event recorded offline by the mobile app may be when it finally syncs.
+// Older events are refused and stay on the phone for review.
+define('SP_OFFLINE_MAX_HOURS', 24);
+
 // Session lifetimes (hours)
 define('SP_STAFF_TOKEN_HOURS', 12);
 define('SP_STUDENT_TOKEN_HOURS', 168);

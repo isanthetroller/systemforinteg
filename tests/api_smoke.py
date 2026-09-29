@@ -816,6 +816,9 @@ def test_scheduled_and_revoked_passes(admin):
     code, res = call('GET', 'oncampus.php', token=guard)
     row = next((x for x in res['data']['visitors'] if x['plateNumber'] == 'SCH5001'), None)
     check('revoked visitor stays on the campus list, flagged', row is not None and row['revoked'] is True and row['activeHold'], row)
+    code, st = call('GET', 'stats.php', token=guard)
+    check('the dashboard headcount (stats) matches the On Campus list, revoked visitor included',
+          st['data']['inside'] == res['data']['counts']['total'], (st['data']['inside'], res['data']['counts']))
     code, v = verify({'qr_code': today_pass['qrPayload'], 'gate_type': 'Ingress'}, guard)
     check('revoked pass is refused at the entrance', v.get('result') == 'REVOKED' and v.get('accepted') is False, v)
     code, v = verify({'qr_code': today_pass['qrPayload'], 'gate_type': 'Egress'}, guard)
@@ -947,6 +950,211 @@ def test_vip_passes(admin):
     check('editing other fields does not change the class', code == 200, res)
 
 
+def test_offline_sync(admin):
+    section('Offline sync (mobile events recorded without a connection)')
+    import datetime, sqlite3, uuid
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    utc = datetime.timezone.utc
+    manila = datetime.timezone(datetime.timedelta(hours=8))
+    now = datetime.datetime.now(utc)
+
+    def ago(hours=0, minutes=0):
+        return now - datetime.timedelta(hours=hours, minutes=minutes)
+
+    def iso(t):
+        return t.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def manila_str(t):
+        return t.astimezone(manila).strftime('%Y-%m-%d %H:%M:%S')
+
+    def ev(type_, t, payload, ref=None):
+        return {'client_ref': ref or ('T-' + uuid.uuid4().hex[:20]), 'type': type_, 'occurred_at': iso(t), 'payload': payload}
+
+    def sync(events, headers=SCANNER, token=None):
+        return call('POST', 'sync.php', {'events': events}, token, headers=None if token else headers)
+
+    def register(plate, owner):
+        code, res = call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': owner, 'ownerIdNumber': 'ID-' + plate.replace(' ', ''),
+                                                 'authorizedDrivers': [{'fullName': owner, 'relationship': 'Self (Owner)'}]}, admin)
+        return res['data']
+
+    def vehicle(plate):
+        return call('GET', 'vehicles.php?plate=' + plate.replace(' ', ''), token=admin)[1]['data']
+
+    def logs_for(plate, limit=50):
+        return [l for l in call('GET', f'logs.php?limit=200', token=admin)[1]['data'] if l['plateNumber'] == plate][:limit]
+
+    def entry(plate, **extra):
+        return dict({'plate': plate, 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driverName': 'Guard-checked Driver'}, **extra)
+
+    def exit_(plate, **extra):
+        return dict({'plate': plate, 'action': 'Exit Approved', 'gate_type': 'Egress', 'driverName': 'Guard-checked Driver'}, **extra)
+
+    # --- access and shape
+    code, _ = call('POST', 'sync.php', {'events': [ev('gate_log', ago(1), entry('SYN 1001'))]})
+    check('sync without the device key -> 401', code == 401, code)
+    code, _ = call('GET', 'sync.php', headers=SCANNER)
+    check('sync only accepts POST -> 405', code == 405, code)
+    code, _ = sync([])
+    check('empty batch -> 400', code == 400, code)
+    code, _ = sync([ev('gate_log', ago(1), entry('SYN 1001')) for _ in range(51)])
+    check('more than 50 events -> 400', code == 400, code)
+
+    # --- an offline entry keeps its real time
+    v1 = register('SYN 1001', 'Nina Offline')
+    t_in = ago(hours=3)
+    e1 = ev('gate_log', t_in, entry('SYN 1001', guardName='Officer Reyes'))
+    code, res = sync([e1])
+    r = res['data']['results'][0]
+    check('offline entry accepted', code == 200 and r['status'] == 'accepted' and r['flags'] == [] and r['id'], res)
+    row = logs_for('SYN 1001')[0]
+    check('  ...logged with the time it HAPPENED, not the sync time', row['loggedAt'] == manila_str(t_in), (row['loggedAt'], manila_str(t_in)))
+    check('  ...and the sync time is recorded separately', row.get('syncedAt') and row['syncedAt'] > row['loggedAt'], row)
+    check('  ...noted as recorded offline, with the operator', 'Recorded offline' in row['notes'] and 'Officer Reyes' in row['notes'], row['notes'])
+    v = vehicle('SYN 1001')
+    check('  ...vehicle is Inside Campus since the event time', v['status'] == 'Inside Campus' and v['lastEntryTime'] == manila_str(t_in), v)
+
+    # --- resending is harmless
+    code, res = sync([e1])
+    r2 = res['data']['results'][0]
+    check('the same client_ref again -> duplicate, same log', r2['status'] == 'duplicate' and r2['id'] == r['id'], res)
+    check('  ...still one row', len(logs_for('SYN 1001')) == 1, logs_for('SYN 1001'))
+
+    # --- the exit that followed
+    t_out = ago(hours=1)
+    code, res = sync([ev('gate_log', t_out, exit_('SYN 1001'))])
+    check('offline exit accepted', res['data']['results'][0]['status'] == 'accepted', res)
+    check('  ...vehicle is Outside again', vehicle('SYN 1001')['status'] == 'Outside', vehicle('SYN 1001')['status'])
+
+    # --- events arrive out of order: still ends up right
+    register('SYN 1003', 'Omar Order')
+    code, res = sync([ev('gate_log', ago(hours=1), exit_('SYN 1003')), ev('gate_log', ago(hours=4), entry('SYN 1003'))])
+    check('exit listed before entry in one batch: both accepted', [x['status'] for x in res['data']['results']] == ['accepted', 'accepted'] or
+          sorted(x['status'] for x in res['data']['results']) == ['accepted', 'accepted'], res)
+    check('  ...processed oldest first, so the vehicle ends Outside', vehicle('SYN 1003')['status'] == 'Outside', vehicle('SYN 1003')['status'])
+
+    # --- a stale event must not overwrite newer state
+    v4 = register('SYN 1004', 'Sam Stale')
+    drv = int(vehicle('SYN 1004')['authorizedDrivers'][0]['id'])
+    code, res = call('POST', 'logs.php', {'plate': 'SYN 1004', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': drv}, guard)
+    check('(setup) live entry now', code == 201, res)
+    code, res = sync([ev('gate_log', ago(hours=5), exit_('SYN 1004'))])
+    check('an older offline exit is still logged', res['data']['results'][0]['status'] == 'accepted', res)
+    check('  ...but the vehicle stays Inside (the live entry is newer)', vehicle('SYN 1004')['status'] == 'Inside Campus', vehicle('SYN 1004')['status'])
+
+    # --- events that already happened are recorded even when the server would have refused them
+    b = register('SYN 1005', 'Ben Banned')
+    for _ in range(3):
+        call('POST', 'violations.php', {'plate': 'SYN 1005', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
+    check('(setup) vehicle is banned', vehicle('SYN 1005')['isBanned'] is True, vehicle('SYN 1005'))
+    code, res = call('POST', 'logs.php', {'plate': 'SYN 1005', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': int(vehicle('SYN 1005')['authorizedDrivers'][0]['id'])}, guard)
+    check('(live) the same entry would be refused', code == 403, res)
+    code, res = sync([ev('gate_log', ago(hours=2), entry('SYN 1005'))])
+    r = res['data']['results'][0]
+    check('offline entry of a banned vehicle is RECORDED, flagged BANNED', r['status'] == 'accepted' and r['flags'] == ['BANNED'] and r['caseNumber'], res)
+    held = open_incidents_for(admin, 'SYN 1005')
+    check('  ...a Held incident tells the security office it is on campus', any(i['reason'] == 'Offline entry needs review' for i in held), held)
+    check('  ...the log says why', 'FLAGGED AT SYNC: BANNED' in logs_for('SYN 1005')[0]['notes'], logs_for('SYN 1005')[0]['notes'])
+    check('  ...and the vehicle is shown inside', vehicle('SYN 1005')['status'] == 'Inside Campus', vehicle('SYN 1005')['status'])
+
+    code, res = sync([ev('gate_log', ago(hours=2), entry('SYN 9999'))])
+    r = res['data']['results'][0]
+    check('offline entry of an unregistered plate: recorded, flagged UNREGISTERED', r['status'] == 'accepted' and r['flags'] == ['UNREGISTERED'], res)
+
+    # --- visitor passes
+    base = {'visitor_name': 'Vera Visitor', 'contact_number': '0917 111 2222', 'plate': 'SYN 2002', 'purpose': 'Meeting', 'person_to_visit': 'Registrar'}
+    code, res = call('POST', 'visitors.php', base, guard)
+    vp = res['data']
+    t_v = ago(minutes=90)
+    code, res = sync([ev('gate_log', t_v, entry('SYN 2002', driverName=''))])
+    r = res['data']['results'][0]
+    check('offline entry with a valid day pass: accepted, no flags', r['status'] == 'accepted' and r['flags'] == [], res)
+    code, res = call('GET', f'visitors.php?id={vp["id"]}', token=guard)
+    check('  ...the pass records the real entry time', res['data']['entryTime'] == manila_str(t_v) and res['data']['isInside'] is True, res['data'])
+    code, res = sync([ev('visitor_exit', ago(minutes=30), {'passId': vp['passCode'], 'plateNumber': 'SYN 2002'}, ref='T-visitorexit-0001')])
+    check('offline visitor checkout accepted', res['data']['results'][0]['status'] == 'accepted', res)
+    code, res = call('GET', f'visitors.php?id={vp["id"]}', token=guard)
+    exit_time = res['data']['exitTime']
+    check('  ...the pass records the real exit time and is Used', exit_time == manila_str(ago(minutes=30)) and res['data']['status'] == 'Used', res['data'])
+    code, res = sync([ev('visitor_exit', ago(minutes=5), {'passId': vp['passCode']}, ref='T-visitorexit-0002')])
+    code, res2 = call('GET', f'visitors.php?id={vp["id"]}', token=guard)
+    check('  ...a second checkout keeps the first exit time', res2['data']['exitTime'] == exit_time, res2['data'])
+    code, res = sync([ev('visitor_exit', ago(minutes=5), {'passId': 'VP-NOPE-0000'}, ref='T-visitorexit-0003')])
+    check('checkout for an unknown pass -> rejected NOT_FOUND', res['data']['results'][0]['code'] == 'NOT_FOUND', res)
+
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=2)).isoformat()
+    code, res = call('POST', 'visitors.php', dict(base, plate='SYN 2003', valid_date=tomorrow), admin)
+    future = res['data']
+    code, res = sync([ev('gate_log', ago(minutes=20), entry('SYN 2003'))])
+    check('offline entry on a pass for a later day: recorded, flagged NOT_YET_VALID', res['data']['results'][0]['flags'] == ['NOT_YET_VALID'], res)
+    code, res = call('POST', 'visitors.php', dict(base, plate='SYN 2004'), guard)
+    call('PUT', 'visitors.php', {'id': res['data']['id'], 'action': 'revoke'}, admin)
+    code, res = sync([ev('gate_log', ago(minutes=20), entry('SYN 2004'))])
+    check('offline entry on a revoked pass: recorded, flagged REVOKED', res['data']['results'][0]['flags'] == ['REVOKED'], res)
+    code, res = sync([ev('visitor_pass', ago(minutes=20), dict(base, plate='SYN 2005'), ref='T-visitorpass-0001')])
+    check('a visitor pass cannot be issued offline -> rejected', res['data']['results'][0]['code'] == 'NOT_SUPPORTED_OFFLINE', res)
+    code, res = call('GET', 'visitors.php?q=SYN2005', token=guard)
+    check('  ...and none was created', code == 404, code)
+
+    # --- VIP
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'SYN 3001', 'ownerName': 'Dr. Vee', 'ownerIdNumber': 'ID-SYN3001', 'passClass': 'VIP'}, admin)
+    code, res = sync([ev('gate_log', ago(hours=2), {'plate': 'SYN 3001', 'action': 'Entry Recorded', 'gate_type': 'Ingress'})])
+    check('offline VIP entry: recorded with no flags and tagged VIP', res['data']['results'][0]['flags'] == [] and logs_for('SYN 3001')[0]['notes'].startswith('VIP pass'), res)
+
+    # --- time rules
+    code, res = sync([ev('gate_log', ago(hours=25), entry('SYN 1001'))])
+    check('an event older than 24 hours -> rejected EVENT_TOO_OLD', res['data']['results'][0]['code'] == 'EVENT_TOO_OLD', res)
+    code, res = sync([ev('gate_log', ago(hours=23, minutes=50), entry('SYN 1001'))])
+    check('an event just inside the limit is accepted', res['data']['results'][0]['status'] == 'accepted', res)
+    future_t = now + datetime.timedelta(hours=2)
+    code, res = sync([ev('gate_log', future_t, entry('SYN 1006'))])
+    row = logs_for('SYN 1006')[0]
+    check('a phone clock running ahead is clamped to now, and noted', res['data']['results'][0]['status'] == 'accepted'
+          and row['loggedAt'] <= manila_str(now + datetime.timedelta(minutes=2)) and 'clock was ahead' in row['notes'], row)
+    code, res = sync([dict(ev('gate_log', ago(1), entry('SYN 1001')), occurred_at='sometime')])
+    check('an unreadable event time -> rejected', res['data']['results'][0]['code'] == 'INVALID_OCCURRED_AT', res)
+    code, res = sync([{'client_ref': 'T-missing-time-0001', 'type': 'gate_log', 'payload': entry('SYN 1001')}])
+    check('a missing event time -> rejected', res['data']['results'][0]['code'] == 'MISSING_OCCURRED_AT', res)
+    code, res = sync([dict(ev('gate_log', ago(1), entry('SYN 1001')), client_ref='short')])
+    check('a bad client_ref -> rejected', res['data']['results'][0]['code'] == 'INVALID_CLIENT_REF', res)
+
+    # --- one bad event never blocks the others
+    good = ev('gate_log', ago(minutes=10), exit_('SYN 1001'))
+    code, res = sync([ev('teleport', ago(1), {}, ref='T-unknown-type-0001'), ev('gate_log', ago(1), {'action': 'Entry Recorded'}, ref='T-no-plate-000001'),
+                      ev('gate_log', ago(1), {'plate': 'SYN 1001', 'action': 'Party Time'}, ref='T-bad-action-00001'), good])
+    codes = {x['client_ref']: x.get('code') or x['status'] for x in res['data']['results']}
+    check('bad events are rejected with a reason, and the good one after them is still accepted',
+          codes['T-unknown-type-0001'] == 'UNKNOWN_TYPE' and codes['T-no-plate-000001'] == 'MISSING_PLATE'
+          and codes['T-bad-action-00001'] == 'INVALID_ACTION' and codes[good['client_ref']] == 'accepted', codes)
+
+    # --- incidents
+    inc = ev('incident', ago(hours=1), {'plateNumber': 'SYN 7777', 'driverName': 'Suspicious Driver', 'reason': 'Refused inspection',
+                                       'gatePoint': 'Gate 1 (Main Ingress)', 'officer': 'Officer Reyes', 'notes': 'Left before check'})
+    code, res = sync([inc])
+    r = res['data']['results'][0]
+    check('offline incident report accepted', r['status'] == 'accepted' and r['caseNumber'], res)
+    code, res = sync([inc])
+    check('  ...and resending it does not open a second case', res['data']['results'][0]['status'] == 'duplicate'
+          and res['data']['results'][0]['caseNumber'] == r['caseNumber'], res)
+    check('  ...one Held case', len(open_incidents_for(admin, 'SYN 7777')) == 1, open_incidents_for(admin, 'SYN 7777'))
+
+    # --- the live endpoints are idempotent too (reply lost, app retries)
+    ref = 'T-live-retry-000001'
+    body = {'plate': 'SYN 1004', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drv, 'client_ref': ref}
+    code, res = call('POST', 'logs.php', body, guard)
+    check('live log with a client_ref -> 201', code == 201, res)
+    before = len(logs_for('SYN 1004'))
+    code, res = call('POST', 'logs.php', body, guard)
+    check('the same live log again -> 200 "already recorded", nothing added', code == 200 and res['data']['duplicate'] is True and len(logs_for('SYN 1004')) == before, res)
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'SYN 7778', 'reason': 'Test', 'client_ref': 'T-live-incident-01'}, guard)
+    code2, res2 = call('POST', 'incidents.php', {'plateNumber': 'SYN 7778', 'reason': 'Test', 'client_ref': 'T-live-incident-01'}, guard)
+    check('the same live incident again -> 200, one case', code == 201 and code2 == 200 and res2['data']['caseNumber'] == res['data']['caseNumber'], (res, res2))
+
+    # --- the web app can tell which rows arrived late
+    live = [l for l in call('GET', 'logs.php?limit=200', token=admin)[1]['data'] if l['plateNumber'] == 'NDK4821' or l['plateNumber'] == 'NDK 4821']
+    check('live rows have no sync time; offline rows do', all(not l.get('syncedAt') for l in live) and bool(logs_for('SYN 1001')[0].get('syncedAt')), live[:1])
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -972,6 +1180,7 @@ def main():
     test_visitor_items_and_on_campus(admin)
     test_scheduled_and_revoked_passes(admin)
     test_vip_passes(admin)
+    test_offline_sync(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
 

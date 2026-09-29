@@ -36,6 +36,12 @@ visitors get **single-day passes**.
   editing a vehicle. VIP vehicles are exempt from strikes and bans, overnight / overtime checks and the gate's
   driver-confirmation step, and show a gold VIP banner. The pass is still signed and can be revoked, and every passage
   is logged as a VIP passage. The class is stored in the database (not in the QR), with who granted it and when.
+- **Offline sync**: when the gate has no connection the mobile app keeps each event with the time it happened and sends it
+  to `sync.php` the moment a connection is back (it checks every few seconds and when the app returns to the foreground).
+  The log keeps the real event time; rows that arrived late are marked "OFFLINE, synced hh:mm". Every event has a unique
+  reference, so a resend never duplicates a log. Entries that already happened are always recorded: if the vehicle turns
+  out to be banned, unregistered or on a revoked / expired pass, the log is flagged and a Held incident is opened.
+  Events older than 24 hours (`SP_OFFLINE_MAX_HOURS`) are refused and stay on the phone. Visitor passes cannot be issued offline.
 - **CCTV simulation widget** (`web-app-admin/assets/cctv_simulation.mp4`, shows "NO SIGNAL" until added).
 - **Staff Accounts** page; one-time temporary passwords; forced change at first sign-in.
 
@@ -54,7 +60,7 @@ backend/                  <- the ONLY place PHP is edited
   api/                    endpoints (see API reference below)
   lib/                    auth, qr, vehicles, records, strikes, students
   config/                 db.php, secret.example.php, secret.php (git-ignored)
-  database/               schema.sql (fresh install), migrations/ 001 to 005 (existing DB)
+  database/               schema.sql (fresh install), migrations/ 001 to 006 (existing DB)
 web-app-admin/            admin & guard portal (+ generated copy of backend/api, lib, config, database)
 web-app-student/          student portal (own HTML / CSS / JS, calls ../api)
 tests/api_smoke.py        API smoke test (local only)
@@ -123,7 +129,7 @@ Nothing is deployed automatically. Steps, in order:
 1. **Back up** the live database (phpMyAdmin → Export).
 2. **Migrate the existing database** — phpMyAdmin → SQL → run, in order and **once each**,
    `backend/database/migrations/001_v2.sql`, `002_visitor_items.sql`, `003_system_settings.sql`, then
-   `004_vehicle_status_outside.sql`, then `005_vip_pass_class.sql`. All are non-destructive
+   `004_vehicle_status_outside.sql`, `005_vip_pass_class.sql`, then `006_offline_sync.sql`. All are non-destructive
    (keep vehicles, drivers, logs, incidents).
    Do **not** run `schema.sql` on the live database: it drops every table (fresh installs only).
 3. Create **`backend/config/secret.production.php`** (git-ignored) from `secret.example.php` with
@@ -157,7 +163,8 @@ Staff and students authenticate with `Authorization: Bearer <token>` (fallback h
 | `vehicles.php` | GET list: staff (admins also get `qrPayload`) · GET `?plate=` / `?qr=`: staff or scanner · POST / PUT / DELETE: admin | |
 | `passes.php` (reissue) | POST | admin |
 | `verify.php` | POST `{ qr_code | plate, gate_type }` | staff or scanner |
-| `logs.php` | GET: staff · POST `{ plate, action, gate_type, driver_id | visitor_pass_id, items_verified }` | staff or scanner |
+| `logs.php` | GET: staff · POST `{ plate, action, gate_type, driver_id | visitor_pass_id, items_verified, client_ref? }` (a repeated `client_ref` is ignored) | staff or scanner |
+| `sync.php` | POST `{ events: [{ client_ref, type: gate_log \| visitor_exit \| incident, occurred_at, payload }] }` (max 50): the mobile app's offline queue | staff or scanner |
 | `incidents.php` | GET: staff · POST: staff or scanner · PUT (resolve): admin | |
 | `violations.php` | GET / POST (guards: warnings only) · PUT resolve / dismiss / reset: admin | staff |
 | `overnight_check.php` | GET report · POST run / `{ vehicle_id }` flag | staff |

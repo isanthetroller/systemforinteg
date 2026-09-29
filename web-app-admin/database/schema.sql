@@ -97,7 +97,9 @@ CREATE TABLE `gate_logs` (
   `guard_name` VARCHAR(100) NOT NULL DEFAULT 'Gate Officer',
   `logged_by_user_id` INT NULL,
   `notes` TEXT NULL,
-  `logged_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `logged_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'When it happened (event time)',
+  `synced_at` DATETIME NULL COMMENT 'When it reached the server, for events recorded offline',
+  `client_ref` VARCHAR(64) NULL UNIQUE COMMENT 'Device reference: makes a resend harmless',
   INDEX `idx_log_plate` (`plate_number`),
   INDEX `idx_log_time` (`logged_at`),
   INDEX `idx_log_action` (`action`),
@@ -125,6 +127,7 @@ CREATE TABLE `security_incidents` (
   `notes` TEXT NULL,
   `reported_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `resolved_at` DATETIME NULL,
+  `client_ref` VARCHAR(64) NULL UNIQUE COMMENT 'Device reference: makes a resend harmless',
   INDEX `idx_incident_case` (`case_number`),
   INDEX `idx_incident_plate` (`plate_number`),
   INDEX `idx_incident_status` (`status`)

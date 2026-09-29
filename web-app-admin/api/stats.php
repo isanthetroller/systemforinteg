@@ -29,7 +29,7 @@ try {
 
     $stmtInsideVisitors = $pdo->query("
         SELECT COUNT(*) AS cnt FROM `visitor_passes` 
-        WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` = 'Active'
+        WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` IN ('Active', 'Revoked')
     ");
     $insideVisitors = (int)$stmtInsideVisitors->fetch()['cnt'];
     $insideCount = $insideVehicles + $insideVisitors;

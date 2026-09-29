@@ -9,11 +9,26 @@ import '../models/visitor_pass_model.dart';
 import 'local_cache_service.dart';
 import 'sync_queue_service.dart';
 
+/// What happened to a live write (a POST the guard is waiting on).
+enum WriteOutcome {
+  /// The server recorded it.
+  accepted,
+
+  /// The server understood and said no (banned vehicle, unknown plate, duplicate pass...). Do not queue it.
+  refused,
+
+  /// No connection, timeout, server error or expired session. Queue it and try again later.
+  unreachable,
+}
+
 /// Central API Service for Flutter Android App communicating with InfinityFree Backend
 class ApiService {
   static http.Client _client = http.Client();
   static String? _testCookie;
   static String? authToken;
+
+  /// The server's message for the last refused write, or why it could not be sent.
+  static String? lastWriteError;
 
   @visibleForTesting
   static void setClientForTesting(http.Client client) {
@@ -393,19 +408,70 @@ class ApiService {
     }
   }
 
-  /// Direct HTTP post for gate log (called by SyncQueueService during automated flush)
-  static Future<bool> postGateLogDirect(Map<String, dynamic> payload) async {
+  /// Classifies a server reply to a live write.
+  static WriteOutcome _outcomeOf(http.Response res) {
+    final looksLikeHtml = res.body.contains('<html') || res.body.contains('<!DOCTYPE');
+    if ((res.statusCode == 200 || res.statusCode == 201) && !looksLikeHtml) return WriteOutcome.accepted;
+    // 5xx (including the synthetic 503 "offline"), timeouts, rate limits, expired session and anti-bot pages: try again later
+    if (looksLikeHtml || res.statusCode >= 500 || res.statusCode == 408 || res.statusCode == 429 || res.statusCode == 401) {
+      return WriteOutcome.unreachable;
+    }
+    return WriteOutcome.refused;
+  }
+
+  static String? _messageOf(http.Response res) {
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.logsEndpoint}');
+      final body = jsonDecode(res.body);
+      if (body is Map && body['message'] != null) return body['message'].toString();
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<WriteOutcome> _postForOutcome(String endpoint, Map<String, dynamic> payload) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.baseUrl}$endpoint');
       final res = await _post(uri, jsonEncode(payload));
-      return res.statusCode == 200 || res.statusCode == 201;
+      final outcome = _outcomeOf(res);
+      if (outcome == WriteOutcome.refused) {
+        lastWriteError = _messageOf(res) ?? 'The server refused this request (${res.statusCode}).';
+      } else if (outcome == WriteOutcome.unreachable) {
+        lastWriteError = 'No connection to the server.';
+      }
+      return outcome;
     } catch (e) {
-      debugPrint('[ApiService] postGateLogDirect note: $e');
-      return false;
+      debugPrint('[ApiService] Write to $endpoint failed: $e');
+      lastWriteError = 'No connection to the server.';
+      return WriteOutcome.unreachable;
     }
   }
 
-  /// Post gate passage (Entry or Exit) to the live MySQL audit log with local cache and offline auto-queue
+  /// Sends queued offline events to /api/sync.php in one request.
+  /// Returns one result per event (`accepted`, `duplicate` or `rejected`), or null when the server
+  /// could not be reached or could not process the batch, in which case everything stays queued.
+  static Future<List<Map<String, dynamic>>?> syncEvents(List<Map<String, dynamic>> events) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.syncEndpoint}');
+      final res = await _post(uri, jsonEncode({'events': events}));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body);
+      final data = body is Map ? body['data'] : null;
+      final results = data is Map ? data['results'] : null;
+      if (results is! List) return null;
+      return results.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    } catch (e) {
+      debugPrint('[ApiService] syncEvents note: $e');
+      return null;
+    }
+  }
+
+  /// Direct HTTP post for a gate log (live write)
+  static Future<bool> postGateLogDirect(Map<String, dynamic> payload) async {
+    return (await _postForOutcome(ApiConstants.logsEndpoint, payload)) == WriteOutcome.accepted;
+  }
+
+  /// Post gate passage (Entry or Exit). It is always cached locally so the guard UI shows it at once.
+  /// If the server cannot be reached the passage is queued with the time it happened and sent as soon
+  /// as a connection is back. If the server refuses it, it is not queued (retrying cannot change the answer).
   static Future<bool> postGateLog({
     required String plateNumber,
     required String driverName,
@@ -419,7 +485,9 @@ class ApiService {
     String? ownerName,
   }) async {
     final gateType = (action.contains('Exit') || action.contains('Egress')) ? 'Egress' : 'Ingress';
-    final payload = {
+    final clientRef = SyncQueueService.newClientRef();
+    final occurredAt = DateTime.now();
+    final Map<String, dynamic> payload = {
       'plate': plateNumber,
       'plateNumber': plateNumber,
       'driverName': driverName,
@@ -432,6 +500,8 @@ class ApiService {
       'notes': notes,
       'vehicleType': vehicleType ?? '',
       'ownerName': ownerName ?? '',
+      'client_ref': clientRef,
+      'occurred_at': occurredAt.toUtc().toIso8601String(),
     };
 
     GateStatus localStatus = GateStatus.inside;
@@ -443,49 +513,48 @@ class ApiService {
 
     // 1. Immediately cache in local audit log so the guard UI displays it even offline
     final localEntry = AuditLogEntry(
-      id: 'LOG-${DateTime.now().millisecondsSinceEpoch}',
+      id: 'LOG-${occurredAt.millisecondsSinceEpoch}',
       plateNumber: plateNumber,
       vehicleType: vehicleType ?? 'Vehicle',
       ownerName: ownerName ?? driverName,
       driverName: driverName,
       driverRelationship: driverRelationship,
-      timeIn: DateTime.now(),
+      timeIn: occurredAt,
       action: action,
       status: localStatus,
       blockReason: localStatus == GateStatus.blocked ? notes : null,
     );
     await LocalCacheService.appendLocalLog(localEntry);
 
-    // 2. Try direct network transmission if online
-    final success = await postGateLogDirect(payload);
-    if (success) {
+    // 2. Live write
+    final outcome = await _postForOutcome(ApiConstants.logsEndpoint, payload);
+    if (outcome == WriteOutcome.accepted) {
       debugPrint('[ApiService] Gate passage logged to server for $plateNumber');
       unawaited(SyncQueueService().processQueue());
       return true;
     }
+    if (outcome == WriteOutcome.refused) {
+      debugPrint('[ApiService] Server refused the gate passage for $plateNumber: $lastWriteError');
+      return false;
+    }
 
-    // 3. Wi-Fi disconnected or server error: Enqueue to persistent queue for automated background sync!
-    debugPrint('[ApiService] Wi-Fi unavailable. Queuing gate passage for $plateNumber to offline sync queue.');
+    // 3. No connection: queue it with the time it happened; it is sent the moment the connection is back
+    debugPrint('[ApiService] Offline: queuing gate passage for $plateNumber');
     await SyncQueueService().enqueue(
       type: 'gate_log',
       payload: payload,
+      clientRef: clientRef,
+      occurredAt: occurredAt,
     );
     return true;
   }
 
-  /// Direct HTTP post for security incident
+  /// Direct HTTP post for a security incident (live write)
   static Future<bool> reportIncidentDirect(Map<String, dynamic> payload) async {
-    try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.incidentsEndpoint}');
-      final res = await _post(uri, jsonEncode(payload));
-      return res.statusCode == 200 || res.statusCode == 201;
-    } catch (e) {
-      debugPrint('[ApiService] reportIncidentDirect note: $e');
-      return false;
-    }
+    return (await _postForOutcome(ApiConstants.incidentsEndpoint, payload)) == WriteOutcome.accepted;
   }
 
-  /// Post security incident hold with offline auto-queue
+  /// Post a security incident hold; queued with its real time when offline
   static Future<bool> reportIncident({
     required String plateNumber,
     required String driverName,
@@ -494,87 +563,91 @@ class ApiService {
     String officer = 'Gate Security Officer',
     String notes = '',
   }) async {
-    final payload = {
+    final clientRef = SyncQueueService.newClientRef();
+    final occurredAt = DateTime.now();
+    final Map<String, dynamic> payload = {
       'plateNumber': plateNumber,
       'driverName': driverName,
       'reason': reason,
       'gatePoint': gatePoint,
       'officer': officer,
       'notes': notes,
+      'client_ref': clientRef,
     };
 
-    final success = await reportIncidentDirect(payload);
-    if (success) return true;
+    final outcome = await _postForOutcome(ApiConstants.incidentsEndpoint, payload);
+    if (outcome == WriteOutcome.accepted) return true;
+    if (outcome == WriteOutcome.refused) {
+      debugPrint('[ApiService] Server refused the incident for $plateNumber: $lastWriteError');
+      return false;
+    }
 
-    debugPrint('[ApiService] Offline: Queuing security incident for $plateNumber');
+    debugPrint('[ApiService] Offline: queuing security incident for $plateNumber');
     await SyncQueueService().enqueue(
       type: 'incident',
       payload: payload,
+      clientRef: clientRef,
+      occurredAt: occurredAt,
     );
     return true;
   }
 
-  /// Direct HTTP post for visitor pass creation
+  /// Direct HTTP post for visitor pass creation (live write)
   static Future<bool> postVisitorPassDirect(Map<String, dynamic> payload) async {
-    try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}/visitors.php');
-      final res = await _post(uri, jsonEncode(payload));
-      return res.statusCode == 200 || res.statusCode == 201;
-    } catch (e) {
-      debugPrint('[ApiService] postVisitorPassDirect note: $e');
-      return false;
-    }
+    return (await _postForOutcome(ApiConstants.visitorsEndpoint, payload)) == WriteOutcome.accepted;
   }
 
-  /// Post visitor pass creation with offline auto-queue
+  /// Visitor passes are issued ONLINE ONLY: the server signs the QR and owns the pass code, so a pass
+  /// made offline would be a QR that cannot be verified at the exit gate. Returns false when the pass
+  /// was not issued; [lastWriteError] says why (no connection, or the server's reason).
   static Future<bool> postVisitorPass(VisitorPass pass) async {
-    final success = await postVisitorPassDirect(pass.toJson());
-    if (success) {
+    final outcome = await _postForOutcome(ApiConstants.visitorsEndpoint, pass.toJson());
+    if (outcome == WriteOutcome.accepted) {
       unawaited(SyncQueueService().processQueue());
       return true;
     }
-
-    debugPrint('[ApiService] Offline: Queuing visitor pass ${pass.passId} for automatic sync');
-    await SyncQueueService().enqueue(
-      type: 'visitor_pass',
-      payload: pass.toJson(),
-    );
-    return true;
+    if (outcome == WriteOutcome.unreachable) {
+      lastWriteError = 'No connection to the server. Visitor passes can only be issued while online.';
+    }
+    return false;
   }
 
-  /// Direct HTTP post for visitor exit checkout
+  /// Direct HTTP post for visitor exit checkout (live write)
   static Future<bool> postVisitorExitDirect(String passId, String plateNumber) async {
-    try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}/visitors.php?action=exit');
-      final payload = jsonEncode({
-        'passId': passId,
-        'plateNumber': plateNumber,
-        'exitTime': DateTime.now().toIso8601String(),
-      });
-      final res = await _post(uri, payload);
-      return res.statusCode == 200;
-    } catch (e) {
-      debugPrint('[ApiService] postVisitorExitDirect note: $e');
+    final payload = <String, dynamic>{
+      'passId': passId,
+      'plateNumber': plateNumber,
+      'exitTime': DateTime.now().toIso8601String(),
+    };
+    return (await _postForOutcome('${ApiConstants.visitorsEndpoint}?action=exit', payload)) == WriteOutcome.accepted;
+  }
+
+  /// Post visitor checkout upon exit; queued with its real time when offline
+  static Future<bool> postVisitorExit(String passId, String plateNumber) async {
+    final clientRef = SyncQueueService.newClientRef();
+    final occurredAt = DateTime.now();
+    final Map<String, dynamic> payload = {
+      'passId': passId,
+      'plateNumber': plateNumber,
+      'exitTime': occurredAt.toIso8601String(),
+    };
+
+    final outcome = await _postForOutcome('${ApiConstants.visitorsEndpoint}?action=exit', payload);
+    if (outcome == WriteOutcome.accepted) {
+      unawaited(SyncQueueService().processQueue());
+      return true;
+    }
+    if (outcome == WriteOutcome.refused) {
+      debugPrint('[ApiService] Server refused the checkout of $passId / $plateNumber: $lastWriteError');
       return false;
     }
-  }
 
-  /// Post visitor checkout upon exit with offline auto-queue
-  static Future<bool> postVisitorExit(String passId, String plateNumber) async {
-    final success = await postVisitorExitDirect(passId, plateNumber);
-    if (success) {
-      unawaited(SyncQueueService().processQueue());
-      return true;
-    }
-
-    debugPrint('[ApiService] Offline: Queuing visitor checkout for $passId / $plateNumber');
+    debugPrint('[ApiService] Offline: queuing visitor checkout for $passId / $plateNumber');
     await SyncQueueService().enqueue(
       type: 'visitor_exit',
-      payload: {
-        'passId': passId,
-        'plateNumber': plateNumber,
-        'exitTime': DateTime.now().toIso8601String(),
-      },
+      payload: payload,
+      clientRef: clientRef,
+      occurredAt: occurredAt,
     );
     return true;
   }

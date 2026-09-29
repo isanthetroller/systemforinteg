@@ -917,8 +917,25 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       items: List.from(_declaredItems),
     );
 
-    // Register locally & queue for backend sync
-    final registeredPass = await VisitorRepository().registerPass(newPass);
+    // The server must accept the pass first (it signs the QR), so this needs a connection
+    final VisitorPass registeredPass;
+    try {
+      registeredPass = await VisitorRepository().registerPass(newPass);
+    } on VisitorPassNotIssued catch (e) {
+      if (mounted) {
+        setState(() {
+          _isGeneratingPass = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: NcstColors.crimson,
+            duration: const Duration(seconds: 6),
+            content: Text('Visitor pass NOT issued: ${e.message}'),
+          ),
+        );
+      }
+      return;
+    }
 
     final itemsNote = _declaredItems.isNotEmpty
         ? ' | Items declared: ${_declaredItems.map((e) => "${e['name']} x${e['quantity']}").join(', ')}'

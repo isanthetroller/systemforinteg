@@ -1376,7 +1376,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${passInfo}
         </td>
         <td class="py-2.5 px-3.5 font-mono text-slate-500 text-xs">
-          ${escapeHtml(log.timestamp.replace('Today, ', ''))}
+          ${escapeHtml(log.timestamp.replace('Today, ', ''))}${offlineChip(log)}
         </td>
         <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
           <div>${escapeHtml(log.gatePoint)}</div>
@@ -1523,7 +1523,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${escapeHtml(entryTimeStr)}
         </td>
         <td class="py-2.5 px-3.5 font-mono text-slate-900 font-semibold text-xs">
-          ${escapeHtml(log.timestamp.replace('Today, ', ''))}
+          ${escapeHtml(log.timestamp.replace('Today, ', ''))}${offlineChip(log)}
         </td>
         <td class="py-2.5 px-3.5">
           ${durationBadge}
@@ -2106,7 +2106,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </span>
         </td>
         <td class="py-2.5 px-4 text-right font-mono font-medium text-slate-700 whitespace-nowrap">
-          ${escapeHtml(log.timestamp.replace('Today, ', ''))}
+          ${escapeHtml(log.timestamp.replace('Today, ', ''))}${offlineChip(log)}
         </td>
         <td class="py-2.5 px-4 text-right whitespace-nowrap">
           <button type="button" class="audit-details-btn px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 hover:text-ncst-navy text-xs font-semibold text-slate-800 shadow-2xs transition-all cursor-pointer">
@@ -2773,6 +2773,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="col-span-2">
             <span class="text-slate-400 block text-[11px]">Logged Timestamp</span>
             <span class="font-medium font-mono text-slate-800">${escapeHtml(log.timestamp)}</span>
+            ${log.syncedAt && offlineChip(log) ? `<span class="block mt-1 text-[11px] text-ncst-navy font-semibold">Recorded offline at the gate &middot; reached the server ${escapeHtml(log.syncedAt)}</span>` : ''}
           </div>
         </div>
 
@@ -4289,6 +4290,16 @@ document.addEventListener('DOMContentLoaded', () => {
      9.2 Signed Pass Helpers (payloads are signed by the server, never here)
      ========================================================================== */
   const PASS_UNAVAILABLE_MSG = 'Signed pass not available yet. Save the vehicle online, then reload.';
+
+  // A gate log the mobile app recorded offline and sent later shows when it reached the server
+  function offlineChip(log) {
+    if (!log || !log.syncedAt || !log.loggedAt) return '';
+    const happened = Date.parse(String(log.loggedAt).replace(' ', 'T') + '+08:00');
+    const synced = Date.parse(String(log.syncedAt).replace(' ', 'T') + '+08:00');
+    if (isNaN(happened) || isNaN(synced) || synced - happened < 120000) return '';
+    const at = new Date(synced).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' });
+    return `<div class="mt-0.5"><span class="inline-block px-1.5 py-0.5 rounded bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20 text-[9px] font-bold tracking-wide" title="Recorded offline at the gate; reached the server at ${escapeHtml(log.syncedAt)}">OFFLINE &middot; synced ${escapeHtml(at)}</span></div>`;
+  }
 
   function strikeChip(v) {
     if (v.isVip) return '<span class="px-1.5 py-0.5 rounded bg-ncst-gold text-slate-900 text-[9px] font-extrabold tracking-wide">VIP</span>';
