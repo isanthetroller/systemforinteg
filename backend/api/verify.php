@@ -256,7 +256,7 @@ if ($vehicle) {
         $warnings[] = 'No entry record: this vehicle is not recorded as inside campus.';
     }
     $strikes = (int)$vehicle['warning_count'];
-    if ($strikes > 0 && (int)$vehicle['is_banned'] === 0) {
+    if ($strikes > 0 && (int)$vehicle['is_banned'] === 0 && !isVipVehicle($vehicle)) {
         $warnings[] = "Strike {$strikes} of 3 on record for this vehicle.";
     }
 } elseif ($visitor) {

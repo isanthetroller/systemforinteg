@@ -64,6 +64,7 @@ function buildReport($pdo, $now) {
     $rows = $pdo->query("SELECT * FROM `vehicles` WHERE `status` = 'Inside Campus' ORDER BY `plate_number`")->fetchAll();
     $items = [];
     foreach ($rows as $v) {
+        if (isVipVehicle($v)) continue; // VIP vehicles are exempt from overnight / overtime checks
         $entry = lastEntryTime($pdo, $v);
         if (!$entry) continue;
         $elapsedHours = max(0, ($now - $entry) / 3600);

@@ -120,6 +120,7 @@ function handleCreateLog($pdo, $actor) {
     $isApproval = in_array($action, ['Entry Recorded', 'Exit Approved'], true);
 
     $vehicle = findVehicleByPlate($pdo, $plateNumber);
+    $isVip = isVipVehicle($vehicle);
     $visitor = null;
     if (!empty($data['visitor_pass_id'])) {
         $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `id` = ? LIMIT 1");
@@ -149,9 +150,13 @@ function handleCreateLog($pdo, $actor) {
         $driverName = $visitor['visitor_name'];
         $driverRelationship = 'Visitor (Day Pass)';
         $verifiedDriverName = $visitor['visitor_name'];
-    } elseif (!$isScanner && $isApproval && $vehicle) {
-        // The web gate monitor must confirm who is behind the wheel before approving
+    } elseif (!$isScanner && $isApproval && $vehicle && !$isVip) {
+        // The web gate monitor must confirm who is behind the wheel before approving (VIPs are waved through)
         sendResponse(400, ['code' => 'DRIVER_CONFIRMATION_REQUIRED'], 'Select the authorized driver currently behind the wheel.');
+    }
+    if ($driverName === '' && $isVip) {
+        $driverName = $vehicle['owner_name'];
+        $driverRelationship = 'VIP (driver not checked)';
     }
     if ($driverName === '') {
         if ($isApproval) sendResponse(400, null, 'Missing required field: driverName.');
@@ -236,6 +241,9 @@ function handleCreateLog($pdo, $actor) {
     $notes = trim((string)($data['notes'] ?? ''));
     if ($itemsNote !== '') {
         $notes = trim($notes . ' | ' . $itemsNote, ' |');
+    }
+    if ($isVip) {
+        $notes = trim('VIP pass | ' . $notes, ' |');
     }
     if (!empty($unregisteredOrOutsideNote)) {
         $notes = trim($notes . ' | ' . $unregisteredOrOutsideNote, ' |');

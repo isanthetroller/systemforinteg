@@ -81,6 +81,9 @@ function banVehicle($pdo, $actor, $vehicle, $reason, $notes) {
  * Returns ['violationId', 'strikes', 'banned', 'autoViolationId', 'incident'].
  */
 function addWarning($pdo, $actor, $vehicle, $type, $notes) {
+    if (isVipVehicle($vehicle)) {
+        throw new RuntimeException('VIP vehicles are exempt from strikes.');
+    }
     $label = gateActorLabel($actor);
     $warningId = insertViolation($pdo, $label, actorUserId($actor), $vehicle, $type, $notes, 'Warning', true);
 
@@ -110,6 +113,9 @@ function addWarning($pdo, $actor, $vehicle, $type, $notes) {
  * Records a manual Violation: immediate ban + Held incident.
  */
 function issueViolation($pdo, $actor, $vehicle, $type, $notes) {
+    if (isVipVehicle($vehicle)) {
+        throw new RuntimeException('VIP vehicles are exempt from violations.');
+    }
     $label = gateActorLabel($actor);
     $incident = banVehicle($pdo, $actor, $vehicle, $type, "Violation issued by {$label}: " . ($notes ?: $type));
     $id = insertViolation($pdo, $label, actorUserId($actor), $vehicle, $type, $notes, 'Violation', false, $incident['id']);

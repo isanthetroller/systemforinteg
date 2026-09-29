@@ -218,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const editPlateNumber = document.getElementById('editPlateNumber');
   const editMakeModel = document.getElementById('editMakeModel');
   const editStickerYear = document.getElementById('editStickerYear');
+  const editPassClassVip = document.getElementById('editPassClassVip');
   const editRegStatus = document.getElementById('editRegStatus');
   const editCampusStatus = document.getElementById('editCampusStatus');
   const editVehiclePhotoInput = document.getElementById('editVehiclePhotoInput');
@@ -1581,7 +1582,8 @@ document.addEventListener('DOMContentLoaded', () => {
         matchesCategory = v.vehicleType.toLowerCase().includes(state.vehicleFilter.category.toLowerCase());
       }
 
-      const matchesStatus = state.vehicleFilter.status === 'All' || v.registrationStatus === state.vehicleFilter.status;
+      const matchesStatus = state.vehicleFilter.status === 'All'
+        || (state.vehicleFilter.status === 'VIP' ? !!v.isVip : v.registrationStatus === state.vehicleFilter.status);
 
       return matchesSearch && matchesRole && matchesCategory && matchesStatus;
     });
@@ -2348,6 +2350,10 @@ document.addEventListener('DOMContentLoaded', () => {
       qrPayload: v.qrPayload || null,
       passId: v.passId || null,
       passValidUntil: v.passValidUntil || null,
+      passClass: v.passClass || (v.isVip ? 'VIP' : 'Standard'),
+      isVip: !!(v.isVip || v.passClass === 'VIP'),
+      vipGrantedBy: v.vipGrantedBy || null,
+      vipGrantedAt: v.vipGrantedAt || null,
       warningCount: v.warningCount || 0,
       isBanned: !!v.isBanned,
       entryTime: entryTime,
@@ -2393,6 +2399,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="px-2.5 py-0.5 rounded text-[11px] font-bold bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 font-mono">
               Sticker ${escapeHtml(v.stickerYear || '2026')}
             </span>
+            ${v.isVip ? `<span class="px-2.5 py-0.5 rounded text-[11px] font-extrabold bg-ncst-gold text-slate-900" title="${escapeHtml(v.vipGrantedBy ? 'Granted by ' + v.vipGrantedBy + (v.vipGrantedAt ? ' on ' + v.vipGrantedAt : '') : '')}">VIP PASS</span>` : ''}
           </div>
         </div>
 
@@ -2898,10 +2905,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (editOwnerPhotoInput) editOwnerPhotoInput.value = '';
 
     // Section 2: Vehicle
-    if (editVehicleCategory) editVehicleCategory.value = v.vehicleType || '4-Wheel';
+    if (editVehicleCategory) {
+      // Older / mobile-created vehicles store e.g. "4-Wheel (Sedan)": pick the closest category option
+      const stored = String(v.vehicleType || '4-Wheel').toLowerCase();
+      const options = [...editVehicleCategory.options];
+      const match = options.find(o => o.value.toLowerCase() === stored)
+        || options.find(o => stored.startsWith(o.value.toLowerCase()))
+        || options[0];
+      editVehicleCategory.value = match.value;
+    }
     if (editPlateNumber) editPlateNumber.value = v.plateNumber || '';
     if (editMakeModel) editMakeModel.value = v.makeModelColor || '';
     if (editStickerYear) editStickerYear.value = v.stickerYear || '2026';
+    if (editPassClassVip) editPassClassVip.checked = !!v.isVip;
     if (editRegStatus) editRegStatus.value = v.registrationStatus || 'Active';
     if (editCampusStatus) editCampusStatus.value = v.status || 'Outside';
 
@@ -3050,7 +3066,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editVehicleForm.addEventListener('submit', (e) => {
       e.preventDefault();
       const targetId = editVehicleId.value;
-      const v = state.vehicles.find(item => item.id === targetId);
+      const v = state.vehicles.find(item => String(item.id) === String(targetId));
       if (!v) return;
 
       const ownerRole = editOwnerRole ? editOwnerRole.value : (v.ownerRole || 'Student');
@@ -3123,6 +3139,10 @@ document.addEventListener('DOMContentLoaded', () => {
       v.make_model_color = makeModelColor;
       v.stickerYear = stickerYear;
       v.sticker_year = stickerYear;
+      if (editPassClassVip) {
+        v.isVip = editPassClassVip.checked;
+        v.passClass = v.isVip ? 'VIP' : 'Standard';
+      }
       v.registrationStatus = registrationStatus;
       v.registration_status = registrationStatus;
       v.status = campusStatus;
@@ -3154,6 +3174,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhone: v.ownerPhone,
           ownerEmail: v.ownerEmail,
           stickerYear: v.stickerYear,
+          passClass: v.isVip ? 'VIP' : 'Standard',
           registrationStatus: v.registrationStatus,
           status: v.status,
           ownerPhoto: v.ownerPhoto,
@@ -3569,6 +3590,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const vehicleCategory = document.getElementById('vehicleCategory').value;
       const makeModelColor = document.getElementById('makeModelColor').value.trim();
       const stickerYear = document.getElementById('stickerYear').value.trim() || '2026';
+      const isVip = !!(document.getElementById('passClassVip') && document.getElementById('passClassVip').checked);
 
       // Read Authorized Drivers
       const driverCards = document.querySelectorAll('.driver-entry-card');
@@ -3624,6 +3646,8 @@ document.addEventListener('DOMContentLoaded', () => {
         entryTime: null,
         gatePoint: '—',
         stickerYear,
+        passClass: isVip ? 'VIP' : 'Standard',
+        isVip,
         ownerPhoto: ownerPhotoDataUrl,
         vehiclePhoto: vehiclePhotoDataUrl,
         authorizedDrivers
@@ -3651,6 +3675,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhone: ownerContact,
           ownerEmail,
           stickerYear,
+          passClass: isVip ? 'VIP' : 'Standard',
           ownerPhoto: ownerPhotoDataUrl,
           vehiclePhoto: vehiclePhotoDataUrl,
           authorizedDrivers
@@ -4266,6 +4291,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const PASS_UNAVAILABLE_MSG = 'Signed pass not available yet. Save the vehicle online, then reload.';
 
   function strikeChip(v) {
+    if (v.isVip) return '<span class="px-1.5 py-0.5 rounded bg-ncst-gold text-slate-900 text-[9px] font-extrabold tracking-wide">VIP</span>';
     if (v.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[9px] font-extrabold tracking-wide">BANNED</span>';
     const n = Number(v.warningCount || 0);
     return n > 0 ? `<span class="px-1.5 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[9px] font-extrabold">STRIKE ${n}/3</span>` : '';
@@ -4307,6 +4333,12 @@ document.addEventListener('DOMContentLoaded', () => {
     target.passId = serverVehicle.passId || target.passId || null;
     target.passValidUntil = serverVehicle.passValidUntil || target.passValidUntil || null;
     if (serverVehicle.plateNumber) target.plateNumber = serverVehicle.plateNumber;
+    if (typeof serverVehicle.isVip === 'boolean') {
+      target.isVip = serverVehicle.isVip;
+      target.passClass = serverVehicle.isVip ? 'VIP' : 'Standard';
+      target.vipGrantedBy = serverVehicle.vipGrantedBy || null;
+      target.vipGrantedAt = serverVehicle.vipGrantedAt || null;
+    }
   }
 
   async function reissueVehiclePass(v) {

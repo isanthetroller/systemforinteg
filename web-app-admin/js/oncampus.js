@@ -37,6 +37,7 @@
   }
 
   function standing(v) {
+    if (v.isVip) return '<span class="px-1.5 py-0.5 rounded bg-ncst-gold text-slate-900 text-[10px] font-extrabold">VIP</span>';
     if (v.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">BANNED</span>';
     const n = Math.min(Number(v.warningCount || 0), STRIKE_LIMIT);
     if (!n) return '<span class="px-1.5 py-0.5 rounded bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30 text-[10px] font-bold">No strikes</span>';

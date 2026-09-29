@@ -5,6 +5,15 @@
 
 require_once __DIR__ . '/qr.php';
 
+/**
+ * VIP vehicles (permanent passes for e.g. the school president) are exempt from strikes, bans by the
+ * strike engine, overnight / overtime flags and the gate's driver-confirmation step.
+ * Signature, revocation and the gate log still apply to them.
+ */
+function isVipVehicle($v) {
+    return is_array($v) && ($v['pass_class'] ?? 'Standard') === 'VIP';
+}
+
 function formatVehicleRow($v) {
     if (!$v) return null;
     $drivers = isset($v['authorizedDrivers']) ? $v['authorizedDrivers'] : [];
@@ -51,6 +60,10 @@ function formatVehicleRow($v) {
         'passValidUntil' => $v['pass_valid_until'] ?? null,
         'warningCount' => (int)($v['warning_count'] ?? 0),
         'isBanned' => (int)($v['is_banned'] ?? 0) === 1,
+        'passClass' => isVipVehicle($v) ? 'VIP' : 'Standard',
+        'isVip' => isVipVehicle($v),
+        'vipGrantedBy' => isVipVehicle($v) ? ($v['pass_class_by'] ?? null) : null,
+        'vipGrantedAt' => isVipVehicle($v) ? ($v['pass_class_at'] ?? null) : null,
         'authorizedDrivers' => $drivers
     ];
 }

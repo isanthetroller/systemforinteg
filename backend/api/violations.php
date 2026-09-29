@@ -99,6 +99,10 @@ function handleCreateViolation($pdo, $actor) {
         sendResponse(404, null, 'Registered vehicle not found. Violations can only be issued to registered vehicles.');
     }
 
+    if (isVipVehicle($vehicle)) {
+        sendResponse(409, ['code' => 'VIP_EXEMPT'], "{$vehicle['plate_number']} is a VIP vehicle and is exempt from warnings and violations. An administrator can change its VIP status in the vehicle record.");
+    }
+
     $type = trim((string)($data['type'] ?? ''));
     $severity = $data['severity'] ?? 'Warning';
     $notes = trim((string)($data['notes'] ?? ''));

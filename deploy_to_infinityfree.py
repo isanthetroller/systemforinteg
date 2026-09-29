@@ -145,7 +145,7 @@ def main():
     ftp.quit()
     print(f'\n[FTP] SUCCESS: uploaded {len(uploads)} files.')
     sys.stdout.flush()
-    print('Remember: run the migrations in backend/database/migrations/ (001, 002, 003, then 004) in phpMyAdmin once each before first use.')
+    print('Remember: run the migrations in backend/database/migrations/ (001 to 005) in phpMyAdmin once each before first use.')
 
 
 if __name__ == '__main__':

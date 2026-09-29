@@ -192,7 +192,7 @@
 
     let actions = '';
     if (r.accepted) {
-      const needsDriver = !!r.vehicle;
+      const needsDriver = !!r.vehicle && !r.vehicle.isVip; // VIPs are waved through without a driver check
       const needsItems = !r.vehicle && r.visitor && (r.visitor.items || []).length > 0;
       const ready = (!needsDriver || gate.driverId) && (!needsItems || gate.itemsChecked);
       actions = `
@@ -207,7 +207,7 @@
             <button type="button" data-act="deny" class="px-4 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">
               Deny ${dirLabel === 'ENTRY' ? 'Entry' : 'Exit'}
             </button>
-            ${r.vehicle ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
+            ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
             <button type="button" data-act="reset" class="ml-auto px-3 py-2 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">Cancel</button>
           </div>
           <div id="gateDenyPanel" class="hidden rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight/70 p-3 space-y-2">
@@ -231,7 +231,7 @@
         <div class="border-t border-slate-100 px-5 py-4 flex flex-wrap items-center gap-3">
           <p class="text-xs text-slate-600 flex-1 min-w-[200px]">${logged}</p>
           ${r.result === 'NOT_FOUND' && r.gateType === 'Ingress' ? '<button type="button" data-act="visitor" class="px-3 py-2.5 rounded-md border border-ncst-navy/20 bg-ncst-navy/5 hover:bg-ncst-navy/10 text-sm font-bold text-ncst-navy cursor-pointer">Issue Visitor Pass</button>' : ''}
-          ${r.vehicle ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
+          ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
           <button type="button" data-act="reset" class="px-5 py-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold cursor-pointer">Scan Next</button>
         </div>`;
     }
@@ -306,6 +306,9 @@
       : (strikes > 0 ? `<span class="px-2 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[10px] font-extrabold">STRIKE ${strikes} OF 3</span>` : '');
     const drivers = v.authorizedDrivers || [];
     const ownerPhoto = v.ownerPhoto || v.ownerPhotoUrl;
+    const vipBanner = v.isVip
+      ? `<div class="flex items-center gap-2 rounded-lg bg-ncst-gold text-slate-900 px-3 py-2"><span class="px-1.5 py-0.5 rounded bg-slate-900 text-ncst-gold text-[10px] font-extrabold tracking-widest">VIP</span><span class="text-xs font-bold">VIP pass &mdash; wave through. No driver check needed; the passage is still logged.</span></div>`
+      : '';
 
     const driverCards = drivers.map(d => {
       const id = Number(d.id);
@@ -327,6 +330,7 @@
 
     return `
       <div class="px-5 py-4 space-y-4">
+        ${vipBanner}
         <div class="flex items-start gap-3">
           ${photoHtml(v.vehiclePhoto || v.vehiclePicture, v.plateNumber, 'w-20 h-14')}
           <div class="min-w-0 flex-1">
@@ -401,7 +405,7 @@
     const plate = r.vehicle ? r.vehicle.plateNumber : r.visitor.plateNumber;
     const action = r.gateType === 'Ingress' ? 'Entry Recorded' : 'Exit Approved';
     const payload = { plate, action, gate_type: r.gateType, qr_code: gate.input.startsWith('{') ? gate.input : undefined };
-    if (r.vehicle) payload.driver_id = gate.driverId;
+    if (r.vehicle) { if (gate.driverId) payload.driver_id = gate.driverId; }
     else if (r.visitor) {
       payload.visitor_pass_id = r.visitor.id;
       if ((r.visitor.items || []).length) payload.items_verified = gate.itemsChecked;

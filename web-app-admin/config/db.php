@@ -295,6 +295,9 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'system_users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn($pdo, 'vehicles', 'warning_count', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn($pdo, 'vehicles', 'is_banned', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'pass_class', "TEXT NOT NULL DEFAULT 'Standard'");
+    ensureColumn($pdo, 'vehicles', 'pass_class_by', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'pass_class_at', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_id', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_valid_until', 'TEXT NULL');
     ensureColumn($pdo, 'gate_logs', 'verified_driver_name', 'TEXT NULL');

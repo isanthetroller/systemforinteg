@@ -32,6 +32,10 @@ visitors get **single-day passes**.
   (up to 60 days ahead) and the QR is refused as "not yet valid" before it. Screenshot-ready card / PNG. Passes can list the
   **items the visitor brings in** (e.g. 40 event chairs); guards must tick them off on entry and exit and the
   item list is written to the gate log.
+- **VIP passes** (permanent vehicles, e.g. the school president): an administrator ticks "VIP pass" when registering or
+  editing a vehicle. VIP vehicles are exempt from strikes and bans, overnight / overtime checks and the gate's
+  driver-confirmation step, and show a gold VIP banner. The pass is still signed and can be revoked, and every passage
+  is logged as a VIP passage. The class is stored in the database (not in the QR), with who granted it and when.
 - **CCTV simulation widget** (`web-app-admin/assets/cctv_simulation.mp4`, shows "NO SIGNAL" until added).
 - **Staff Accounts** page; one-time temporary passwords; forced change at first sign-in.
 
@@ -50,7 +54,7 @@ backend/                  <- the ONLY place PHP is edited
   api/                    endpoints (see API reference below)
   lib/                    auth, qr, vehicles, records, strikes, students
   config/                 db.php, secret.example.php, secret.php (git-ignored)
-  database/               schema.sql (fresh install), migrations/ 001 to 004 (existing DB)
+  database/               schema.sql (fresh install), migrations/ 001 to 005 (existing DB)
 web-app-admin/            admin & guard portal (+ generated copy of backend/api, lib, config, database)
 web-app-student/          student portal (own HTML / CSS / JS, calls ../api)
 tests/api_smoke.py        API smoke test (local only)
@@ -119,7 +123,7 @@ Nothing is deployed automatically. Steps, in order:
 1. **Back up** the live database (phpMyAdmin → Export).
 2. **Migrate the existing database** — phpMyAdmin → SQL → run, in order and **once each**,
    `backend/database/migrations/001_v2.sql`, `002_visitor_items.sql`, `003_system_settings.sql`, then
-   `004_vehicle_status_outside.sql`. All are non-destructive
+   `004_vehicle_status_outside.sql`, then `005_vip_pass_class.sql`. All are non-destructive
    (keep vehicles, drivers, logs, incidents).
    Do **not** run `schema.sql` on the live database: it drops every table (fresh installs only).
 3. Create **`backend/config/secret.production.php`** (git-ignored) from `secret.example.php` with

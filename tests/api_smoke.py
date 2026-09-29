@@ -837,6 +837,116 @@ def test_scheduled_and_revoked_passes(admin):
     check('settings cannot be written -> 405', code == 405, code)
 
 
+def test_vip_passes(admin):
+    section('VIP passes (permanent vehicles)')
+    import sqlite3
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def register(plate, owner, **extra):
+        body = {'plateNumber': plate, 'ownerName': owner, 'ownerIdNumber': 'ID-' + plate.replace(' ', ''),
+                'ownerPhone': '0917 000 1111', 'authorizedDrivers': [{'fullName': owner, 'relationship': 'Self (Owner)'}]}
+        body.update(extra)
+        return call('POST', 'vehicles.php', body, admin)
+
+    def driver_id(plate):
+        _, res = call('GET', 'vehicles.php?plate=' + plate.replace(' ', ''), token=admin)
+        return int(res['data']['authorizedDrivers'][0]['id'])
+
+    # --- who can grant it
+    code, res = register('VIP 0001', 'Dr. Rosa President', passClass='VIP')
+    check('admin registers a VIP vehicle -> 201', code == 201 and res['data']['isVip'] is True and res['data']['passClass'] == 'VIP', res)
+    vip = res['data']
+    check('  ...who granted it and when is recorded', bool(vip.get('vipGrantedBy')) and len(vip.get('vipGrantedAt') or '') == 19, vip)
+    payload = json.loads(vip['qrPayload'])
+    check('  ...the class is NOT in the signed QR', set(payload) == {'v', 'pid', 'plate_number', 'type', 'valid', 'sig'} and payload['type'] == 'permanent', payload)
+    code, res = register('VIP 0002', 'Sam Standard')
+    check('a normal registration is Standard', code == 201 and res['data']['isVip'] is False and res['data']['passClass'] == 'Standard', res)
+    std = res['data']
+    code, res = register('VIP 0009', 'Bad Class', passClass='gold')
+    check('unknown pass class -> 400', code == 400, res)
+    code, _ = call('POST', 'vehicles.php', {'plateNumber': 'VIP 0008', 'ownerName': 'X', 'ownerIdNumber': 'X-8', 'passClass': 'VIP'}, guard)
+    check('a guard cannot register a VIP -> 403', code == 403, code)
+    code, _ = call('PUT', 'vehicles.php', {'id': std['id'], 'passClass': 'VIP'}, guard)
+    check('a guard cannot make a vehicle VIP -> 403', code == 403, code)
+    _, res = call('GET', 'vehicles.php?plate=VIP0002', token=admin)
+    check('  ...and it stayed Standard', res['data']['isVip'] is False, res['data'])
+
+    # --- the gate: a VIP is not asked who is driving; a normal vehicle still is
+    code, v = verify({'qr_code': vip['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('VIP verifies like any signed pass, flagged isVip', v.get('result') == 'VALID' and v['vehicle']['isVip'] is True, v)
+    code, res = call('POST', 'logs.php', {'plate': 'VIP 0001', 'action': 'Entry Recorded', 'gate_type': 'Ingress'}, guard)
+    check('VIP entry needs no driver confirmation -> 201', code == 201, res)
+    check('  ...the log says VIP and that the driver was not checked', res['data']['notes'].startswith('VIP pass')
+          and res['data']['driverRelationship'] == 'VIP (driver not checked)' and res['data']['driverName'] == 'Dr. Rosa President', res['data'])
+    code, res = call('POST', 'logs.php', {'plate': 'VIP 0002', 'action': 'Entry Recorded', 'gate_type': 'Ingress'}, guard)
+    check('a Standard vehicle still needs a driver -> 400', code == 400 and res['data']['code'] == 'DRIVER_CONFIRMATION_REQUIRED', res)
+    code, res = call('POST', 'logs.php', {'plate': 'VIP 0002', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver_id('VIP 0002')}, guard)
+    check('  ...and enters once the driver is chosen', code == 201 and not res['data']['notes'].startswith('VIP'), res)
+
+    # --- forged / revoked passes are still stopped for a VIP
+    forged = dict(payload, plate_number='VIP0001', sig='AAAAAAAAAAAAAAAAAAAAAA')
+    code, v = verify({'qr_code': json.dumps(forged), 'gate_type': 'Egress'}, guard)
+    check('a forged VIP QR is still FORGED', v.get('result') == 'FORGED' and not v['accepted'], v)
+    code, res = call('POST', 'passes.php', {'vehicle_id': vip['id'], 'action': 'reissue'}, admin)
+    code, v = verify({'qr_code': vip['qrPayload'], 'gate_type': 'Egress'}, guard)
+    check('the old VIP pass is REVOKED after a reissue', v.get('result') == 'REVOKED' and not v['accepted'], v)
+    new_payload = res['data']['qrPayload']
+    code, v = verify({'qr_code': new_payload, 'gate_type': 'Egress'}, guard)
+    check('the reissued VIP pass works', v.get('result') == 'VALID', v)
+
+    # --- no strikes, no violations, no ban
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
+    check('a warning against a VIP is refused -> 409', code == 409 and res['data']['code'] == 'VIP_EXEMPT', res)
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Reckless / Prohibited Driving on Campus', 'severity': 'Violation', 'notes': 'x'}, admin)
+    check('a violation against a VIP is refused -> 409', code == 409 and res['data']['code'] == 'VIP_EXEMPT', res)
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0002', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
+    check('a Standard vehicle still gets warnings', code == 201, res)
+
+    # --- overnight / overtime: the VIP is not listed, flagged or struck
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicles SET status = 'Inside Campus' WHERE plate_number IN ('VIP 0001', 'VIP 0002')")
+    db.execute("DELETE FROM gate_logs WHERE plate_number IN ('VIP 0001', 'VIP 0002') AND action = 'Entry Recorded'")
+    for plate, who in (('VIP 0001', 'Dr. Rosa President'), ('VIP 0002', 'Sam Standard')):
+        db.execute("INSERT INTO gate_logs (plate_number, driver_name, action, gate_type, status, guard_name, logged_at) VALUES (?, ?, 'Entry Recorded', 'Ingress', 'Inside Campus', 'QA', '2026-09-20 06:00:00')", (plate, who))
+    db.commit()
+    db.close()
+    night = 'overnight_check.php?now=' + urllib.parse.quote('2026-09-20 23:00:00')
+    code, res = call('GET', night, token=guard)
+    listed = {i['plateNumber'] for i in res['data']['items']}
+    check('overnight report lists the Standard vehicle, not the VIP', 'VIP 0002' in listed and 'VIP 0001' not in listed, listed)
+    code, res = call('POST', night, {}, guard)
+    flagged = {f['plateNumber'] for f in res['data']['flagged']}
+    check('the automatic run strikes the Standard vehicle only', 'VIP 0002' in flagged and 'VIP 0001' not in flagged, flagged)
+    code, res = call('POST', night, {'vehicle_id': vip['id']}, guard)
+    check('a manual overnight flag on a VIP -> 404 (not listed)', code == 404, res)
+    code, res = call('GET', 'oncampus.php?now=' + urllib.parse.quote('2026-09-21 09:00:00'), token=guard)
+    rows = {v['plateNumber']: v for v in res['data']['vehicles']}
+    check('On Campus Now shows the VIP, with no time flag', rows['VIP 0001']['isVip'] is True and rows['VIP 0001']['timeFlag'] is None, rows.get('VIP 0001'))
+    check('  ...while the Standard vehicle is flagged overnight', rows['VIP 0002']['timeFlag'] == 'overnight', rows.get('VIP 0002'))
+    _, res = call('GET', 'vehicles.php?plate=VIP0001', token=admin)
+    check('the VIP still has 0 strikes and is not banned', res['data']['warningCount'] == 0 and res['data']['isBanned'] is False, res['data'])
+
+    # --- a banned vehicle cannot be made VIP; withdrawing VIP restores the rules
+    code, res = register('VIP 0003', 'Ban Candidate')
+    for _ in range(3):
+        call('POST', 'violations.php', {'plate': 'VIP 0003', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
+    _, res = call('GET', 'vehicles.php?plate=VIP0003', token=admin)
+    check('(setup) three strikes ban the vehicle', res['data']['isBanned'] is True, res['data'])
+    banned_id = res['data']['id']
+    code, res = call('PUT', 'vehicles.php', {'id': banned_id, 'passClass': 'VIP'}, admin)
+    check('a banned vehicle cannot be made VIP -> 409', code == 409 and res['data']['code'] == 'VEHICLE_BANNED', res)
+
+    code, res = call('PUT', 'vehicles.php', {'id': std['id'], 'passClass': 'VIP'}, admin)
+    check('admin makes an existing vehicle VIP', code == 200 and res['data']['isVip'] is True and res['data']['vipGrantedBy'], res)
+    code, res = call('PUT', 'vehicles.php', {'id': std['id'], 'passClass': 'Standard'}, admin)
+    check('admin withdraws VIP', code == 200 and res['data']['isVip'] is False and res['data']['vipGrantedBy'] is None, res)
+    code, res = call('PUT', 'vehicles.php', {'id': vip['id'], 'passClass': 'Standard'}, admin)
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
+    check('once VIP is withdrawn the vehicle can be warned again', code == 201, res)
+    code, res = call('PUT', 'vehicles.php', {'id': vip['id'], 'ownerRole': 'Faculty'}, admin)
+    check('editing other fields does not change the class', code == 200, res)
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -861,6 +971,7 @@ def main():
     test_student_portal(admin)
     test_visitor_items_and_on_campus(admin)
     test_scheduled_and_revoked_passes(admin)
+    test_vip_passes(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
 

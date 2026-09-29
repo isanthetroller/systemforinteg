@@ -784,6 +784,7 @@
                 <option value="All">All Statuses</option>
                 <option value="Active">Active</option>
                 <option value="Suspended">Suspended</option>
+                <option value="VIP">VIP passes</option>
               </select>
             </div>
 
@@ -1031,6 +1032,16 @@
                   <option value="Student" selected>Student</option>
                   <option value="Visitor">Visitor</option>
                 </select>
+              </div>
+
+              <div class="sm:col-span-2 rounded-lg border border-ncst-gold/50 bg-ncst-goldLight/40 p-3">
+                <label class="flex items-start gap-2.5 cursor-pointer">
+                  <input type="checkbox" id="passClassVip" class="mt-0.5 w-4 h-4 accent-ncst-navy">
+                  <span>
+                    <span class="block text-xs font-bold text-slate-900">VIP pass <span class="font-normal text-slate-500">(administrators only)</span></span>
+                    <span class="block text-[11px] text-slate-600 mt-0.5">VIP pass: exempt from strikes, bans, overnight / overtime checks and the driver-confirmation step at the gate. The pass is still signed, can be revoked and every passage is logged.</span>
+                  </span>
+                </label>
               </div>
 
               <div>
@@ -1689,6 +1700,16 @@
                 <option value="Student">Student</option>
                 <option value="Visitor">Visitor</option>
               </select>
+            </div>
+
+            <div class="sm:col-span-2 rounded-lg border border-ncst-gold/50 bg-ncst-goldLight/40 p-3">
+              <label class="flex items-start gap-2.5 cursor-pointer">
+                <input type="checkbox" id="editPassClassVip" class="mt-0.5 w-4 h-4 accent-ncst-navy">
+                <span>
+                  <span class="block text-xs font-bold text-slate-900">VIP pass</span>
+                  <span class="block text-[11px] text-slate-600 mt-0.5">VIP pass: exempt from strikes, bans, overnight / overtime checks and the driver-confirmation step at the gate. The pass is still signed, can be revoked and every passage is logged.</span>
+                </span>
+              </label>
             </div>
 
             <div>

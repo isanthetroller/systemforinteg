@@ -25,12 +25,12 @@ switch ($method) {
         handleGetVehicles($pdo, $actor);
         break;
     case 'POST':
-        requireStaff($pdo, ['admin']);
-        handleRegisterVehicle($pdo);
+        $admin = requireStaff($pdo, ['admin']);
+        handleRegisterVehicle($pdo, $admin);
         break;
     case 'PUT':
-        requireStaff($pdo, ['admin']);
-        handleUpdateVehicle($pdo);
+        $admin = requireStaff($pdo, ['admin']);
+        handleUpdateVehicle($pdo, $admin);
         break;
     case 'DELETE':
         requireStaff($pdo, ['admin']);
@@ -106,7 +106,7 @@ function lookupVehicleByAnyCode($pdo, $needle) {
     return $stmt->fetch() ?: null;
 }
 
-function handleRegisterVehicle($pdo) {
+function handleRegisterVehicle($pdo, $admin) {
     $data = getJsonInput();
 
     $plateNumber = isset($data['plateNumber']) ? strtoupper(trim($data['plateNumber'])) : '';
@@ -137,6 +137,7 @@ function handleRegisterVehicle($pdo) {
     // v2: passes are signed server-side; clients can no longer supply the QR content
     $passId = newPassId();
     $passValidUntil = isValidDate($data['passValidUntil'] ?? '') ? $data['passValidUntil'] : defaultPassValidUntil($stickerYear);
+    $passClass = requestedPassClass($data) ?? 'Standard';
 
     $pdo->beginTransaction();
     try {
@@ -153,6 +154,10 @@ function handleRegisterVehicle($pdo) {
             $ownerPhoto, $vehiclePhoto, $passId, $passValidUntil, $stickerYear
         ]);
         $newVehicleId = $pdo->lastInsertId();
+        if ($passClass === 'VIP') {
+            $pdo->prepare("UPDATE `vehicles` SET `pass_class` = 'VIP', `pass_class_by` = ?, `pass_class_at` = ? WHERE `id` = ?")
+                ->execute([actorLabel($admin), date('Y-m-d H:i:s'), $newVehicleId]);
+        }
 
         // Insert authorized drivers
         $drivers = isset($data['authorizedDrivers']) && is_array($data['authorizedDrivers']) 
@@ -206,7 +211,19 @@ function handleRegisterVehicle($pdo) {
     }
 }
 
-function handleUpdateVehicle($pdo) {
+/**
+ * "VIP" or "Standard" from a request body, or null when the client did not send one.
+ */
+function requestedPassClass($data) {
+    $raw = $data['passClass'] ?? $data['pass_class'] ?? null;
+    if ($raw === null) return null;
+    $raw = strtolower(trim((string)$raw));
+    if ($raw === 'vip') return 'VIP';
+    if ($raw === 'standard' || $raw === '') return 'Standard';
+    sendResponse(400, null, 'passClass must be Standard or VIP.');
+}
+
+function handleUpdateVehicle($pdo, $admin) {
     $data = getJsonInput();
     $id = isset($data['id']) ? (int)$data['id'] : 0;
     if ($id <= 0) {
@@ -288,6 +305,20 @@ function handleUpdateVehicle($pdo) {
         $fields[] = "`pass_id` = ?";
         $params[] = newPassId();
         $fields[] = "`qr_pass_code` = NULL";
+    }
+
+    // VIP status: admin-only (this whole endpoint is), recorded with who and when
+    $newClass = requestedPassClass($data);
+    if ($newClass !== null && $newClass !== (isVipVehicle($current) ? 'VIP' : 'Standard')) {
+        if ($newClass === 'VIP' && (int)$current['is_banned'] === 1) {
+            sendResponse(409, ['code' => 'VEHICLE_BANNED'], 'This vehicle is banned by a violation. Resolve the ban in Violations & Penalties before marking it VIP.');
+        }
+        $fields[] = "`pass_class` = ?";
+        $params[] = $newClass;
+        $fields[] = "`pass_class_by` = ?";
+        $params[] = $newClass === 'VIP' ? actorLabel($admin) : null;
+        $fields[] = "`pass_class_at` = ?";
+        $params[] = $newClass === 'VIP' ? date('Y-m-d H:i:s') : null;
     }
 
     $drivers = isset($data['authorizedDrivers']) && is_array($data['authorizedDrivers'])
