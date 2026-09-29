@@ -74,8 +74,8 @@ function handleCreateUser($pdo) {
         $mustChange = 0;
     } else {
         $finalPassword = generateTempPassword();
-        // Guards are never forced to change password because they operate the gate mobile terminal
-        $mustChange = ($role === 'admin') ? 1 : 0;
+        // Generated temporary passwords must be changed at first sign-in (custom passwords are chosen by the admin)
+        $mustChange = 1;
     }
 
     $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)");
@@ -137,7 +137,7 @@ function handleUpdateUser($pdo, $admin) {
             $mustChange = 0;
         } else {
             $finalPassword = generateTempPassword();
-            $mustChange = ($row['role'] === 'admin') ? 1 : 0;
+            $mustChange = 1;
         }
         $stmt = $pdo->prepare("UPDATE `system_users` SET `password_hash` = ?, `must_change_password` = ?, `failed_attempts` = 0, `locked_until` = NULL WHERE `id` = ?");
         $stmt->execute([password_hash($finalPassword, PASSWORD_BCRYPT), $mustChange, $id]);

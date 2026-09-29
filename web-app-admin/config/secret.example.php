@@ -22,10 +22,11 @@ define('SP_QR_SECRET', 'CHANGE_ME_64_HEX_CHARS');
 // Temporary device key for the mobile gate scanner app (sent as X-Api-Key header)
 define('SP_SCANNER_API_KEY', 'CHANGE_ME_SCANNER_KEY');
 
-// false = the mobile app may still call the scanner endpoints (vehicle lookup, gate log,
-// incident report) WITHOUT the key, exactly like before v2. Set to true once the mobile
-// app sends the X-Api-Key header, so those endpoints are closed to everyone else.
-define('SP_SCANNER_KEY_REQUIRED', false);
+// true (recommended): the scanner endpoints (vehicle lookup, gate log, incident report, verify)
+// need either a staff sign-in or the X-Api-Key header. Build the mobile app with the same key:
+//   flutter build apk --dart-define=SCANNER_API_KEY=<SP_SCANNER_API_KEY>
+// false = anyone on the internet can call those endpoints without signing in. Local testing only.
+define('SP_SCANNER_KEY_REQUIRED', true);
 
 // Unsigned (legacy JSON) QR passes are accepted with a warning until this date, then rejected as forged
 define('SP_LEGACY_QR_CUTOFF', '2026-12-31');

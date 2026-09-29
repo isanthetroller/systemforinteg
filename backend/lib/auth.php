@@ -12,9 +12,8 @@
  *   $student = requireStudent($pdo);               // student portal
  */
 
-// Failed login attempt limitation disabled
-const SP_MAX_FAILED_LOGINS = 0;
-const SP_LOCKOUT_MINUTES = 0;
+const SP_MAX_FAILED_LOGINS = 5;
+const SP_LOCKOUT_MINUTES = 15;
 
 /**
  * Reads the raw bearer token from the request headers.
@@ -116,8 +115,7 @@ function requireStaff($pdo, $roles = ['admin', 'guard'], $allowPendingPassword =
         sendResponse(401, ['code' => 'AUTH_REQUIRED'], 'Please sign in to continue.');
     }
     $user = $auth['user'];
-    // Guards operating gate terminals are immune to password change lockouts
-    if (!$allowPendingPassword && $user['role'] !== 'guard' && (int)$user['must_change_password'] === 1) {
+    if (!$allowPendingPassword && (int)$user['must_change_password'] === 1) {
         sendResponse(403, ['code' => 'PASSWORD_CHANGE_REQUIRED'], 'You must change your temporary password first.');
     }
     if (!in_array($user['role'], $roles, true)) {
@@ -258,9 +256,9 @@ function passwordPolicyError($password) {
 }
 
 /**
- * Checks a password against an account row without failed attempt lockout limitations.
- * $table is 'system_users' or 'student_accounts'. Returns true on success.
- * On failure it returns an invalid credentials error without locking the account.
+ * Checks a password against an account row, enforcing the failed-attempt lockout.
+ * $table is 'system_users' or 'student_accounts'. Returns true on success, otherwise
+ * ends the request with 401 (bad credentials), 403 (deactivated) or 423 (locked).
  */
 function verifyLoginOrFail($pdo, $table, $row, $password) {
     // Constant-ish time: always run one bcrypt check even for unknown users
@@ -270,7 +268,20 @@ function verifyLoginOrFail($pdo, $table, $row, $password) {
         sendResponse(401, ['code' => 'INVALID_CREDENTIALS'], 'Invalid username or password.');
     }
 
+    if (!empty($row['locked_until']) && strtotime($row['locked_until']) > time()) {
+        $until = date('h:i A', strtotime($row['locked_until']));
+        sendResponse(423, ['code' => 'ACCOUNT_LOCKED'], "Too many failed attempts. Try again after {$until}.");
+    }
+
     if (!password_verify($password, $row['password_hash'])) {
+        $attempts = (int)$row['failed_attempts'] + 1;
+        if ($attempts >= SP_MAX_FAILED_LOGINS) {
+            $stmt = $pdo->prepare("UPDATE `{$table}` SET `failed_attempts` = 0, `locked_until` = ? WHERE `id` = ?");
+            $stmt->execute([nowSql(SP_LOCKOUT_MINUTES * 60), $row['id']]);
+            sendResponse(423, ['code' => 'ACCOUNT_LOCKED'], 'Too many failed attempts. Account locked for ' . SP_LOCKOUT_MINUTES . ' minutes.');
+        }
+        $stmt = $pdo->prepare("UPDATE `{$table}` SET `failed_attempts` = ? WHERE `id` = ?");
+        $stmt->execute([$attempts, $row['id']]);
         sendResponse(401, ['code' => 'INVALID_CREDENTIALS'], 'Invalid username or password.');
     }
 

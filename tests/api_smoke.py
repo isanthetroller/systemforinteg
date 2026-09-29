@@ -24,6 +24,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SQLITE_DB = os.path.join(ROOT, 'web-app-admin', 'data', 'securepark.sqlite')
 ADMIN_PASSWORD = 'Admin-Pass-2026'
 
+
+def _scanner_key():
+    """Device key of the local dev server (backend/config/secret.php, git-ignored)."""
+    import re
+    try:
+        with open(os.path.join(ROOT, 'backend', 'config', 'secret.php'), encoding='utf-8') as f:
+            m = re.search(r"define\('SP_SCANNER_API_KEY',\s*'([^']+)'", f.read())
+            return m.group(1) if m else ''
+    except OSError:
+        return ''
+
+
+SCANNER = {'X-Api-Key': _scanner_key(), 'User-Agent': 'SecurePark-GateScanner/2.4'}
+
 if not BASE.startswith(('http://localhost', 'http://127.0.0.1')):
     sys.exit(f'Refusing to run against non-local API: {BASE}')
 
@@ -165,19 +179,27 @@ def test_lockout():
 
 
 def test_mobile_compat():
-    section('Mobile scanner compatibility (no token)')
-    code, res = call('GET', 'vehicles.php?plate=ABC1234', headers={'User-Agent': 'SecurePark-GateScanner/2.4'})
-    check('mobile vehicle lookup still allowed', code in (200, 404) and 'status' in res, (code, res))
-    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Recorded'})
-    check('mobile gate log still allowed, status=success', code == 201 and res.get('status') == 'success', res)
-    check('mobile log attributed to Mobile Scanner', res.get('data', {}).get('guardName', '').startswith('Mobile Scanner'), res)
+    section('Mobile scanner (device key, no token)')
+    code, _ = call('GET', 'vehicles.php?plate=ABC1234', headers={'User-Agent': 'SecurePark-GateScanner/2.4'})
+    check('scanner lookup without the device key -> 401', code == 401, code)
+    code, _ = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Recorded'})
+    check('gate log without the device key -> 401', code == 401, code)
+    code, _ = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Recorded'},
+                   headers={'X-Api-Key': 'wrong-key'})
+    check('gate log with a wrong device key -> 401', code == 401, code)
+    code, _ = call('POST', 'verify.php', {'plate': 'ABC1234'})
+    check('verify without the device key -> 401', code == 401, code)
+    code, res = call('GET', 'vehicles.php?plate=ABC1234', headers=SCANNER)
+    check('mobile vehicle lookup with device key', code in (200, 404) and 'status' in res, (code, res))
+    code, res = call('POST', 'logs.php', {'plateNumber': 'ABC 1234', 'driverName': 'Juan', 'action': 'Entry Recorded'}, headers=SCANNER)
+    check('mobile entry for an unregistered plate refused -> 403 UNREGISTERED', code == 403 and res['data'].get('code') == 'UNREGISTERED', res)
     code, _ = call('GET', 'logs.php')
     check('audit log list still requires staff -> 401', code == 401, code)
 
 
 def verify(body, token=None, now=None):
     path = 'verify.php' + (f'?now={urllib.parse.quote(now)}' if now else '')
-    code, res = call('POST', path, body, token)
+    code, res = call('POST', path, body, token, headers=None if token else SCANNER)
     return code, res.get('data', {}) if isinstance(res, dict) else {}
 
 
@@ -204,8 +226,8 @@ def test_signed_passes(admin):
     check('guard vehicle list has no signed payloads', all('qrPayload' not in v for v in res['data']), res)
     code, _ = call('GET', 'vehicles.php')
     check('anonymous full vehicle list -> 401', code == 401, code)
-    code, res = call('GET', 'vehicles.php?plate=NDK-4821')
-    check('anonymous plate lookup OK, without payload', code == 200 and 'qrPayload' not in res['data'], res)
+    code, res = call('GET', 'vehicles.php?plate=NDK-4821', headers=SCANNER)
+    check('scanner plate lookup OK, without payload', code == 200 and 'qrPayload' not in res['data'], res)
 
     code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Ingress'}, guard)
     check('valid pass -> VALID, accepted', v.get('result') == 'VALID' and v.get('accepted') is True, v)
@@ -261,7 +283,7 @@ def test_signed_passes(admin):
     call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
 
     code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'})
-    check('mobile scanner (no token) can verify', code == 200 and v.get('result') == 'VALID', v)
+    check('mobile scanner (device key) can verify', code == 200 and v.get('result') == 'VALID', v)
 
 
 def test_legacy_passes(admin):
@@ -337,7 +359,7 @@ def test_gate_flow(admin):
     call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
     check('entry for suspended vehicle refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_SUSPENDED', res)
-    code, res = call('POST', 'logs.php', {'plateNumber': 'NDK 4821', 'driverName': 'Juan', 'action': 'Entry Recorded'})
+    code, res = call('POST', 'logs.php', {'plateNumber': 'NDK 4821', 'driverName': 'Juan', 'action': 'Entry Recorded'}, headers=SCANNER)
     check('mobile entry for suspended vehicle also refused', code == 403, res)
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
     check('exit for suspended vehicle still allowed', code == 201, res)
@@ -692,8 +714,9 @@ def test_visitor_items_and_on_campus(admin):
 
     # Mobile scanner cannot tick the box: allowed, but the log says items were not checked
     code, res = call('POST', 'visitors.php', dict(base, plate='EVT 4041', items=[{'name': 'Tables', 'quantity': 10}]), guard)
-    code, res = call('POST', 'logs.php', {'plateNumber': 'EVT 4041', 'driverName': 'Driver', 'action': 'Entry Recorded'})
+    code, res = call('POST', 'logs.php', {'plateNumber': 'EVT 4041', 'driverName': 'Driver', 'action': 'Entry Recorded'}, headers=SCANNER)
     check('mobile entry logs items as not checked', code == 201 and 'not checked by mobile scanner' in res['data']['notes'], res)
+    check('mobile log attributed to Mobile Scanner', res['data'].get('guardName', '').startswith('Mobile Scanner'), res)
 
     code, _ = call('GET', 'oncampus.php')
     check('on-campus list requires sign-in -> 401', code == 401, code)

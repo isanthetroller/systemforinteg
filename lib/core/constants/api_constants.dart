@@ -20,12 +20,16 @@ class ApiConstants {
 
   static const Duration timeout = Duration(seconds: 8);
 
+  /// Scanner device key. Never commit it: pass it at build time, e.g.
+  /// `flutter build apk --dart-define=SCANNER_API_KEY=<SP_SCANNER_API_KEY from the server>`
+  static const String scannerApiKey = String.fromEnvironment('SCANNER_API_KEY');
+
   static Map<String, String> defaultHeaders = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
     'User-Agent': 'SecurePark-GateScanner/2.4',
     'X-Requested-With': 'XMLHttpRequest',
-    'X-Api-Key': 'local-scanner-key-2026',
+    if (scannerApiKey.isNotEmpty) 'X-Api-Key': scannerApiKey,
   };
 
   /// Root host URL (excluding the /api suffix)

@@ -42,10 +42,11 @@ error_reporting(E_ALL);
 // -----------------------------------------------------------------------------
 // Primary: InfinityFree / Local MySQL Database Configuration
 // -----------------------------------------------------------------------------
-// Environment variables win (local tools); otherwise secret.php (InfinityFree has no env vars)
-$db_host = getenv('DB_HOST') ?: (defined('SP_DB_HOST') ? SP_DB_HOST : 'sql200.infinityfree.com');
-$db_name = getenv('DB_NAME') ?: (defined('SP_DB_NAME') ? SP_DB_NAME : 'if0_42971238_securepark');
-$db_user = getenv('DB_USER') ?: (defined('SP_DB_USER') ? SP_DB_USER : 'if0_42971238');
+// Environment variables win (local tools); otherwise secret.php (InfinityFree has no env vars).
+// No credentials live in the source: without a configured host the SQLite fallback is used.
+$db_host = getenv('DB_HOST') ?: (defined('SP_DB_HOST') ? SP_DB_HOST : '');
+$db_name = getenv('DB_NAME') ?: (defined('SP_DB_NAME') ? SP_DB_NAME : '');
+$db_user = getenv('DB_USER') ?: (defined('SP_DB_USER') ? SP_DB_USER : '');
 $db_pass = getenv('DB_PASS') !== false ? getenv('DB_PASS') : (defined('SP_DB_PASS') ? SP_DB_PASS : '');
 
 $pdo = null;
@@ -55,6 +56,9 @@ try {
     // Local development: DB_DRIVER=sqlite (env) or SP_FORCE_SQLITE (secret.php) skips MySQL entirely
     if (getenv('DB_DRIVER') === 'sqlite' || (defined('SP_FORCE_SQLITE') && SP_FORCE_SQLITE)) {
         throw new PDOException('MySQL skipped (DB_DRIVER=sqlite)');
+    }
+    if ($db_host === '' || $db_name === '' || $db_user === '') {
+        throw new PDOException('MySQL not configured (set SP_DB_HOST / SP_DB_NAME / SP_DB_USER in secret.php)');
     }
     $dsn = "mysql:host={$db_host};dbname={$db_name};charset=utf8mb4";
     $options = [
@@ -308,28 +312,12 @@ function initializeSqliteSchema($pdo) {
     $pdo->exec("UPDATE `system_users` SET `role` = 'guard' WHERE `role` NOT IN ('admin', 'guard')");
     $pdo->exec("UPDATE `gate_logs` SET `action` = 'Entry Denied' WHERE `action` NOT IN ('Entry Recorded', 'Exit Approved', 'Entry Denied', 'Exit Denied')");
 
-    // Clear any previous failed attempts or lockouts, and ensure guards are never locked out by must_change_password
-    $pdo->exec("UPDATE `system_users` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
-    $pdo->exec("UPDATE `system_users` SET `must_change_password` = 0 WHERE `role` = 'guard'");
-    $pdo->exec("UPDATE `student_accounts` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
-
-    // Seed baseline administrator and gate guards if empty
+    // Seed the first administrator only on a brand-new database. The password is a well-known
+    // default, so the account must change it at first sign-in. No other default accounts exist.
     $count = (int)$pdo->query("SELECT COUNT(*) FROM `system_users`")->fetchColumn();
     if ($count === 0) {
-        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 0)");
+        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 1)");
         $stmt->execute(['admin', password_hash('Password123!', PASSWORD_BCRYPT), 'System Administrator', 'NCST-SEC-01']);
-    }
-    // Ensure default guard terminal accounts exist for instant gate operations
-    $guardCheck = $pdo->prepare("SELECT `id` FROM `system_users` WHERE `username` = ? LIMIT 1");
-    $guardCheck->execute(['guard1']);
-    if (!$guardCheck->fetch()) {
-        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
-        $stmt->execute(['guard1', password_hash('password123', PASSWORD_BCRYPT), 'Officer Ramon Gomez', 'NCST-SEC-01', 'Gate 1 (Main Ingress)']);
-    }
-    $guardCheck->execute(['guard2']);
-    if (!$guardCheck->fetch()) {
-        $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
-        $stmt->execute(['guard2', password_hash('password123', PASSWORD_BCRYPT), 'Officer Elena Torres', 'NCST-SEC-02', 'Gate 2 (Main Egress)']);
     }
 }
 
@@ -372,29 +360,11 @@ function ensureMysqlSchemaAndBaseline($pdo) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
-        // Clear any previous failed attempts or lockouts
-        $pdo->exec("UPDATE `system_users` SET `failed_attempts` = 0, `locked_until` = NULL WHERE `locked_until` IS NOT NULL OR `failed_attempts` > 0");
-        $pdo->exec("UPDATE `system_users` SET `must_change_password` = 0 WHERE `role` = 'guard'");
-
-        // Seed baseline administrator if missing
-        $adminCheck = $pdo->prepare("SELECT `id` FROM `system_users` WHERE `username` = ? LIMIT 1");
-        $adminCheck->execute(['admin']);
-        if (!$adminCheck->fetch()) {
-            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 0)");
+        // Seed the first administrator only when there are no staff accounts at all.
+        // The default password is well known, so it must be changed at first sign-in.
+        if ((int)$pdo->query("SELECT COUNT(*) FROM `system_users`")->fetchColumn() === 0) {
+            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'admin', ?, 'All Gates', 'Active', 1)");
             $stmt->execute(['admin', password_hash('Password123!', PASSWORD_BCRYPT), 'System Administrator', 'NCST-SEC-01']);
-        }
-
-        // Ensure default guard accounts exist
-        $guardCheck = $pdo->prepare("SELECT `id` FROM `system_users` WHERE `username` = ? LIMIT 1");
-        $guardCheck->execute(['guard1']);
-        if (!$guardCheck->fetch()) {
-            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
-            $stmt->execute(['guard1', password_hash('password123', PASSWORD_BCRYPT), 'Officer Ramon Gomez', 'NCST-SEC-01', 'Gate 1 (Main Ingress)']);
-        }
-        $guardCheck->execute(['guard2']);
-        if (!$guardCheck->fetch()) {
-            $stmt = $pdo->prepare("INSERT INTO `system_users` (`username`, `password_hash`, `full_name`, `role`, `badge_number`, `gate_assigned`, `status`, `must_change_password`) VALUES (?, ?, ?, 'guard', ?, ?, 'Active', 0)");
-            $stmt->execute(['guard2', password_hash('password123', PASSWORD_BCRYPT), 'Officer Elena Torres', 'NCST-SEC-02', 'Gate 2 (Main Egress)']);
         }
     } catch (Exception $ex) {
         error_log('[DB] ensureMysqlSchemaAndBaseline notice: ' . $ex->getMessage());
