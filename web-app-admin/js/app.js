@@ -2920,7 +2920,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (editStickerYear) editStickerYear.value = v.stickerYear || '2026';
     if (editPassClassVip) editPassClassVip.checked = !!v.isVip;
     if (editRegStatus) editRegStatus.value = v.registrationStatus || 'Active';
-    if (editCampusStatus) editCampusStatus.value = v.status || 'Outside';
+    if (editCampusStatus) {
+      // Inside / outside is set by the gate log, never by this form: show it, don't let it be edited or saved
+      const st = String(v.status || 'Outside');
+      editCampusStatus.value = (st.startsWith('Inside') || st === 'Blocked / Alert') ? 'Inside' : 'Outside';
+      editCampusStatus.disabled = true;
+      editCampusStatus.title = 'Set automatically by the gate log';
+    }
 
     // Section 2: Vehicle Photo
     editVehiclePhotoDataUrl = v.vehiclePhoto || v.vehicle_photo || null;
@@ -3082,7 +3088,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const makeModelColor = editMakeModel ? editMakeModel.value.trim() : (v.makeModelColor || '');
       const stickerYear = editStickerYear ? editStickerYear.value.trim() : (v.stickerYear || '2026');
       const registrationStatus = editRegStatus ? editRegStatus.value : (v.registrationStatus || 'Active');
-      const campusStatus = editCampusStatus ? editCampusStatus.value : (v.status || 'Outside');
 
       // Read Authorized Drivers
       const driverCards = editDriversContainer ? editDriversContainer.querySelectorAll('.edit-driver-entry-card') : [];
@@ -3146,7 +3151,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       v.registrationStatus = registrationStatus;
       v.registration_status = registrationStatus;
-      v.status = campusStatus;
       v.ownerPhoto = editOwnerPhotoDataUrl;
       v.owner_photo = editOwnerPhotoDataUrl;
       v.ownerPhotoUrl = editOwnerPhotoDataUrl;
@@ -3177,7 +3181,6 @@ document.addEventListener('DOMContentLoaded', () => {
           stickerYear: v.stickerYear,
           passClass: v.isVip ? 'VIP' : 'Standard',
           registrationStatus: v.registrationStatus,
-          status: v.status,
           ownerPhoto: v.ownerPhoto,
           vehiclePhoto: v.vehiclePhoto,
           authorizedDrivers: v.authorizedDrivers
@@ -4450,11 +4453,17 @@ document.addEventListener('DOMContentLoaded', () => {
   generateQrPass(true);
 
   // Synchronize with InfinityFree MySQL Backend API
-  async function loadInitialDataFromApi(silent = false) {
+  // The vehicle registry is the heavy call (owner and vehicle photos), so background refreshes fetch it at
+  // most once a minute; explicit reloads and gate passages ask for it right away.
+  const VEHICLES_REFRESH_MS = 60 * 1000;
+  let lastVehiclesLoad = 0;
+
+  async function loadInitialDataFromApi(silent = false, forceVehicles = false) {
     if (!window.ApiClient) return;
     try {
+      const needVehicles = !silent || forceVehicles || (Date.now() - lastVehiclesLoad) >= VEHICLES_REFRESH_MS;
       const [vehicles, logs, incidents, visitors, onCampus] = await Promise.all([
-        ApiClient.getVehicles().catch(() => null),
+        needVehicles ? ApiClient.getVehicles().catch(() => null) : Promise.resolve(null),
         ApiClient.getLogs().catch(() => null),
         ApiClient.getIncidents().catch(() => null),
         ApiClient.getVisitorPasses().catch(() => null),
@@ -4464,6 +4473,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let hasUpdate = false;
       if (vehicles && Array.isArray(vehicles)) {
         state.vehicles = vehicles.map(v => normalizeVehicle(v));
+        lastVehiclesLoad = Date.now();
         hasUpdate = true;
       }
       if (logs && Array.isArray(logs)) {
@@ -4537,12 +4547,13 @@ document.addEventListener('DOMContentLoaded', () => {
     loadInitialDataFromApi();
   }
 
-  // Real-Time Background Synchronization (4 seconds)
+  // Background refresh: every 30 seconds, and never while the tab is hidden (free hosting has a daily request limit)
   setInterval(() => {
+    if (document.hidden) return;
     if (!window.SPAuth || SPAuth.isAuthenticated()) {
       loadInitialDataFromApi(true);
     }
-  }, 4000);
+  }, 30000);
 
   // Instant refresh when user returns to window
   document.addEventListener('visibilitychange', () => {
@@ -4553,6 +4564,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Instant refresh on gate passage events
   document.addEventListener('sp:gate-passage', () => {
-    loadInitialDataFromApi(true);
+    loadInitialDataFromApi(true, true);
   });
 });

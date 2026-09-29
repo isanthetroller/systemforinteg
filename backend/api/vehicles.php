@@ -265,8 +265,8 @@ function handleUpdateVehicle($pdo, $admin) {
         'owner_phone' => ['ownerPhone', 'owner_phone'],
         'owner_email' => ['ownerEmail', 'owner_email'],
         'owner_photo' => ['ownerPhoto', 'owner_photo', 'ownerPhotoUrl'],
-        'vehicle_photo' => ['vehiclePhoto', 'vehicle_photo', 'vehiclePicture'],
-        'status' => ['status']
+        'vehicle_photo' => ['vehiclePhoto', 'vehicle_photo', 'vehiclePicture']
+        // 'status' (inside / outside) is owned by the gate log and the violations workflow, never by an edit
     ];
 
     foreach ($updatable as $col => $keys) {

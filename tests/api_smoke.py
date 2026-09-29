@@ -1154,6 +1154,38 @@ def test_offline_sync(admin):
     live = [l for l in call('GET', 'logs.php?limit=200', token=admin)[1]['data'] if l['plateNumber'] == 'NDK4821' or l['plateNumber'] == 'NDK 4821']
     check('live rows have no sync time; offline rows do', all(not l.get('syncedAt') for l in live) and bool(logs_for('SYN 1001')[0].get('syncedAt')), live[:1])
 
+    # --- an unexpected server error is a "retry", never a permanent rejection
+    register('SYN 4001', 'Rita Retry')
+    t = ago(minutes=15)
+    failing = ev('gate_log', t, dict(entry('SYN 4001'), _test_fail='before'), ref='T-fail-before-0001')
+    code, res = sync([failing])
+    r = res['data']['results'][0]
+    check('an unexpected error while processing -> "retry" (not rejected)', code == 200 and r['status'] == 'retry' and r['code'] == 'TEMPORARY_ERROR', res)
+    check('  ...nothing was recorded', logs_for('SYN 4001') == [], logs_for('SYN 4001'))
+    code, res = sync([dict(failing, payload=entry('SYN 4001'))])
+    check('  ...the same event sent again (no failure now) is accepted', res['data']['results'][0]['status'] == 'accepted' and len(logs_for('SYN 4001')) == 1, res)
+
+    raced = ev('gate_log', ago(minutes=12), dict(entry('SYN 4001', action='Exit Approved', gate_type='Egress'), _test_fail='after_commit'), ref='T-fail-after-00001')
+    code, res = sync([raced])
+    r = res['data']['results'][0]
+    check('an error AFTER the event was stored (concurrent send won) -> "duplicate", not a failure', r['status'] == 'duplicate' and r.get('id'), res)
+    check('  ...and it was recorded exactly once', len([l for l in logs_for('SYN 4001') if l['action'] == 'Exit Approved']) == 1, logs_for('SYN 4001'))
+    code, res = sync([dict(raced, payload=exit_('SYN 4001'))])
+    check('  ...resending it is still a duplicate', res['data']['results'][0]['status'] == 'duplicate', res)
+
+    # --- editing a vehicle can never change whether it is inside
+    inside = register('SYN 4002', 'Ivan Inside')
+    drv2 = int(vehicle('SYN 4002')['authorizedDrivers'][0]['id'])
+    call('POST', 'logs.php', {'plate': 'SYN 4002', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': drv2}, guard)
+    check('(setup) vehicle is inside', vehicle('SYN 4002')['status'] == 'Inside Campus', vehicle('SYN 4002')['status'])
+    for bad_status in ('', 'Outside', 'Inside', 'Exited'):
+        code, res = call('PUT', 'vehicles.php', {'id': inside['id'], 'ownerPhone': '0917 999 0000', 'status': bad_status}, admin)
+    v = vehicle('SYN 4002')
+    check('an edit that sends a status (even an empty one) does not change it', code == 200 and v['status'] == 'Inside Campus', v['status'])
+    check('  ...while the other fields in the same edit are saved', v['ownerPhone'] == '0917 999 0000', v)
+    code, res = call('GET', 'oncampus.php', token=guard)
+    check('  ...and the vehicle is still on the On Campus list', any(x['plateNumber'] == 'SYN 4002' for x in res['data']['vehicles']), res['data']['counts'])
+
 
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):

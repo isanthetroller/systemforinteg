@@ -13,7 +13,9 @@ Safety checks (the upload is refused if any fails):
     2. backend/config/secret.production.php exists, has no CHANGE_ME values, strong keys and
        SP_DEBUG = false. It is uploaded as htdocs/config/secret.php.
        The local development config/secret.php is NEVER uploaded.
-    3. FTP_USER and FTP_PASS environment variables are set (only for --yes).
+    3. secret.production.php defines SP_DB_HOST, SP_DB_NAME, SP_DB_USER and SP_DB_PASS (MySQL). Without them the
+       live site would silently switch to an empty SQLite file. Pass --allow-sqlite only if that is intended.
+    4. FTP_USER and FTP_PASS environment variables are set (only for --yes).
 
 Never uploaded: local SQLite data (data/), SQL scripts (database/), local secret.php, README files.
 """
@@ -64,9 +66,16 @@ def check_production_secret():
         m = re.search(rf"define\('{name}',\s*'([^']*)'\)", text)
         if not m or len(m.group(1)) < min_len:
             fail(f'{name} in secret.production.php must be at least {min_len} characters.')
-    if not re.search(r"^\s*define\('SP_DB_PASS',\s*'[^']+'\)", text, re.M):
-        print('[DEPLOY WARNING] SP_DB_PASS is not set in secret.production.php: the live site will use the '
-              'SQLite fallback file (htdocs/data/securepark.sqlite), not MySQL.')
+    # The code no longer has built-in database credentials: without these the site falls back to a new, empty
+    # SQLite file and every real vehicle and log looks gone.
+    if '--allow-sqlite' not in sys.argv:
+        missing = [name for name in ('SP_DB_HOST', 'SP_DB_NAME', 'SP_DB_USER', 'SP_DB_PASS')
+                   if not re.search(rf"^\s*define\('{name}',\s*'[^']+'\)", text, re.M)]
+        if missing:
+            fail('secret.production.php does not define ' + ', '.join(missing) + '. Without them the live site would use an '
+                 'empty SQLite database instead of MySQL. Add them (see secret.example.php), or pass --allow-sqlite if that is intended.')
+        if re.search(r"^\s*define\('SP_FORCE_SQLITE',\s*true\)", text, re.M):
+            fail('secret.production.php sets SP_FORCE_SQLITE = true, which bypasses MySQL. Remove it, or pass --allow-sqlite.')
     local = os.path.join(ROOT, 'backend', 'config', 'secret.php')
     if os.path.exists(local):
         local_key = re.search(r"define\('SP_QR_SECRET',\s*'([^']*)'\)", open(local, encoding='utf-8').read())

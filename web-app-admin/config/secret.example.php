@@ -9,9 +9,11 @@
  *   php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
  */
 
-// MySQL (InfinityFree control panel > MySQL Databases). Leave SP_DB_PASS out to use the
-// local SQLite fallback instead (data/securepark.sqlite on the server).
-// define('SP_DB_HOST', 'sql200.infinityfree.com');
+// MySQL (InfinityFree control panel > MySQL Databases). There are no built-in database credentials:
+// with these missing, the site silently uses a NEW, EMPTY local SQLite file (data/securepark.sqlite).
+// That is right for local development; for production all four are required, and
+// deploy_to_infinityfree.py refuses to upload a production secret without them.
+// define('SP_DB_HOST', 'sqlXXX.infinityfree.com');
 // define('SP_DB_NAME', 'if0_XXXXXXXX_securepark');
 // define('SP_DB_USER', 'if0_XXXXXXXX');
 // define('SP_DB_PASS', 'your-mysql-password');

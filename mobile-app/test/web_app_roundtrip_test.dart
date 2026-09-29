@@ -19,6 +19,7 @@ void main() {
   final List<Map<String, dynamic>> webDbVisitors = [];
   final List<Map<String, dynamic>> webDbIncidents = [];
   final Set<String> webDbSyncedRefs = {}; // client_refs the server has already recorded
+  final Map<String, int> webDbRetryAttempts = {}; // plate -> how many times the server said "retry"
   final List<Map<String, dynamic>> webDbVehicles = [
     {
       'id': 'veh-101',
@@ -144,6 +145,9 @@ void main() {
           final plate = (payload['plateNumber'] ?? payload['plate'] ?? '').toString();
           if (webDbSyncedRefs.contains(ref)) {
             results.add({'client_ref': ref, 'status': 'duplicate'});
+          } else if (plate == 'RETRY-1' && (webDbRetryAttempts[ref] = (webDbRetryAttempts[ref] ?? 0) + 1) == 1) {
+            // A temporary server problem on the first attempt only
+            results.add({'client_ref': ref, 'status': 'retry', 'code': 'TEMPORARY_ERROR', 'message': 'Try again'});
           } else if (plate == 'REJECT-1') {
             results.add({'client_ref': ref, 'status': 'rejected', 'code': 'EVENT_TOO_OLD', 'message': 'Too old to sync'});
           } else {
@@ -561,6 +565,26 @@ void main() {
       expect(ok, isFalse);
       expect(ApiService.lastWriteError, contains('banned'));
       expect(SyncQueueService().pendingCount, equals(0));
+    });
+
+    test('13. A temporary server error keeps the event queued and it is accepted on the next attempt', () async {
+      await SyncQueueService().clearQueue();
+      final originalUrl = ApiConstants.baseUrl;
+      ApiConstants.baseUrl = 'http://127.0.0.1:49999/api';
+      await ApiService.postGateLog(plateNumber: 'RETRY-1', driverName: 'Unlucky Driver', action: 'Entry Recorded');
+      ApiConstants.baseUrl = originalUrl;
+
+      // First attempt: the server answers "retry", so the event stays queued and is NOT sent to the review list
+      final rejectedBefore = LocalCacheService.getRejectedSync().length;
+      expect(await SyncQueueService().processQueue(), isFalse);
+      expect(SyncQueueService().pendingCount, equals(1));
+      expect(LocalCacheService.getRejectedSync().length, equals(rejectedBefore));
+      expect(webDbLogs.any((l) => l['plate_number'] == 'RETRY-1'), isFalse);
+
+      // Next attempt succeeds
+      expect(await SyncQueueService().processQueue(), isTrue);
+      expect(SyncQueueService().pendingCount, equals(0));
+      expect(webDbLogs.where((l) => l['plate_number'] == 'RETRY-1').length, equals(1));
     });
   });
 }

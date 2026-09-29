@@ -8,7 +8,8 @@
  *   occurred_at: when it HAPPENED at the gate (ISO 8601; with a "Z" / offset it is unambiguous)
  *   payload:     the same fields the live endpoint takes (logs.php / incidents.php / visitors.php?action=exit)
  *
- * Response: { results: [ { client_ref, status: accepted | duplicate | rejected, code?, message?, id?, flags? } ] }
+ * Response: { results: [ { client_ref, status: accepted | duplicate | rejected | retry, code?, message?, id?, flags? } ] }
+ *   rejected = the server will never take this event (keep it for review); retry = a temporary problem, send it again
  *   The HTTP status is 200 whenever the batch was processed: a refused event never blocks the ones after it.
  *   A non-200 reply means "not processed, send it again" (offline, migration missing, server error).
  *
@@ -71,7 +72,7 @@ foreach ($queue as $item) {
         $results[] = syncOneEvent($pdo, $actor, $event, $ref, $item['when'], $now);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        $results[] = syncResult($ref, 'rejected', 'SERVER_ERROR', 'The event could not be processed.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
+        $results[] = syncRecoverFromError($pdo, $ref, $e);
     }
 }
 
@@ -82,6 +83,32 @@ sendResponse(200, [
 ], count($results) . ' event(s) processed.');
 
 /* -------------------------------------------------------------------------- */
+
+/**
+ * An unexpected error (deadlock, lock timeout, dropped connection, two sends of the same event racing on the
+ * client_ref unique index) says nothing about the event itself, so it is never reported as "rejected":
+ *   - if a concurrent request already recorded the event, it is a "duplicate";
+ *   - otherwise the device is told to "retry" and keeps the event queued.
+ */
+function syncRecoverFromError($pdo, $ref, Throwable $e) {
+    try {
+        if (preg_match('/^[A-Za-z0-9._:-]{8,64}$/', $ref)) {
+            $stmt = $pdo->prepare("SELECT `id` FROM `gate_logs` WHERE `client_ref` = ? LIMIT 1");
+            $stmt->execute([$ref]);
+            if ($id = $stmt->fetchColumn()) {
+                return syncResult($ref, 'duplicate', null, 'Already recorded.', ['id' => (int)$id]);
+            }
+            $stmt = $pdo->prepare("SELECT `id`, `case_number` FROM `security_incidents` WHERE `client_ref` = ? LIMIT 1");
+            $stmt->execute([$ref]);
+            if ($row = $stmt->fetch()) {
+                return syncResult($ref, 'duplicate', null, 'Already recorded.', ['id' => (int)$row['id'], 'caseNumber' => $row['case_number']]);
+            }
+        }
+    } catch (Throwable $ignored) {
+        // the database is struggling: fall through to "retry"
+    }
+    return syncResult($ref, 'retry', 'TEMPORARY_ERROR', 'The server could not process this event right now. Send it again.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
+}
 
 function syncResult($ref, $status, $code = null, $message = null, array $extra = []) {
     $r = ['client_ref' => $ref, 'status' => $status];
@@ -131,9 +158,20 @@ function syncOneEvent($pdo, $actor, array $event, $ref, array $when, $now) {
     $notes = 'Recorded offline: event ' . date('Y-m-d H:i:s', $ts) . ', synced ' . date('Y-m-d H:i:s', $now)
         . ($when['clamped'] ? ' (device clock was ahead; event time set to sync time)' : '');
 
-    if ($type === 'gate_log') return syncGateLog($pdo, $actor, $ref, $ts, $payload, $notes, $now);
-    if ($type === 'incident') return syncIncident($pdo, $actor, $ref, $ts, $payload, $notes);
-    return syncVisitorExit($pdo, $ref, $ts, $payload);
+    // Test hook (SP_DEBUG only, like ?now=): simulate an unexpected failure before, or right after, the event is stored
+    $forcedFailure = SP_DEBUG ? (string)($payload['_test_fail'] ?? '') : '';
+    if ($forcedFailure === 'before') {
+        throw new RuntimeException('forced failure before processing (test)');
+    }
+
+    if ($type === 'gate_log') $result = syncGateLog($pdo, $actor, $ref, $ts, $payload, $notes, $now);
+    elseif ($type === 'incident') $result = syncIncident($pdo, $actor, $ref, $ts, $payload, $notes);
+    else $result = syncVisitorExit($pdo, $ref, $ts, $payload);
+
+    if ($forcedFailure === 'after_commit') {
+        throw new RuntimeException('forced failure after commit (test)');
+    }
+    return $result;
 }
 
 function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {

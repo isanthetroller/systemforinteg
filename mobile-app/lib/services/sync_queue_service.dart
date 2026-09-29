@@ -78,7 +78,7 @@ enum SyncStatus {
 /// The queue is checked every few seconds (and when the app comes back to the foreground), so the
 /// moment a connection is back everything is sent, oldest first, in batches to /api/sync.php.
 ///
-/// - Only a genuine connection problem keeps an event queued and retried.
+/// - A connection problem, or a temporary server error (the server answers "retry"), keeps an event queued and retried.
 /// - An event the server refuses for good (for example older than 24 hours) is taken out of the
 ///   queue and kept in [LocalCacheService.getRejectedSync] so it can be reviewed, instead of
 ///   blocking everything behind it.
@@ -90,6 +90,10 @@ class SyncQueueService {
   SyncQueueService._internal();
 
   static const int _batchSize = 50;
+
+  /// An event the server keeps answering "retry" to (or not answering at all) is moved to the review list after this
+  /// many attempts, so one poisoned event cannot block the queue for ever.
+  static const int _maxRetries = 60;
   static const Duration _fetchEvery = Duration(seconds: 30);
   static final Random _random = Random();
 
@@ -226,7 +230,20 @@ class SyncQueueService {
             });
             continue;
           }
+          // 'retry' (temporary server problem) or no answer for this event: keep it queued, but not for ever
           item.retryCount++;
+          if (item.retryCount >= _maxRetries) {
+            refused.add({
+              'clientRef': item.clientRef,
+              'type': item.type,
+              'occurredAt': item.occurredAt.toUtc().toIso8601String(),
+              'code': 'GAVE_UP',
+              'message': 'Still failing after $_maxRetries attempts: ${result?['message'] ?? 'no answer from the server'}',
+              'payload': item.payload,
+              'rejectedAt': DateTime.now().toIso8601String(),
+            });
+            continue;
+          }
           unanswered.add(item.toJson());
         }
 
