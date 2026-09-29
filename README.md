@@ -10,7 +10,7 @@ visitors get **single-day passes**.
 | Admin & guard web portal | `web-app-admin/` | Security administrators, gate guards |
 | Student / owner web portal | `web-app-student/` | Registered vehicle owners (students & employees) |
 | PHP REST API + MySQL | `backend/` (mirrored into `web-app-admin/`) | Both portals and the mobile app |
-| Flutter gate scanner (mobile) | `lib/`, `android/`, `ios/` | Gate guards (unchanged in v2) |
+| Flutter gate scanner (mobile) | `mobile-app/` (see its README) | Gate guards |
 
 ---
 
