@@ -5,7 +5,10 @@ class ApiConstants {
   static const String localLanUrl = 'http://192.168.0.102:8000/web-app-admin/api';
   static const String localEmulatorUrl = 'http://10.0.2.2:8000/web-app-admin/api';
 
-  static const String defaultBaseUrl = liveCloudUrl;
+  /// The server the app starts on. Override at build time, e.g.
+  /// `--dart-define=API_BASE_URL=http://10.0.2.2:8001/web-app-admin/api` for the Android emulator; a guard can still
+  /// change it on the sign-in screen.
+  static const String defaultBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: liveCloudUrl);
 
   /// Active base API URL (customizable, persistent across app launches)
   static String baseUrl = defaultBaseUrl;
