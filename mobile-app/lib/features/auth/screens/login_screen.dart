@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/api_constants.dart';
-import '../../../models/user_model.dart';
 import '../../../services/api_service.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/local_cache_service.dart';
@@ -16,8 +15,8 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController(text: 'guard1');
-  final _passwordController = TextEditingController(text: 'password123');
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
 
   bool _obscurePassword = true;
   bool _isLoading = false;
@@ -56,19 +55,6 @@ class _LoginScreenState extends State<LoginScreen> {
       _isTestingConnection = false;
       _connectionStatus = res['success'] == true;
       _connectionMessage = res['message'] ?? '';
-    });
-  }
-
-  void _applyDemoRole(GuardRole role) {
-    setState(() {
-      _errorMessage = null;
-      if (role == GuardRole.entrance) {
-        _usernameController.text = 'guard1';
-        _passwordController.text = 'password123';
-      } else {
-        _usernameController.text = 'guard2';
-        _passwordController.text = 'password123';
-      }
     });
   }
 
@@ -642,10 +628,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     _buildServerConnectionCard(),
                     const SizedBox(height: 16),
 
-                    // Quick Demo Role Selector Pills
-                    _buildDemoRoleSelector(),
-                    const SizedBox(height: 16),
-
                     // Error Banner if authentication fails
                     if (_errorMessage != null) ...[
                       _buildErrorBanner(),
@@ -722,111 +704,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildDemoRoleSelector() {
-    final currentText = _usernameController.text.toLowerCase();
-    final isEntrance = currentText.contains('1') || currentText.contains('entrance');
-    final isExit = currentText.contains('2') || currentText.contains('exit');
-
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: NcstColors.slate200,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () => _applyDemoRole(GuardRole.entrance),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: isEntrance ? NcstColors.white : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: isEntrance
-                      ? [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.05),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : null,
-                ),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.login_rounded,
-                        size: 16,
-                        color: isEntrance ? NcstColors.green : NcstColors.slate600,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Guard 1 (Entrance)',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: isEntrance ? FontWeight.w800 : FontWeight.w600,
-                          color: isEntrance ? NcstColors.navyDark : NcstColors.slate600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: GestureDetector(
-              onTap: () => _applyDemoRole(GuardRole.exit),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: isExit ? NcstColors.white : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: isExit
-                      ? [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.05),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : null,
-                ),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.logout_rounded,
-                        size: 16,
-                        color: isExit ? NcstColors.navy : NcstColors.slate600,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Guard 2 (Exit)',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: isExit ? FontWeight.w800 : FontWeight.w600,
-                          color: isExit ? NcstColors.navyDark : NcstColors.slate600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildErrorBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -885,7 +762,7 @@ class _LoginScreenState extends State<LoginScreen> {
             controller: _usernameController,
             textInputAction: TextInputAction.next,
             decoration: InputDecoration(
-              hintText: 'e.g. guard1 or guard2',
+              hintText: 'Your guard username',
               hintStyle: const TextStyle(color: NcstColors.slate400, fontSize: 14),
               prefixIcon: const Icon(Icons.badge_outlined, color: NcstColors.slate500, size: 20),
               filled: true,

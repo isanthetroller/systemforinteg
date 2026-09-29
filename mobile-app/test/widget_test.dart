@@ -12,9 +12,28 @@ void main() {
     // 2. Verify Login Screen elements
     expect(find.text('NCST SECUREPARK'), findsOneWidget);
     expect(find.text('Gate Security Terminal'), findsOneWidget);
-    expect(find.text('Guard 1 (Entrance)'), findsOneWidget);
-    expect(find.text('Guard 2 (Exit)'), findsOneWidget);
     expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
+
+    // No demo accounts: the login has no role shortcuts and no pre-filled credentials
+    expect(find.text('Guard 1 (Entrance)'), findsNothing);
+    expect(find.text('Guard 2 (Exit)'), findsNothing);
+    final fields = tester.widgetList<TextFormField>(find.byType(TextFormField)).toList();
+    expect(fields.length, equals(2));
+    expect(fields[0].controller?.text, isEmpty);
+    expect(fields[1].controller?.text, isEmpty);
+  });
+
+  testWidgets('Signing in with empty fields is refused and stays on the Login screen', (WidgetTester tester) async {
+    await tester.pumpWidget(const NcstGateSecurityApp());
+    await tester.pump();
+
+    await tester.tap(find.text('SIGN IN TO GATE TERMINAL'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Please enter your username'), findsOneWidget);
+    expect(find.text('Please enter your password'), findsOneWidget);
+    expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
+    expect(find.text('Dashboard'), findsNothing);
   });
 
   testWidgets('QrScannerScreen renders clean viewfinder and verifies scanned pass', (WidgetTester tester) async {
@@ -61,7 +80,9 @@ void main() {
     // 1. Initial State: On Login Screen
     expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
 
-    // 2. Tap Sign In (default is guard1 / password123)
+    // 2. Type the guard's credentials (the test build signs in through the local mock repository), then tap Sign In
+    await tester.enterText(find.byType(TextFormField).at(0), 'guard1');
+    await tester.enterText(find.byType(TextFormField).at(1), 'password123');
     await tester.tap(find.text('SIGN IN TO GATE TERMINAL'));
     await tester.pumpAndSettle();
 
@@ -76,9 +97,9 @@ void main() {
     await tester.pumpWidget(const NcstGateSecurityApp());
     await tester.pump();
 
-    // 1. Switch to Guard 2 Demo Role
-    await tester.tap(find.text('Guard 2 (Exit)'));
-    await tester.pump();
+    // 1. Type the exit guard's credentials
+    await tester.enterText(find.byType(TextFormField).at(0), 'guard2');
+    await tester.enterText(find.byType(TextFormField).at(1), 'password123');
 
     // 2. Tap Sign In
     await tester.tap(find.text('SIGN IN TO GATE TERMINAL'));

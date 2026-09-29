@@ -23,6 +23,8 @@ A specialized cross-platform mobile application engineered for National College 
     only refused while online; the guard sees the reason.
   - A refused entry (banned, unregistered) is not kept in the phone's audit list; the guard sees "NOT RECORDED" with the
     server's reason.
+- **Sign-in**: there are no demo accounts and nothing is pre-filled; a guard signs in with the account an administrator
+  created in the web portal (Staff Accounts).
 - **First sign-in**: a guard whose account has a temporary password (set by an administrator) is asked to choose their own
   before using the terminal.
 - **Visitor pass validity**: a day pass is valid all day on its date (until midnight). A visitor still on campus after
