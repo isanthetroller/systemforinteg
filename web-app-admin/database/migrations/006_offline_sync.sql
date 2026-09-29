@@ -14,3 +14,8 @@ ALTER TABLE `gate_logs`
 ALTER TABLE `security_incidents`
   ADD COLUMN `client_ref` VARCHAR(64) NULL AFTER `resolved_at`,
   ADD UNIQUE INDEX `uq_incidents_client_ref` (`client_ref`);
+
+-- A visitor pass a guard issued on a phone without a connection: created_at is when it was issued,
+-- synced_at is when it reached the server.
+ALTER TABLE `visitor_passes`
+  ADD COLUMN `synced_at` DATETIME NULL AFTER `created_at`;

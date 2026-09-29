@@ -30,6 +30,9 @@ class ApiService {
   /// The server's message for the last refused write, or why it could not be sent.
   static String? lastWriteError;
 
+  /// True when the last visitor pass could not reach the server and was saved on this phone to sync later.
+  static bool lastWriteQueued = false;
+
   @visibleForTesting
   static void setClientForTesting(http.Client client) {
     _client = client;
@@ -597,19 +600,37 @@ class ApiService {
     return (await _postForOutcome(ApiConstants.visitorsEndpoint, payload)) == WriteOutcome.accepted;
   }
 
-  /// Visitor passes are issued ONLINE ONLY: the server signs the QR and owns the pass code, so a pass
-  /// made offline would be a QR that cannot be verified at the exit gate. Returns false when the pass
-  /// was not issued; [lastWriteError] says why (no connection, or the server's reason).
+  /// Issues a visitor pass.
+  /// Online, the server records it at once. Offline, the pass stays valid on this phone (the guard hands the visitor the
+  /// QR as usual) and is queued with the time it was issued; it reaches the server the moment a connection is back, with
+  /// the same pass code, and is dated the day it was issued. Sets [lastWriteQueued] when it was queued.
+  /// Returns false only when the server REFUSED the pass (for example the plate belongs to a registered vehicle or
+  /// already has a pass today): [lastWriteError] says why.
   static Future<bool> postVisitorPass(VisitorPass pass) async {
-    final outcome = await _postForOutcome(ApiConstants.visitorsEndpoint, pass.toJson());
+    lastWriteQueued = false;
+    final clientRef = SyncQueueService.newClientRef();
+    final occurredAt = DateTime.now();
+    final Map<String, dynamic> payload = Map<String, dynamic>.from(pass.toJson());
+
+    final outcome = await _postForOutcome(ApiConstants.visitorsEndpoint, payload);
     if (outcome == WriteOutcome.accepted) {
       unawaited(SyncQueueService().processQueue());
       return true;
     }
-    if (outcome == WriteOutcome.unreachable) {
-      lastWriteError = 'No connection to the server. Visitor passes can only be issued while online.';
+    if (outcome == WriteOutcome.refused) {
+      debugPrint('[ApiService] Server refused visitor pass ${pass.passId}: $lastWriteError');
+      return false;
     }
-    return false;
+
+    debugPrint('[ApiService] Offline: queuing visitor pass ${pass.passId} for automatic sync');
+    await SyncQueueService().enqueue(
+      type: 'visitor_pass',
+      payload: payload,
+      clientRef: clientRef,
+      occurredAt: occurredAt,
+    );
+    lastWriteQueued = true;
+    return true;
   }
 
   /// Direct HTTP post for visitor exit checkout (live write)

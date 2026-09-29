@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -871,6 +872,16 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
         _purposeController.text.trim().isNotEmpty;
   }
 
+  /// A new pass code such as VP-20260929-K7M2QX. It is made on the phone (so it works with no connection) and is
+  /// unique enough for that: 32^6 combinations per day, in the same style as the codes the server makes.
+  static String _newPassCode(DateTime now) {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final random = Random.secure();
+    final suffix = List.generate(6, (_) => alphabet[random.nextInt(alphabet.length)]).join();
+    final date = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    return 'VP-$date-$suffix';
+  }
+
   Future<void> _completeRegistration() async {
     final visitorName = _visitorName.trim();
     final plateNumber = _licensePlate.trim().toUpperCase();
@@ -895,8 +906,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
     });
 
     final now = DateTime.now();
-    final randomSuffix = (1000 + (now.millisecondsSinceEpoch % 8999)).toString();
-    final passId = 'NCST-VIS-${now.year}-$randomSuffix';
+    final passId = _newPassCode(now);
     final validityHours = LocalCacheService.getVisitorPassValidityHours();
 
     final newPass = VisitorPass(
@@ -917,7 +927,8 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       items: List.from(_declaredItems),
     );
 
-    // The server must accept the pass first (it signs the QR), so this needs a connection
+    // With a connection the server records the pass now; without one it is saved on this phone and syncs later.
+    // Only a pass the server refuses (registered vehicle, duplicate pass) is not issued.
     final VisitorPass registeredPass;
     try {
       registeredPass = await VisitorRepository().registerPass(newPass);
@@ -935,6 +946,16 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
         );
       }
       return;
+    }
+
+    if (ApiService.lastWriteQueued && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: NcstColors.navy,
+          duration: Duration(seconds: 7),
+          content: Text('No connection: the pass is saved on this phone and will reach the server automatically when the connection returns.'),
+        ),
+      );
     }
 
     final itemsNote = _declaredItems.isNotEmpty

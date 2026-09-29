@@ -1091,10 +1091,85 @@ def test_offline_sync(admin):
     call('PUT', 'visitors.php', {'id': res['data']['id'], 'action': 'revoke'}, admin)
     code, res = sync([ev('gate_log', ago(minutes=20), entry('SYN 2004'))])
     check('offline entry on a revoked pass: recorded, flagged REVOKED', res['data']['results'][0]['flags'] == ['REVOKED'], res)
-    code, res = sync([ev('visitor_pass', ago(minutes=20), dict(base, plate='SYN 2005'), ref='T-visitorpass-0001')])
-    check('a visitor pass cannot be issued offline -> rejected', res['data']['results'][0]['code'] == 'NOT_SUPPORTED_OFFLINE', res)
-    code, res = call('GET', 'visitors.php?q=SYN2005', token=guard)
-    check('  ...and none was created', code == 404, code)
+
+    # --- visitor passes issued OFFLINE on the phone
+    manila_day = lambda t: t.astimezone(manila).strftime('%Y%m%d')
+
+    def pass_payload(plate, code, **extra):
+        return dict({'passId': code, 'pass_code': code, 'visitorName': 'Olga Offline', 'visitor_name': 'Olga Offline',
+                     'plateNumber': plate, 'plate': plate, 'contactNumber': '0917 000 4444', 'purposeOfVisit': 'Enrollment',
+                     'personToVisit': 'Registrar', 'vehicleModel': 'Red Vios', 'registeredByGuard': 'Officer Reyes',
+                     'items': [{'name': 'Boxes', 'quantity': 3}]}, **extra)
+
+    t_pass = ago(minutes=45)
+    code_a = 'VP-' + manila_day(t_pass) + '-K7M2QX'
+    code, res = sync([ev('visitor_pass', t_pass, pass_payload('SYN 5001', code_a), ref='T-offline-pass-0001')])
+    r = res['data']['results'][0]
+    check('an offline visitor pass is accepted, keeping the phone\'s pass code', r['status'] == 'accepted' and r['passCode'] == code_a and r['id'], res)
+    code, res = call('GET', f'visitors.php?id={r["id"]}', token=guard)
+    vp = res['data']
+    check('  ...it is valid on the day it was ISSUED, not the day it synced', vp['validDate'] == t_pass.astimezone(manila).strftime('%Y-%m-%d'), vp)
+    check('  ...created_at is the real issue time; synced_at marks the late arrival', vp['createdAt'] == manila_str(t_pass)
+          and vp['syncedAt'] and vp['syncedAt'] > vp['createdAt'], vp)
+    check('  ...the visitor, plate, items and issuing guard are kept', vp['visitorName'] == 'Olga Offline' and vp['plateNumber'] == 'SYN5001'
+          and [(i['name'], i['quantity']) for i in vp['items']] == [('Boxes', 3)] and 'Officer Reyes' in (vp['createdBy'] or ''), vp)
+    check('  ...and it starts Active, with a server-signed QR available to staff', vp['status'] == 'Active' and 'sig' in json.loads(vp['qrPayload']), vp)
+
+    # the entry the guard logged right after issuing the pass: sent in the wrong order, still lands after the pass
+    code_b = 'VP-' + manila_day(ago(minutes=30)) + '-P4T9WZ'
+    t_entry = ago(minutes=29)
+    entry_first = ev('gate_log', t_entry, entry('SYN 5002', driverName='Olga Offline'), ref='T-offline-entry-0002')
+    pass_second = ev('visitor_pass', ago(minutes=30), pass_payload('SYN 5002', code_b), ref='T-offline-pass-0002')
+    code, res = sync([entry_first, pass_second])
+    got = {x['client_ref']: x for x in res['data']['results']}
+    check('an entry listed BEFORE its pass in the same batch: both accepted, no flags',
+          got['T-offline-entry-0002']['status'] == 'accepted' and got['T-offline-entry-0002']['flags'] == [] and got['T-offline-pass-0002']['status'] == 'accepted', res)
+    code, res = call('GET', f'visitors.php?id={got["T-offline-pass-0002"]["id"]}', token=guard)
+    check('  ...the pass records the entry at the real time and the visitor is inside',
+          res['data']['entryTime'] == manila_str(t_entry) and res['data']['isInside'] is True, res['data'])
+
+    # sent twice, or clashing
+    code, res = sync([pass_second])
+    check('sending the same pass again -> duplicate', res['data']['results'][0]['status'] == 'duplicate', res)
+    code, res = sync([ev('visitor_pass', ago(minutes=30), pass_payload('SYN 5099', code_b), ref='T-offline-pass-0003')])
+    check('the same pass code on a different vehicle -> rejected CODE_CONFLICT', res['data']['results'][0]['code'] == 'CODE_CONFLICT', res)
+    code, res = sync([ev('visitor_pass', ago(minutes=20), pass_payload('SYN 5001', 'VP-' + manila_day(ago(minutes=20)) + '-ZZ22ZZ'), ref='T-offline-pass-0004')])
+    r = res['data']['results'][0]
+    if manila_day(ago(minutes=20)) == manila_day(t_pass):  # not when the two events straddle Manila midnight
+        check('a second pass for the same plate and day (another phone) -> duplicate, the existing pass is used',
+              r['status'] == 'duplicate' and r['passCode'] == code_a, res)
+
+    # a registered vehicle uses its own pass
+    register('SYN 5003', 'Reg Owner')
+    code, res = sync([ev('visitor_pass', ago(minutes=20), pass_payload('SYN 5003', 'VP-' + manila_day(ago(minutes=20)) + '-REG333'), ref='T-offline-pass-0005')])
+    r = res['data']['results'][0]
+    check('an offline pass for a REGISTERED vehicle: no pass created, flagged, security hold opened',
+          r['status'] == 'accepted' and r['flags'] == ['PLATE_REGISTERED'] and r['caseNumber'], res)
+    code, res = call('GET', 'visitors.php?q=SYN5003', token=guard)
+    check('  ...and there is no visitor pass for it', code == 404, code)
+    check('  ...the hold explains why', any(i['reason'] == 'Offline visitor pass for a registered vehicle' for i in open_incidents_for(admin, 'SYN 5003')),
+          open_incidents_for(admin, 'SYN 5003'))
+
+    # bad data is refused with a reason
+    code, res = sync([ev('visitor_pass', ago(minutes=20), pass_payload('SYN 5004', 'VP-' + manila_day(ago(minutes=20)) + '-NONAME', visitorName='', visitor_name=''), ref='T-offline-pass-0006')])
+    check('an offline pass with no visitor name -> rejected MISSING_FIELDS', res['data']['results'][0]['code'] == 'MISSING_FIELDS', res)
+    code, res = sync([ev('visitor_pass', ago(minutes=20), pass_payload('SYN 5004', 'VP-' + manila_day(ago(minutes=20)) + '-BADQTY', items=[{'name': 'Chairs', 'quantity': 0}]), ref='T-offline-pass-0007')])
+    check('an item with quantity 0 -> rejected INVALID_ITEMS', res['data']['results'][0]['code'] == 'INVALID_ITEMS', res)
+    code, res = sync([ev('visitor_pass', ago(minutes=20), pass_payload('SYN 5004', 'VP-' + manila_day(ago(minutes=20)) + '-MANYIT', items=[{'name': f'Item {i}', 'quantity': 1} for i in range(21)]), ref='T-offline-pass-0008')])
+    check('more than 20 items -> rejected INVALID_ITEMS', res['data']['results'][0]['code'] == 'INVALID_ITEMS', res)
+    code, res = call('GET', 'visitors.php?q=SYN5004', token=guard)
+    check('  ...and nothing was created for the refused passes', code == 404, code)
+    code, res = sync([ev('visitor_pass', ago(minutes=20), pass_payload('SYN 5005', '??', ), ref='T-offline-pass-0009')])
+    r = res['data']['results'][0]
+    check('a pass with an unusable code still works: the server assigns one', r['status'] == 'accepted' and r['passCode'].startswith('VP-'), res)
+
+    # the pass works at any gate once synced (only when it was issued today, to stay safe around midnight)
+    if t_pass.astimezone(manila).date() == datetime.datetime.now(manila).date():
+        code, v = verify({'qr_code': json.dumps({'passId': code_a, 'plateNumber': 'SYN5001'}), 'gate_type': 'Ingress'}, guard)
+        check('after syncing, the phone-made QR verifies at the web gate (found by its pass code)',
+              v.get('accepted') is True and v['visitor']['passCode'] == code_a, v)
+    code, res = call('GET', 'visitors.php?date=' + t_pass.astimezone(manila).strftime('%Y-%m-%d'), token=guard)
+    check('the day list shows the offline pass with its sync time', any(x['passCode'] == code_a and x['syncedAt'] for x in res['data']), res)
 
     # --- VIP
     code, res = call('POST', 'vehicles.php', {'plateNumber': 'SYN 3001', 'ownerName': 'Dr. Vee', 'ownerIdNumber': 'ID-SYN3001', 'passClass': 'VIP'}, admin)

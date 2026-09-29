@@ -50,6 +50,15 @@
     return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${cls}">${esc(label)}</span>`;
   }
 
+  // A pass a guard issued on a phone without a connection: show when it reached the server
+  function offlineChip(p) {
+    if (!p.syncedAt || !p.createdAt) return '';
+    const issued = Date.parse(String(p.createdAt).replace(' ', 'T') + '+08:00');
+    const synced = Date.parse(String(p.syncedAt).replace(' ', 'T') + '+08:00');
+    if (isNaN(issued) || isNaN(synced) || synced - issued < 120000) return '';
+    return `<div class="mt-0.5"><span class="inline-block px-1.5 py-0.5 rounded bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20 text-[9px] font-bold tracking-wide" title="Issued offline at the gate; reached the server at ${esc(p.syncedAt)}">ISSUED OFFLINE &middot; synced ${formatTime(p.syncedAt)}</span></div>`;
+  }
+
   function itemsInline(items, max = 3) {
     if (!items || !items.length) return '<span class="text-slate-400">—</span>';
     const shown = items.slice(0, max).map(i => `<span class="inline-block px-1.5 py-0.5 mr-1 mb-1 rounded bg-ncst-navy/5 border border-ncst-navy/20 text-ncst-navy text-[10px] font-semibold">${esc(i.quantity)}&times; ${esc(i.name)}</span>`).join('');
@@ -120,6 +129,7 @@
         <td class="px-4 py-2.5">
           <div class="font-mono font-bold text-slate-900 whitespace-nowrap">${esc(p.passCode)}</div>
           <div class="text-[10px] text-slate-400">Valid ${esc(p.validDate)}</div>
+          ${offlineChip(p)}
         </td>
         <td class="px-4 py-2.5">
           <div class="font-semibold text-slate-800">${esc(p.visitorName)}</div>

@@ -7,7 +7,7 @@ import 'local_cache_service.dart';
 /// One event that happened at the gate and is waiting to reach the server.
 class QueueItem {
   final String id;
-  final String type; // 'gate_log', 'visitor_exit', 'incident' (visitor passes are issued online only)
+  final String type; // 'gate_log', 'visitor_pass', 'visitor_exit', 'incident'
   final Map<String, dynamic> payload;
   final DateTime createdAt;
 

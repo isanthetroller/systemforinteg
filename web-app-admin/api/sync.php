@@ -3,7 +3,7 @@
  * SecurePark API - Offline sync (batch)
  *
  * POST /api/sync.php  { events: [ { client_ref, type, occurred_at, payload }, ... ] }   (at most 50 per request)
- *   type: gate_log | visitor_exit | incident        (visitor_pass is refused: passes are issued online only)
+ *   type: gate_log | visitor_exit | incident | visitor_pass
  *   client_ref:  the device's unique reference for the event (8-64 chars: letters, digits . _ : -)
  *   occurred_at: when it HAPPENED at the gate (ISO 8601; with a "Z" / offset it is unambiguous)
  *   payload:     the same fields the live endpoint takes (logs.php / incidents.php / visitors.php?action=exit)
@@ -20,6 +20,9 @@
  *   - The log keeps the real event time (logged_at); synced_at is when it reached the server.
  *   - A stale event never overwrites a newer vehicle / pass state.
  *   - A repeated client_ref returns "duplicate" instead of writing a second row.
+ *   - A visitor pass issued offline keeps the pass code the phone gave the visitor, is valid on the day it was issued
+ *     (not the day it syncs), and is marked with synced_at. If the plate belongs to a registered vehicle no pass is
+ *     created (registered vehicles use their own pass): the entry is recorded against the vehicle and flagged.
  *   - Events older than SP_OFFLINE_MAX_HOURS (default 24) are refused (EVENT_TOO_OLD) and stay on the phone.
  *   - An event time more than 5 minutes in the future (phone clock ahead) is clamped to now and noted.
  */
@@ -144,10 +147,7 @@ function syncOneEvent($pdo, $actor, array $event, $ref, array $when, $now) {
     $type = (string)($event['type'] ?? '');
     $payload = is_array($event['payload'] ?? null) ? $event['payload'] : [];
 
-    if ($type === 'visitor_pass') {
-        return syncResult($ref, 'rejected', 'NOT_SUPPORTED_OFFLINE', 'Visitor passes cannot be issued offline. Register the visitor again while the device is online.');
-    }
-    if (!in_array($type, ['gate_log', 'visitor_exit', 'incident'], true)) {
+    if (!in_array($type, ['gate_log', 'visitor_exit', 'incident', 'visitor_pass'], true)) {
         return syncResult($ref, 'rejected', 'UNKNOWN_TYPE', 'Unknown event type.');
     }
     if (isset($when['error'])) {
@@ -166,6 +166,7 @@ function syncOneEvent($pdo, $actor, array $event, $ref, array $when, $now) {
 
     if ($type === 'gate_log') $result = syncGateLog($pdo, $actor, $ref, $ts, $payload, $notes, $now);
     elseif ($type === 'incident') $result = syncIncident($pdo, $actor, $ref, $ts, $payload, $notes);
+    elseif ($type === 'visitor_pass') $result = syncVisitorPass($pdo, $actor, $ref, $ts, $payload, $now);
     else $result = syncVisitorExit($pdo, $ref, $ts, $payload);
 
     if ($forcedFailure === 'after_commit') {
@@ -356,4 +357,115 @@ function syncVisitorExit($pdo, $ref, $ts, array $p) {
     $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?")
         ->execute([$occurred, $pass['id']]);
     return syncResult($ref, 'accepted', null, null, ['id' => (int)$pass['id']]);
+}
+
+function syncVisitorPass($pdo, $actor, $ref, $ts, array $p, $now) {
+    $pick = function (array $keys, $max) use ($p) {
+        foreach ($keys as $k) {
+            if (isset($p[$k]) && trim((string)$p[$k]) !== '') return mb_substr(trim((string)$p[$k]), 0, $max);
+        }
+        return '';
+    };
+    $name = $pick(['visitor_name', 'visitorName'], 150);
+    $contact = $pick(['contact_number', 'contactNumber', 'contact'], 20);
+    $plate = normalizePlate($pick(['plate', 'plate_number', 'plateNumber'], 20));
+    $model = $pick(['vehicle_model', 'vehicleModel'], 100);
+    $purpose = $pick(['purpose', 'purpose_of_visit', 'purposeOfVisit'], 255);
+    $host = $pick(['person_to_visit', 'personToVisit'], 150);
+
+    $missing = [];
+    if ($name === '') $missing[] = 'visitor name';
+    if ($contact === '') $missing[] = 'contact number';
+    if ($plate === '') $missing[] = 'plate number';
+    if ($purpose === '') $missing[] = 'purpose of visit';
+    if ($host === '') $missing[] = 'person / department to visit';
+    if ($missing) {
+        return syncResult($ref, 'rejected', 'MISSING_FIELDS', 'Missing: ' . implode(', ', $missing) . '.');
+    }
+    if (strlen($plate) < 2) return syncResult($ref, 'rejected', 'INVALID_PLATE', 'The plate number is not valid.');
+
+    // The visitor already has this pass in hand, so validation is deliberately lenient (no phone-number format check)
+    $items = [];
+    $rawItems = $p['items'] ?? [];
+    if ($rawItems !== null && $rawItems !== '' && !is_array($rawItems)) {
+        return syncResult($ref, 'rejected', 'INVALID_ITEMS', 'items must be a list.');
+    }
+    foreach (array_values((array)$rawItems) as $item) {
+        if (!is_array($item)) return syncResult($ref, 'rejected', 'INVALID_ITEMS', 'Each item needs a name and quantity.');
+        $itemName = mb_substr(trim((string)($item['name'] ?? '')), 0, 100);
+        $desc = mb_substr(trim((string)($item['description'] ?? '')), 0, 255);
+        $qty = $item['quantity'] ?? 1;
+        if ($itemName === '' && $desc === '') continue;
+        if ($itemName === '') return syncResult($ref, 'rejected', 'INVALID_ITEMS', 'An item has no name.');
+        if (!is_numeric($qty) || (int)$qty != $qty || (int)$qty < 1 || (int)$qty > 9999) {
+            return syncResult($ref, 'rejected', 'INVALID_ITEMS', "Quantity for \"{$itemName}\" must be a whole number from 1 to 9999.");
+        }
+        $items[] = ['name' => $itemName, 'quantity' => (int)$qty, 'description' => $desc !== '' ? $desc : null];
+    }
+    if (count($items) > 20) return syncResult($ref, 'rejected', 'INVALID_ITEMS', 'A day pass can list at most 20 items.');
+
+    $eventDay = date('Y-m-d', $ts);
+    $occurred = date('Y-m-d H:i:s', $ts);
+
+    /* Registered vehicles use their own permanent pass. The guard already admitted it, so tell the security office. */
+    if ($vehicle = findVehicleByPlate($pdo, $plate)) {
+        $pdo->beginTransaction();
+        $incident = openSecurityIncident($pdo, $actor, [
+            'plate' => $vehicle['plate_number'],
+            'vehicleType' => $vehicle['vehicle_type'],
+            'ownerName' => $vehicle['owner_name'],
+            'ownerRole' => $vehicle['owner_role'],
+            'driverName' => $name,
+            'driverRelationship' => 'Visitor (day pass issued offline)',
+            'reason' => 'Offline visitor pass for a registered vehicle',
+            'gatePoint' => $p['gatePoint'] ?? defaultGatePoint('Ingress'),
+            'notes' => "A visitor pass was issued offline at {$occurred} for {$vehicle['plate_number']}, which is a registered campus vehicle"
+                . ((int)$vehicle['is_banned'] === 1 ? ' and is BANNED' : '') . '. No pass was created; the vehicle must use its own pass.',
+            'reportedAt' => date('Y-m-d H:i:s', $now),
+        ], 60);
+        $pdo->commit();
+        return syncResult($ref, 'accepted', null, null, ['flags' => ['PLATE_REGISTERED'], 'caseNumber' => $incident['caseNumber']]);
+    }
+
+    $code = $pick(['passCode', 'passId', 'pass_code'], 40);
+    if (!preg_match('/^[A-Za-z0-9._-]{6,40}$/', $code)) {
+        $code = newVisitorPassCode($pdo, $eventDay); // the phone sent no usable code: the server assigns one
+    }
+
+    $stmt = $pdo->prepare("SELECT `id`, `plate_number` FROM `visitor_passes` WHERE `pass_code` = ? LIMIT 1");
+    $stmt->execute([$code]);
+    if ($existing = $stmt->fetch()) {
+        if ($existing['plate_number'] === $plate) {
+            return syncResult($ref, 'duplicate', null, 'This pass was already recorded.', ['id' => (int)$existing['id'], 'passCode' => $code]);
+        }
+        return syncResult($ref, 'rejected', 'CODE_CONFLICT', 'That pass code already belongs to a different vehicle.');
+    }
+    $stmt = $pdo->prepare("SELECT `id`, `pass_code` FROM `visitor_passes` WHERE `plate_number` = ? AND `valid_date` = ? AND `status` = 'Active' LIMIT 1");
+    $stmt->execute([$plate, $eventDay]);
+    if ($sameDay = $stmt->fetch()) {
+        return syncResult($ref, 'duplicate', null, 'An active pass for this plate already exists for that day; it is used for the entry.',
+            ['id' => (int)$sameDay['id'], 'passCode' => $sameDay['pass_code']]);
+    }
+
+    $createdBy = actorLabel($actor);
+    if (!empty($p['registeredByGuard'])) $createdBy .= ' / ' . mb_substr((string)$p['registeredByGuard'], 0, 100);
+
+    $columns = ['pass_code', 'visitor_name', 'contact_number', 'plate_number', 'vehicle_model', 'purpose_of_visit', 'person_to_visit',
+        'valid_date', 'status', 'created_by', 'created_by_user_id', 'created_at'];
+    $values = [$code, $name, $contact, $plate, $model !== '' ? $model : null, $purpose, $host, $eventDay, 'Active', $createdBy, actorUserId($actor), $occurred];
+    if (columnExists($pdo, 'visitor_passes', 'synced_at')) {
+        $columns[] = 'synced_at';
+        $values[] = date('Y-m-d H:i:s', $now);
+    }
+    $pdo->beginTransaction();
+    $marks = implode(', ', array_fill(0, count($columns), '?'));
+    $pdo->prepare("INSERT INTO `visitor_passes` (`" . implode('`, `', $columns) . "`) VALUES ({$marks})")->execute($values);
+    $passId = (int)$pdo->lastInsertId();
+    $itemStmt = $pdo->prepare("INSERT INTO `visitor_pass_items` (`visitor_pass_id`, `item_name`, `quantity`, `description`) VALUES (?, ?, ?, ?)");
+    foreach ($items as $item) {
+        $itemStmt->execute([$passId, $item['name'], $item['quantity'], $item['description']]);
+    }
+    $pdo->commit();
+
+    return syncResult($ref, 'accepted', null, null, ['id' => $passId, 'passCode' => $code, 'flags' => []]);
 }

@@ -148,6 +148,10 @@ void main() {
           } else if (plate == 'RETRY-1' && (webDbRetryAttempts[ref] = (webDbRetryAttempts[ref] ?? 0) + 1) == 1) {
             // A temporary server problem on the first attempt only
             results.add({'client_ref': ref, 'status': 'retry', 'code': 'TEMPORARY_ERROR', 'message': 'Try again'});
+          } else if (e['type'] == 'visitor_pass') {
+            webDbSyncedRefs.add(ref);
+            webDbVisitors.add(Map<String, dynamic>.from(payload));
+            results.add({'client_ref': ref, 'status': 'accepted', 'passCode': payload['passId']});
           } else if (plate == 'REJECT-1') {
             results.add({'client_ref': ref, 'status': 'rejected', 'code': 'EVENT_TOO_OLD', 'message': 'Too old to sync'});
           } else {
@@ -244,6 +248,16 @@ void main() {
         // Create pass: POST /api/visitors.php
         if (method == 'POST') {
           final payload = jsonDecode(await utf8.decoder.bind(request).join());
+          if ((payload['plateNumber'] ?? payload['plate']) == 'REG-0001') {
+            // The server refuses a plate that belongs to a registered vehicle
+            request.response.statusCode = HttpStatus.conflict;
+            request.response.write(jsonEncode({
+              'status': 'error',
+              'message': 'REG-0001 is a registered campus vehicle and must use its permanent pass.',
+            }));
+            await request.response.close();
+            return;
+          }
           webDbVisitors.add(Map<String, dynamic>.from(payload));
 
           request.response.statusCode = HttpStatus.created;
@@ -438,7 +452,7 @@ void main() {
       expect(updatedOnServer['exitTime'], isNotNull);
     });
 
-    test('8. Offline Queue to Web App Sync: gate events flush when the connection is back; visitor passes are online-only', () async {
+    test('8. Offline Queue to Web App Sync: gate events AND visitor passes made offline flush when the connection is back', () async {
       await SyncQueueService().clearQueue();
       expect(SyncQueueService().pendingCount, equals(0));
 
@@ -459,9 +473,9 @@ void main() {
         ownerName: 'Carlos Offline Driver',
       );
 
-      // 3. A visitor pass cannot be issued offline: the server signs the QR. It is refused and NOT queued.
+      // 3. Action while offline: issue a visitor pass. It is issued (saved on the phone) and queued.
       final offlinePass = VisitorPass(
-        passId: 'NCST-VIS-OFFLINE-777',
+        passId: 'VP-20260929-OFFL77',
         visitorName: 'Ana Offline Visitor',
         contactNumber: '0918-888-9999',
         plateNumber: 'OFF-7777',
@@ -475,11 +489,12 @@ void main() {
         gatePoint: 'Gate 1',
       );
       final issued = await ApiService.postVisitorPass(offlinePass);
-      expect(issued, isFalse);
-      expect(ApiService.lastWriteError, isNotNull);
+      expect(issued, isTrue);
+      expect(ApiService.lastWriteQueued, isTrue);
 
-      // Only the gate log is waiting
-      expect(SyncQueueService().pendingCount, equals(1));
+      // Both the gate log and the pass are waiting
+      expect(SyncQueueService().pendingCount, equals(2));
+      expect(LocalCacheService.getSyncQueue().any((q) => q['type'] == 'visitor_pass'), isTrue);
 
       // 4. Simulate Wi-Fi restoration by pointing back to the web application server
       ApiConstants.baseUrl = originalUrl;
@@ -491,9 +506,51 @@ void main() {
       // Verify local queue is completely drained
       expect(SyncQueueService().pendingCount, equals(0));
 
-      // The web application received the gate log, and never a visitor pass made offline
+      // The web application received both, and the pass kept the code the phone gave the visitor
       expect(webDbLogs.any((l) => l['plate_number'] == 'OFFLINE-999'), isTrue);
-      expect(webDbVisitors.any((v) => v['passId'] == 'NCST-VIS-OFFLINE-777'), isFalse);
+      final syncedVisitor = webDbVisitors.firstWhere((v) => v['passId'] == 'VP-20260929-OFFL77');
+      expect(syncedVisitor['visitorName'], equals('Ana Offline Visitor'));
+      expect(syncedVisitor['plateNumber'], equals('OFF-7777'));
+    });
+
+    test('8b. A pass issued online is not queued; a pass the server refuses is not issued at all', () async {
+      await SyncQueueService().clearQueue();
+      final onlinePass = VisitorPass(
+        passId: 'VP-20260929-ONLN11',
+        visitorName: 'Online Visitor',
+        contactNumber: '0918-111-2222',
+        plateNumber: 'ONL-1111',
+        vehicleModel: 'Sedan',
+        purposeOfVisit: 'Meeting',
+        personToVisit: 'Registrar',
+        entryTime: DateTime.now(),
+        expiryTime: DateTime.now().add(const Duration(hours: 8)),
+        status: VisitorPassStatus.active,
+        registeredByGuard: 'Officer J. Hernandez',
+        gatePoint: 'Gate 1',
+      );
+      expect(await ApiService.postVisitorPass(onlinePass), isTrue);
+      expect(ApiService.lastWriteQueued, isFalse);
+      expect(SyncQueueService().pendingCount, equals(0));
+
+      final registeredPlate = VisitorPass(
+        passId: 'VP-20260929-REGD22',
+        visitorName: 'Wrong Lane',
+        contactNumber: '0918-333-4444',
+        plateNumber: 'REG-0001',
+        vehicleModel: 'Sedan',
+        purposeOfVisit: 'Meeting',
+        personToVisit: 'Registrar',
+        entryTime: DateTime.now(),
+        expiryTime: DateTime.now().add(const Duration(hours: 8)),
+        status: VisitorPassStatus.active,
+        registeredByGuard: 'Officer J. Hernandez',
+        gatePoint: 'Gate 1',
+      );
+      expect(await ApiService.postVisitorPass(registeredPlate), isFalse);
+      expect(ApiService.lastWriteError, contains('registered'));
+      expect(SyncQueueService().pendingCount, equals(0));
+      await expectLater(VisitorRepository().registerPass(registeredPlate), throwsA(isA<VisitorPassNotIssued>()));
     });
 
     test('9. Offline events keep the time they happened, and sending one twice never duplicates a log', () async {

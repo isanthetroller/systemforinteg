@@ -18,7 +18,9 @@ A specialized cross-platform mobile application engineered for National College 
   - Gate passages, visitor checkouts and incident reports made offline are queued with the time they happened and sent to
     `/api/sync.php` as soon as the connection is back (checked every 5 seconds and when the app returns to the foreground).
     A resend never duplicates a log, and a refused event never blocks the ones behind it (it is kept for review).
-  - Visitor passes can only be issued while online: the server signs the QR.
+  - Visitor passes can be issued offline: the pass and its QR work on this phone straight away and sync to the server later,
+    keeping the same pass code. A pass the server refuses (a registered vehicle's plate, or a duplicate pass for the day) is
+    only refused while online; the guard sees the reason.
   - Dynamically synthesizes unverified guest passes for unregistered visitor vehicles.
 - **Audit Logging**:
   - Instantly logs entries and exits (time, guard officer, lane direction, vehicle metadata) to live MySQL database.

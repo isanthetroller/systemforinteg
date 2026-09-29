@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS `visitor_passes` (
   `created_by` VARCHAR(100) NULL,
   `created_by_user_id` INT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `synced_at` DATETIME NULL COMMENT 'Set when the pass was issued offline on a phone and synced later',
   INDEX `idx_visitor_date` (`valid_date`),
   INDEX `idx_visitor_plate` (`plate_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

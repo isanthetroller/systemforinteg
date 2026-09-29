@@ -205,3 +205,16 @@ function findVisitorPassByPlate($pdo, $plate, $today, $includeStale = false) {
     }
     return null;
 }
+
+function newVisitorPassCode($pdo, $date) {
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for ($attempt = 0; $attempt < 10; $attempt++) {
+        $suffix = '';
+        for ($i = 0; $i < 4; $i++) $suffix .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        $code = 'VP-' . str_replace('-', '', $date) . '-' . $suffix;
+        $stmt = $pdo->prepare("SELECT 1 FROM `visitor_passes` WHERE `pass_code` = ?");
+        $stmt->execute([$code]);
+        if (!$stmt->fetch()) return $code;
+    }
+    throw new RuntimeException('Could not allocate a unique pass code.');
+}

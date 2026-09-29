@@ -41,7 +41,11 @@ visitors get **single-day passes**.
   The log keeps the real event time; rows that arrived late are marked "OFFLINE, synced hh:mm". Every event has a unique
   reference, so a resend never duplicates a log. Entries that already happened are always recorded: if the vehicle turns
   out to be banned, unregistered or on a revoked / expired pass, the log is flagged and a Held incident is opened.
-  Events older than 24 hours (`SP_OFFLINE_MAX_HOURS`) are refused and stay on the phone. Visitor passes cannot be issued offline.
+  Events older than 24 hours (`SP_OFFLINE_MAX_HOURS`) are refused and stay on the phone.
+  **Visitor passes can be issued offline too**: the phone gives the visitor the QR as usual, and the pass reaches the server
+  when the connection returns, with the same pass code and dated the day it was issued (the list shows "ISSUED OFFLINE, synced
+  hh:mm"). An offline QR is not server-signed; the server accepts it by its pass code. If the plate turns out to belong to a
+  registered vehicle, no pass is created and a Held incident is opened.
 - **CCTV simulation widget** (`web-app-admin/assets/cctv_simulation.mp4`, shows "NO SIGNAL" until added).
 - **Staff Accounts** page; one-time temporary passwords; forced change at first sign-in.
 

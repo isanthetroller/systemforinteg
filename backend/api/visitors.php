@@ -69,6 +69,8 @@ function formatVisitorPass($row) {
         'isInside' => $inside,
         'createdBy' => $row['created_by'],
         'createdAt' => $row['created_at'],
+        // Set when the pass was issued on a phone without a connection and reached the server later (migration 006)
+        'syncedAt' => $row['synced_at'] ?? null,
         'items' => visitorPassItems($pdo, $row['id']),
         // Staff can re-display the card; the server re-signs the same content every time
         'qrPayload' => signPassPayload($row['pass_code'], $row['plate_number'], 'visitor_temp', $row['valid_date']),
@@ -126,19 +128,6 @@ function handleListVisitors($pdo) {
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     sendResponse(200, array_map('formatVisitorPass', $stmt->fetchAll()));
-}
-
-function newVisitorPassCode($pdo, $date) {
-    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    for ($attempt = 0; $attempt < 10; $attempt++) {
-        $suffix = '';
-        for ($i = 0; $i < 4; $i++) $suffix .= $alphabet[random_int(0, strlen($alphabet) - 1)];
-        $code = 'VP-' . str_replace('-', '', $date) . '-' . $suffix;
-        $stmt = $pdo->prepare("SELECT 1 FROM `visitor_passes` WHERE `pass_code` = ?");
-        $stmt->execute([$code]);
-        if (!$stmt->fetch()) return $code;
-    }
-    throw new RuntimeException('Could not allocate a unique pass code.');
 }
 
 function handleCreateVisitor($pdo, $actor) {
