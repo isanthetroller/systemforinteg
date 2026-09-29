@@ -64,6 +64,8 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   }
 
   Future<void> _fetchLiveLogs() async {
+    // Just signed in: load the server's logs now instead of showing sample data until the next 30-second refresh
+    SyncQueueService().requestRefresh();
     await SyncQueueService().processQueue();
     final serverLogs = LocalCacheService.getCachedLogs();
     if (mounted && serverLogs.isNotEmpty) {

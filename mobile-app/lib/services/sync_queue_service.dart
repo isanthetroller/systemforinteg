@@ -132,6 +132,12 @@ class SyncQueueService {
     debugPrint('[SyncQueueService] Offline sync worker started (checks every ${interval.inSeconds}s)');
   }
 
+  /// Ask for a refresh of the local cache on the next pass (for example right after a guard signs in), instead of
+  /// waiting for the normal 30-second window.
+  void requestRefresh() {
+    _lastFetch = DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
   void stopAutoSync() {
     _syncTimer?.cancel();
     _syncTimer = null;
@@ -186,7 +192,8 @@ class SyncQueueService {
     // The worker ticks every few seconds: with nothing queued and no refresh due there is nothing to do, and the
     // status (and anything listening to it) must not flicker to "syncing" for no reason.
     final nothingQueued = LocalCacheService.getSyncQueue().isEmpty;
-    final refreshDue = DateTime.now().difference(_lastFetch) >= _fetchEvery;
+    // The lists are only fetched for a signed-in guard: before sign-in the request would just be refused
+    final refreshDue = ApiService.authToken != null && DateTime.now().difference(_lastFetch) >= _fetchEvery;
     if (nothingQueued && !refreshDue) return true;
 
     _isSyncing = true;
@@ -269,7 +276,7 @@ class SyncQueueService {
     }
 
     var fetched = false;
-    if (connectionHealthy && DateTime.now().difference(_lastFetch) >= _fetchEvery) {
+    if (connectionHealthy && ApiService.authToken != null && DateTime.now().difference(_lastFetch) >= _fetchEvery) {
       try {
         final freshVehicles = await ApiService.fetchVehicles();
         if (freshVehicles.isNotEmpty) {
