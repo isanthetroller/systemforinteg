@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import '../../../core/utils/date_time_utils.dart';
 import '../../../core/widgets/driver_photo_view.dart';
 import '../../../core/widgets/plate_badge.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
-import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/gate_repository.dart';
-import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../dialogs/manual_qr_dialog.dart';
@@ -45,7 +42,6 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   // Active Verification State
   bool _isVerifying = false;
   ExitVerificationStatus? _resultStatus;
-  VisitorPass? _verifiedVisitorPass;
   VehicleRecord? _verifiedVehicleRecord;
   String? _statusReason;
 
@@ -105,7 +101,6 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     _exitStabilizationTicker?.cancel();
     setState(() {
       _resultStatus = null;
-      _verifiedVisitorPass = null;
       _verifiedVehicleRecord = null;
       _statusReason = null;
       _isVerifying = false;
@@ -215,14 +210,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
     final clean = raw.trim();
 
-    // 1. First, check if it's a Temporary Visitor Pass
-    final visitorPass = await VisitorRepository().lookupPass(clean);
-    if (visitorPass != null) {
-      _evaluateVisitorPass(visitorPass);
-      return;
-    }
-
-    // 2. Second, check if it's a Registered Student / Faculty Vehicle
+    // Verify Registered Student / Faculty / Employee Vehicle
     var registeredVehicle = await ApiService.lookupVehicle(clean);
     if (registeredVehicle == null || !registeredVehicle.isParsedFromQr || registeredVehicle.ownerIdNumber == 'UNKNOWN') {
       registeredVehicle = GateRepository().resolveVehicle(clean);
@@ -242,46 +230,11 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       return;
     }
 
-    // 3. Fallback: Check if plate matches an active visitor pass
-    final plateMatch = await VisitorRepository().lookupPass(clean);
-    if (plateMatch != null) {
-      _evaluateVisitorPass(plateMatch);
-      return;
-    }
-
-    // 4. Invalid / Not Found State
+    // Invalid / Unrecognized QR State (Guard 2 is for registered vehicles only)
     setState(() {
       _isVerifying = false;
       _resultStatus = ExitVerificationStatus.invalid;
-      _statusReason = 'Pass code "$clean" could not be verified in the campus database.';
-    });
-  }
-
-  void _evaluateVisitorPass(VisitorPass pass) {
-    ExitVerificationStatus status;
-    String? reason;
-
-    if (pass.isBlocked) {
-      status = ExitVerificationStatus.blocked;
-      reason = pass.notes ?? 'Security Blacklist: Access hold active on this pass.';
-    } else if (pass.isUsed) {
-      status = ExitVerificationStatus.alreadyUsed;
-      reason = 'This pass was already checked out at ${pass.exitTime != null ? DateTimeUtils.formatTime(pass.exitTime!) : 'earlier today'}.';
-    } else if (pass.isExpired) {
-      // A day pass is valid all day on its date; there is no hour limit. A visitor who is still on campus after
-      // midnight must never be trapped, so they are let out, with a note for the guard (the server does the same).
-      status = ExitVerificationStatus.valid;
-      final passDate = pass.expiryTime.toIso8601String().substring(0, 10);
-      reason = 'This pass was valid on $passDate and the visitor is still on campus. Allow the exit and tell the security office.';
-    } else {
-      status = ExitVerificationStatus.valid;
-    }
-
-    setState(() {
-      _isVerifying = false;
-      _verifiedVisitorPass = pass;
-      _resultStatus = status;
-      _statusReason = reason;
+      _statusReason = 'Pass code "$clean" is not a registered vehicle QR pass. Guard 2 scans registered campus vehicles only.';
     });
   }
 
@@ -327,36 +280,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     final now = DateTime.now();
     AuditLogEntry? exitEntry;
 
-    if (_verifiedVisitorPass != null) {
-      final pass = _verifiedVisitorPass!;
-      await VisitorRepository().checkoutPass(pass.passId);
-
-      exitEntry = AuditLogEntry(
-        id: 'LOG-${now.millisecondsSinceEpoch}',
-        plateNumber: pass.plateNumber,
-        vehicleType: pass.vehicleModel ?? 'Visitor Vehicle',
-        ownerName: pass.visitorName,
-        driverName: pass.visitorName,
-        driverRelationship: 'Visitor / Temporary Pass',
-        timeIn: now,
-        action: 'Exit Approved',
-        status: GateStatus.exited,
-      );
-
-      final recorded = await ApiService.postGateLog(
-        plateNumber: pass.plateNumber,
-        driverName: pass.visitorName,
-        driverRelationship: 'Visitor / Temporary Pass',
-        gatePoint: widget.currentGuard.assignedGate,
-        action: 'Exit Approved',
-        status: 'Outside',
-        guardName: widget.currentGuard.fullName,
-        notes: 'Visitor pass ${pass.passId} checked out upon egress',
-        vehicleType: 'Visitor Vehicle',
-        ownerName: pass.visitorName,
-      );
-      if (!recorded) _showNotRecorded(pass.plateNumber);
-    } else if (_verifiedVehicleRecord != null) {
+    if (_verifiedVehicleRecord != null) {
       final v = _verifiedVehicleRecord!;
       final driver = v.authorizedDrivers.isNotEmpty ? v.authorizedDrivers.first.fullName : v.ownerName;
       final rel = v.authorizedDrivers.isNotEmpty ? v.authorizedDrivers.first.relationship : 'Self (Owner)';
@@ -785,9 +709,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         break;
     }
 
-    final isVisitor = _verifiedVisitorPass != null;
-    final isStudentOrFaculty = _verifiedVehicleRecord != null;
-    final isFlagged = isStudentOrFaculty && _verifiedVehicleRecord!.hasActiveFlag;
+    final isFlagged = _verifiedVehicleRecord != null && _verifiedVehicleRecord!.hasActiveFlag;
 
     return Container(
       decoration: BoxDecoration(
@@ -887,25 +809,17 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
           ],
           const Divider(height: 24),
 
-          // Person / Vehicle Details
-          if (isVisitor) ...[
-            _buildVisitorDossier(_verifiedVisitorPass!),
-          ] else if (isStudentOrFaculty) ...[
+          // Registered Vehicle Details
+          if (_verifiedVehicleRecord != null) ...[
             _buildVehicleDossier(_verifiedVehicleRecord!),
           ],
-
           const SizedBox(height: 16),
-
-          // Action Buttons
+          // Action Buttons: Scan Another & Confirm Exit
           Row(
             children: [
               Expanded(
                 child: OutlinedButton(
                   onPressed: _resetScanner,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
                   child: const Text('SCAN ANOTHER'),
                 ),
               ),
@@ -917,12 +831,6 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
                     onPressed: _handleConfirmExit,
                     icon: const Icon(Icons.check, size: 18),
                     label: const Text('CONFIRM EXIT'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: NcstColors.green,
-                      foregroundColor: NcstColors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
                   ),
                 ),
               ],
@@ -930,143 +838,6 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildVisitorDossier(VisitorPass pass) {
-    return Column(
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Vehicle Picture or Placeholder
-            if (pass.vehiclePhotoUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.asset(
-                  pass.vehiclePhotoUrl!,
-                  width: 80,
-                  height: 70,
-                  cacheWidth: 160,
-                  cacheHeight: 140,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => _buildPlaceholderPhoto(),
-                ),
-              )
-            else
-              _buildPlaceholderPhoto(),
-            const SizedBox(width: 12),
-
-            // Visitor Info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'VISITOR / GUEST PASS',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: NcstColors.navy,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                  Text(
-                    pass.visitorName,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: NcstColors.slate900,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  PlateBadge(plateNumber: pass.plateNumber),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: NcstColors.slate50,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            children: [
-              _buildRow('Pass ID:', pass.passId),
-              _buildRow('Entry Time:', DateTimeUtils.formatTime(pass.entryTime)),
-              _buildRow('Validity:', DateTimeUtils.formatTime(pass.expiryTime)),
-              _buildRow('Current Status:', pass.statusDisplay),
-            ],
-          ),
-        ),
-        if (pass.items.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFFBEB),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFDE68A)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: const [
-                    Icon(Icons.inventory_2_outlined, size: 16, color: NcstColors.goldDark),
-                    SizedBox(width: 6),
-                    Text(
-                      'DECLARED CARGO / ITEMS CHECKLIST',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: NcstColors.goldDark,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Verify that outgoing items match the registered cargo declarations:',
-                  style: TextStyle(fontSize: 11, color: NcstColors.slate600),
-                ),
-                const SizedBox(height: 8),
-                ...pass.items.map((item) {
-                  final name = (item['name'] ?? item['item_name'] ?? item['description'] ?? 'Item').toString();
-                  final qty = item['quantity'] ?? item['qty'] ?? 1;
-                  final desc = item['description']?.toString();
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.check_box_outlined, size: 16, color: NcstColors.goldDark),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '$qty× $name${(desc != null && desc.isNotEmpty && desc != name) ? " ($desc)" : ""}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: NcstColors.slate800,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
-            ),
-          ),
-        ],
-      ],
     );
   }
 
@@ -1138,20 +909,6 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     );
   }
 
-  Widget _buildPlaceholderPhoto() {
-    return Container(
-      width: 80,
-      height: 70,
-      decoration: BoxDecoration(
-        color: NcstColors.slate200,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: const Center(
-        child: Icon(Icons.directions_car, color: NcstColors.slate500, size: 28),
-      ),
-    );
-  }
-
   Widget _buildRow(String label, String value, {Color? textColor}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -1188,7 +945,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
               Icon(Icons.qr_code_scanner, size: 18, color: NcstColors.navy),
               SizedBox(width: 8),
               Text(
-                'Exit Clearance Instructions',
+                'Vehicle Exit Clearance Instructions',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
@@ -1199,7 +956,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
           ),
           const SizedBox(height: 6),
           const Text(
-            'Present driver QR code decal or visitor temporary pass to the camera. The system automatically inspects pass status, entry duration, and clearance to exit.',
+            'Present registered vehicle QR pass decal to the camera. The system verifies student/faculty registration, active status, driver credentials, and logs campus exit.',
             style: TextStyle(fontSize: 11.5, color: NcstColors.slate600, height: 1.4),
           ),
           const SizedBox(height: 12),
@@ -1208,7 +965,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
             child: OutlinedButton.icon(
               onPressed: () => ManualQrDialog.show(context, _verifyPass),
               icon: const Icon(Icons.keyboard_outlined, size: 18),
-              label: const Text('ENTER PASS / PLATE MANUALLY'),
+              label: const Text('ENTER VEHICLE PLATE / QR MANUALLY'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: NcstColors.navy,
                 side: const BorderSide(color: NcstColors.navy),

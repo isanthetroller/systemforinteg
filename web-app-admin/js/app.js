@@ -267,6 +267,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!views[targetViewId]) return;
     // Views hidden for the current role cannot be opened
     if (views[targetViewId].classList.contains('admin-only') && window.SPAuth && !SPAuth.hasRole('admin')) return;
+    if (document.body.classList.contains('role-guard2') && (targetViewId === 'visitorsView' || targetViewId === 'accountView')) return;
 
     state.currentView = targetViewId;
 

@@ -13,7 +13,6 @@ import '../../dashboard/widgets/quick_scan_banner.dart';
 import '../../scanner/screens/exit_scanner_screen.dart';
 import '../../scanner/screens/qr_scanner_screen.dart';
 import '../../visitor/screens/visitor_registration_screen.dart';
-import '../../visitor/widgets/active_passes_list_view.dart';
 
 class GuardShellScreen extends StatefulWidget {
   final GuardUser user;
@@ -321,7 +320,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
           return const SizedBox.shrink();
       }
     } else {
-      // Guard 2 — Exit
+      // Guard 2 — Exit: Dashboard and QR Scan only (no visitor)
       switch (_selectedIndex) {
         case 0:
           return _buildDashboardFeed(isEntrance);
@@ -341,14 +340,6 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                 _selectedIndex = 0;
               });
               _fetchLiveLogs();
-            },
-          );
-        case 2:
-          return ActivePassesListView(
-            onSelectPass: (pass) {
-              setState(() {
-                _selectedIndex = 1; // Switch to exit scanner tab
-              });
             },
           );
         default:
@@ -453,12 +444,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                 BottomNavigationBarItem(
                   icon: Icon(Icons.qr_code_scanner_outlined),
                   activeIcon: Icon(Icons.qr_code_scanner),
-                  label: 'Scan / Exit',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.badge_outlined),
-                  activeIcon: Icon(Icons.badge),
-                  label: 'Active Passes',
+                  label: 'QR Scan',
                 ),
               ],
       ),

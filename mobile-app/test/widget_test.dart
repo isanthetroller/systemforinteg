@@ -105,9 +105,10 @@ void main() {
     await tester.tap(find.text('SIGN IN TO GATE TERMINAL'));
     await tester.pumpAndSettle();
 
-    // 3. Should arrive at Guard 2 Exit Dashboard
+    // 3. Should arrive at Guard 2 Exit Dashboard with only Dashboard & QR Scan (no visitor)
     expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.text('Scan / Exit'), findsOneWidget);
-    expect(find.text('Active Passes'), findsOneWidget);
+    expect(find.text('QR Scan'), findsOneWidget);
+    expect(find.text('Active Passes'), findsNothing);
+    expect(find.text('Visitor'), findsNothing);
   });
 }

@@ -71,6 +71,17 @@
 
     /* Role-based visibility (set on <body> by js/auth.js). Server enforces the same rules. */
     body.role-guard .admin-only { display: none !important; }
+    
+    /* Guard 2: Dedicated strictly to Dashboard and QR Scan (Gate Monitor) - No Visitors */
+    body.role-guard2 #navVisitorsBtn,
+    body.role-guard2 #navAccountBtn,
+    body.role-guard2 #navStaffBtn,
+    body.role-guard2 #navSettingsBtn,
+    body.role-guard2 #visitorsView,
+    body.role-guard2 .guard2-hidden {
+      display: none !important;
+    }
+    
     /* Nothing behind the login screen is visible until a session is confirmed */
     body:not(.sp-authed) #appShell { visibility: hidden; }
     
