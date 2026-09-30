@@ -93,6 +93,18 @@ class VehicleRecord {
     this.isAntiPassback = false,
   });
 
+  /// The server's numeric id of the authorized driver with this name, or null when it is not known (offline
+  /// cache, mock data, a QR-only record). The server's gate log needs it to confirm who is behind the wheel.
+  int? driverIdForName(String fullName) {
+    final wanted = fullName.trim().toLowerCase();
+    for (final driver in authorizedDrivers) {
+      if (driver.fullName.trim().toLowerCase() != wanted) continue;
+      final id = int.tryParse(driver.id);
+      return (id != null && id > 0) ? id : null;
+    }
+    return null;
+  }
+
   /// IMPORTANT ARCHITECTURAL CONSTRAINT:
   /// Only student and employee records can have the flagged status.
   /// Visitors using temporary QR passes should never receive student/employee flagged status.

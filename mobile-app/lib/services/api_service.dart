@@ -501,6 +501,7 @@ class ApiService {
     String notes = '',
     String? vehicleType,
     String? ownerName,
+    int? driverId,
   }) async {
     final gateType = (action.contains('Exit') || action.contains('Egress')) ? 'Egress' : 'Ingress';
     final clientRef = SyncQueueService.newClientRef();
@@ -510,6 +511,8 @@ class ApiService {
       'plateNumber': plateNumber,
       'driverName': driverName,
       'driverRelationship': driverRelationship,
+      // The server confirms the driver by id: without it a registered vehicle's entry / exit is refused
+      if (driverId != null && driverId > 0) 'driver_id': driverId,
       'gatePoint': gatePoint,
       'gate_type': gateType,
       'action': action,

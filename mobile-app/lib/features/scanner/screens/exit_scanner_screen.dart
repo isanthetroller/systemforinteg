@@ -309,6 +309,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
         notes: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : 'Standard student/faculty exit',
         vehicleType: v.vehicleType,
         ownerName: v.ownerName,
+        driverId: v.driverIdForName(driver),
       );
       if (!recorded) _showNotRecorded(v.plateNumber);
     }

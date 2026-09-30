@@ -425,6 +425,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       status: 'Inside Campus',
       vehicleType: _scannedVehicle!.vehicleType,
       ownerName: _scannedVehicle!.ownerName,
+      driverId: _scannedVehicle!.driverIdForName(_selectedDriverName),
     ).then((recorded) {
       if (recorded) return;
       messenger.showSnackBar(

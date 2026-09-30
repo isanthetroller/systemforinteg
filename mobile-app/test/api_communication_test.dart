@@ -12,6 +12,7 @@ import 'package:systemforinteg/services/sync_queue_service.dart';
 void main() {
   late HttpServer mockServer;
   late int mockPort;
+  Map<String, dynamic>? lastLogBody;
 
   setUpAll(() async {
     // Spin up a mock HTTP server mimicking InfinityFree PHP endpoints
@@ -104,6 +105,7 @@ void main() {
       if (path == '/api/logs.php' && method == 'POST') {
         final content = await utf8.decoder.bind(request).join();
         final body = jsonDecode(content);
+        lastLogBody = Map<String, dynamic>.from(body as Map);
         expect(body['plateNumber'], equals('NDK-4821'));
         expect(body['status'], equals('Inside Campus'));
 
@@ -293,6 +295,57 @@ void main() {
       );
 
       expect(success, isTrue);
+    });
+
+    test('Gate log carries the selected driver\'s server id (the server refuses a registered vehicle without it)', () async {
+      lastLogBody = null;
+      final success = await ApiService.postGateLog(
+        plateNumber: 'NDK-4821',
+        driverName: 'Maria Dela Cruz',
+        driverRelationship: 'Spouse',
+        vehicleType: 'Sedan',
+        ownerName: 'Prof. Juan Dela Cruz',
+        driverId: 7,
+      );
+
+      expect(success, isTrue);
+      expect(lastLogBody?['driver_id'], equals(7));
+      expect(lastLogBody?['driverName'], equals('Maria Dela Cruz'));
+    });
+
+    test('Gate log without a known driver id sends no driver_id at all', () async {
+      lastLogBody = null;
+      await ApiService.postGateLog(
+        plateNumber: 'NDK-4821',
+        driverName: 'Maria Dela Cruz',
+        vehicleType: 'Sedan',
+        ownerName: 'Prof. Juan Dela Cruz',
+      );
+
+      expect(lastLogBody, isNotNull);
+      expect(lastLogBody!.containsKey('driver_id'), isFalse);
+    });
+
+    test('VehicleRecord.driverIdForName resolves the server id, ignoring case and placeholder ids', () {
+      const vehicle = VehicleRecord(
+        plateNumber: 'NDK-4821',
+        vehicleType: 'Sedan',
+        makeModelColor: 'White Toyota Vios',
+        ownerName: 'Juan Dela Cruz',
+        ownerRole: 'Student',
+        ownerIdNumber: 'NCST-2024-05182',
+        qrPassCode: 'SP-TEST',
+        authorizedDrivers: [
+          AuthorizedDriver(id: '12', fullName: 'Juan Dela Cruz', relationship: 'Self (Owner)', licenseNo: 'N01'),
+          AuthorizedDriver(id: '13', fullName: 'Pedro Dela Cruz', relationship: 'Brother', licenseNo: 'N02'),
+          AuthorizedDriver(id: 'drv-2', fullName: 'Offline Driver', relationship: 'Friend', licenseNo: 'N03'),
+        ],
+      );
+
+      expect(vehicle.driverIdForName('Juan Dela Cruz'), equals(12));
+      expect(vehicle.driverIdForName('  pedro dela cruz '), equals(13));
+      expect(vehicle.driverIdForName('Offline Driver'), isNull); // 'drv-2' is a client-side placeholder
+      expect(vehicle.driverIdForName('Somebody Else'), isNull);
     });
 
     test('Mobile App can report a security incident block to backend', () async {
