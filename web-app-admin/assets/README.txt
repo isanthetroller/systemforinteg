@@ -6,7 +6,8 @@ CCTV videos (simulation). All optional: until a file exists the screen shows an 
 
 2) 5 second gate clips (entry and exit)
    Every entry and exit in the audit log, and every vehicle on the On Campus page, has a "5s clip" button.
-   - cctv_clip_placeholder.mp4     one shared 5 second clip, shown for every passage. Add this one file first.
+   - cctv_clip_placeholder.mp4     one shared 5 second clip, shown for every passage. The included clip is the first 5 seconds of the
+                                   school's gate footage; replace the file to change it.
    - cctv_clips/log-<id>.mp4       optional clip for one specific passage, where <id> is the gate log id
                                    (shown as "Audit Log ID" in the Inspect drawer). Looked up before the shared clip.
    MP4 (H.264), 5 seconds, muted, ideally 480p-720p and under 2 MB each.

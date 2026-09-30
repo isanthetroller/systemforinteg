@@ -130,9 +130,15 @@
     source.addEventListener('error', onSourceFailed);
     video.addEventListener('error', onSourceFailed);
     video.addEventListener('playing', () => root.classList.remove('no-signal'));
+    // A fallback source that loads clears the "no signal" screen and starts playing
+    video.addEventListener('canplay', () => {
+      root.classList.remove('no-signal');
+      if (video.paused) { const p = video.play(); if (p && typeof p.catch === 'function') p.catch(() => {}); }
+    });
     const attempt = video.play();
     if (attempt && typeof attempt.catch === 'function') {
-      attempt.catch(() => { if (video.readyState < 2) noSignal(); });
+      // For a clip, a rejected play() only means the first source is still being replaced by a fallback
+      attempt.catch(() => { if (!clip && video.readyState < 2) noSignal(); });
     }
 
     if (clip) {
