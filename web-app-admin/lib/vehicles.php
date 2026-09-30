@@ -188,7 +188,7 @@ function findVisitorPassByPlate($pdo, $plate, $today, $includeStale = false) {
     $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE {$plateSql}
         AND `status` IN ('Active', 'Used', 'Revoked')
         AND (`valid_date` = ? OR (`entry_time` IS NOT NULL AND `exit_time` IS NULL))
-        ORDER BY CASE WHEN `status` = 'Used' THEN 1 ELSE 0 END, `id` DESC LIMIT 1");
+        ORDER BY CASE WHEN `status` = 'Used' OR (`status` = 'Revoked' AND `exit_time` IS NOT NULL) THEN 1 ELSE 0 END, `id` DESC LIMIT 1");
     $stmt->execute([$norm, $today]);
     if ($row = $stmt->fetch()) return $row;
 

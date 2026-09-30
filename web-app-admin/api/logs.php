@@ -171,7 +171,7 @@ function handleCreateLog($pdo, $actor) {
             sendResponse(403, ['code' => 'VEHICLE_SUSPENDED'], "Entry refused: registration of {$vehicle['plate_number']} is suspended.");
         }
         if (!$vehicle && $visitor) {
-            if ($visitor['status'] === 'Revoked') {
+            if ($visitor['status'] === 'Revoked' && empty($visitor['exit_time'])) {
                 sendResponse(403, ['code' => 'REVOKED'], 'Entry refused: this visitor pass was revoked.');
             }
             if ($visitor['valid_date'] > $today) {
@@ -181,7 +181,7 @@ function handleCreateLog($pdo, $actor) {
                 sendResponse(403, ['code' => 'EXPIRED_TEMP'], "EXPIRED TEMPORARY PASS - valid only on {$visitor['valid_date']}.");
             }
             if ($visitor['status'] !== 'Active' || !empty($visitor['exit_time'])) {
-                sendResponse(403, ['code' => 'PASS_USED'], 'This single-day pass has already been used.');
+                sendResponse(403, ['code' => 'PASS_USED'], 'This single-day pass has already been used and was revoked when the visitor exited.');
             }
         }
         if ($isApproval && !$vehicle && !$visitor) {
@@ -280,7 +280,7 @@ function handleCreateLog($pdo, $actor) {
                 $pdo->prepare("UPDATE `visitor_passes` SET `entry_time` = COALESCE(`entry_time`, ?) WHERE `id` = ?")
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             } else {
-                $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = ?, `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?")
+                $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = ?, `status` = 'Revoked' WHERE `id` = ?")
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             }
         }

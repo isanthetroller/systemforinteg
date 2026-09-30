@@ -304,14 +304,14 @@ function handleVisitorExit($pdo, $actor) {
     }
 
     $now = date('Y-m-d H:i:s', spNow());
-    $upd = $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?");
+    $upd = $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Revoked' WHERE `id` = ?");
     $upd->execute([$now, $pass['id']]);
 
     sendResponse(200, [
         'passId' => $pass['pass_code'],
         'plateNumber' => $pass['plate_number'],
         'exitTime' => $now,
-        'status' => $pass['status'] === 'Revoked' ? 'Revoked' : 'Used',
+        'status' => 'Revoked',
     ], 'Visitor checkout confirmed.');
 }
 

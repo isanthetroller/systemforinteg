@@ -45,7 +45,11 @@
     else if (p.status === 'Active' && p.validDate > manilaToday()) { label = 'Upcoming'; cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40'; }
     else if (p.status === 'Revoked' && p.isInside) { label = 'Revoked (inside)'; cls = 'bg-ncst-crimson text-white border-ncst-crimson'; }
     else if (p.status === 'Active') { label = 'Active'; cls = 'bg-ncst-navy/10 text-ncst-navy border-ncst-navy/20'; }
-    else if (p.status === 'Revoked') cls = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30';
+    else if (p.status === 'Revoked') {
+      // A pass is revoked automatically when the visitor exits (single use)
+      if (p.exitTime) label = 'Revoked (checked out)';
+      cls = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30';
+    }
     else if (p.status === 'Expired') cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
     return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${cls}">${esc(label)}</span>`;
   }

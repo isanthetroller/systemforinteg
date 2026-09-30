@@ -189,7 +189,9 @@ if ($visitor && ($result === null || $result === 'MANUAL')) {
         $result = 'REVOKED';
         $reasonDetail = $revokedInside
             ? 'This visitor pass was revoked while the visitor was on campus.'
-            : 'This visitor pass was revoked.';
+            : (!empty($visitor['exit_time'])
+                ? 'This single-day pass has already been used (entry and exit recorded) and was revoked when the visitor exited.'
+                : 'This visitor pass was revoked.');
     } elseif ($visitor['status'] === 'Used' || !empty($visitor['exit_time'])) {
         $result = 'REVOKED';
         $reasonDetail = 'This single-day pass has already been used (entry and exit recorded).';

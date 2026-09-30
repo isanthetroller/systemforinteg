@@ -568,13 +568,14 @@ def test_visitor_passes(admin):
     code, res = call('POST', 'logs.php', {'plate': 'VIS 9001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'visitor_pass_id': vp['id']}, guard)
     check('visitor exit recorded -> 201', code == 201, res)
     _, res = call('GET', f"visitors.php?id={vp['id']}", token=guard)
-    check('pass marked Used with entry and exit times', res['data']['status'] == 'Used' and res['data']['entryTime'] and res['data']['exitTime'], res)
+    check('pass is revoked automatically after exit, with entry and exit times', res['data']['status'] == 'Revoked' and res['data']['entryTime'] and res['data']['exitTime'], res)
     code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Ingress'}, guard)
     check('used pass cannot enter again -> REVOKED', v.get('result') == 'REVOKED', v)
     code, v = verify({'qr_code': vp['qrPayload'], 'gate_type': 'Egress'}, guard)
     check('used pass cannot exit again either', v.get('result') == 'REVOKED', v)
     code, res = call('POST', 'logs.php', {'plate': 'VIS 9001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': vp['id']}, guard)
     check('server refuses re-entry on a used pass -> 403', code == 403 and res['data']['code'] == 'PASS_USED', res)
+    check('  ...and says it was revoked when the visitor exited', 'revoked when the visitor exited' in res['message'], res)
 
     # Visitor who entered and stays past the pass date can still leave
     code, res = call('POST', 'logs.php', {'plate': 'VIS 9002', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': other['id']}, guard)
@@ -714,6 +715,12 @@ def test_visitor_items_and_on_campus(admin):
     row = next((x for x in res['data']['vehicles'] if x['plateNumber'] == 'STU 7002'), None)
     check('registered vehicle listed with driver, gate and guard', row and row['enteredBy'] == 'Sam Student'
           and row['admittedBy'] == 'QA Guard (NCST-SEC-99)' and row['hoursInside'] is not None, row)
+    times = [x['entryTime'] for x in res['data']['vehicles'] if x['entryTime']]
+    check('on-campus vehicles are in arrival order (earliest entry first)', times == sorted(times), times)
+    visitor_times = [x['entryTime'] for x in res['data']['visitors']]
+    check('on-campus visitors are in arrival order too', visitor_times == sorted(visitor_times), visitor_times)
+    check('entries carry their gate log id (for the CCTV clip)', isinstance(row['entryLogId'], int)
+          and all(isinstance(x['entryLogId'], int) for x in res['data']['visitors'] if x['plateNumber'] == 'EVT4040'), res['data'])
 
     code, res = call('POST', 'logs.php', {'plate': 'EVT 4040', 'action': 'Exit Approved', 'gate_type': 'Egress', 'visitor_pass_id': vp['id'], 'items_verified': True}, guard)
     check('exit with items checked -> "Items checked out" logged', code == 201 and 'Items checked out:' in res['data']['notes'], res)
@@ -1075,7 +1082,7 @@ def test_offline_sync(admin):
     check('offline visitor checkout accepted', res['data']['results'][0]['status'] == 'accepted', res)
     code, res = call('GET', f'visitors.php?id={vp["id"]}', token=guard)
     exit_time = res['data']['exitTime']
-    check('  ...the pass records the real exit time and is Used', exit_time == manila_str(ago(minutes=30)) and res['data']['status'] == 'Used', res['data'])
+    check('  ...the pass records the real exit time and is revoked', exit_time == manila_str(ago(minutes=30)) and res['data']['status'] == 'Revoked', res['data'])
     code, res = sync([ev('visitor_exit', ago(minutes=5), {'passId': vp['passCode']}, ref='T-visitorexit-0002')])
     code, res2 = call('GET', f'visitors.php?id={vp["id"]}', token=guard)
     check('  ...a second checkout keeps the first exit time', res2['data']['exitTime'] == exit_time, res2['data'])

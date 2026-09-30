@@ -3,6 +3,8 @@
  *
  * One list of everything inside campus right now: registered vehicles (flag a warning /
  * violation) and visitors on day passes (report an incident, see declared items).
+ * Registered vehicles and visitors share one list in arrival order (first in, first listed),
+ * numbered #1, #2, ... so a guard can monitor them in the order they came in.
  * Refreshes every minute while the page is open; the sidebar badge shows the live count.
  */
 (function () {
@@ -28,6 +30,19 @@
     const h = Math.floor(hours);
     const m = Math.round((hours - h) * 60);
     return m ? `${h} h ${m} min` : `${h} h`;
+  }
+
+  // Arrival order: earliest entry first, no recorded entry last, ties keep server order
+  function arrivalKey(x) { return x.entryTime ? new Date(String(x.entryTime).replace(' ', 'T') + '+08:00').getTime() : Infinity; }
+
+  function arrivalBadge(n) {
+    return `<span class="inline-flex items-center justify-center min-w-[1.75rem] px-1.5 py-0.5 rounded bg-ncst-navy text-white font-mono font-extrabold text-[11px]" title="Arrival order: #${n} of the vehicles inside now">#${n}</span>`;
+  }
+
+  function clipButton(x, plate, action) {
+    return window.SPClip
+      ? SPClip.button({ logId: x.entryLogId, plate, action, loggedAt: x.entryTime, gatePoint: x.entryGate }, 'Entry clip')
+      : '';
   }
 
   function tel(phone) {
@@ -103,6 +118,14 @@
       (view.filter === 'all' || view.filter === 'visitors' || (view.filter === 'attention' && (p.overstayed || p.revoked))) &&
       match(p.plateNumber, p.visitorName, p.personToVisit, p.purposeOfVisit));
 
+    // One list, earliest arrival first. The number is the place in the full arrival order, so it does
+    // not change when a filter or search hides other vehicles.
+    const arrival = [...d.vehicles.map(v => ({ kind: 'vehicle', item: v })), ...d.visitors.map(p => ({ kind: 'visitor', item: p }))]
+      .map((entry, i) => ({ ...entry, i, t: arrivalKey(entry.item) }))
+      .sort((a, b) => (a.t === b.t ? a.i - b.i : a.t - b.t));
+    const rank = new Map(arrival.map((entry, n) => [entry.item, n + 1]));
+    const shown = new Set([...vehicles, ...visitors]);
+
     const list = $('ocList');
     if (!vehicles.length && !visitors.length) {
       list.innerHTML = `<div class="px-4 py-8 text-center">
@@ -112,16 +135,19 @@
     }
 
     list.innerHTML = '';
-    vehicles.forEach(v => list.appendChild(vehicleRow(v)));
-    visitors.forEach(p => list.appendChild(visitorRow(p)));
+    arrival.filter(entry => shown.has(entry.item)).forEach(entry => {
+      const n = rank.get(entry.item);
+      list.appendChild(entry.kind === 'vehicle' ? vehicleRow(entry.item, n) : visitorRow(entry.item, n));
+    });
   }
 
-  function vehicleRow(v) {
+  function vehicleRow(v, n) {
     const row = document.createElement('div');
     const accent = v.isBanned ? 'border-l-ncst-crimson' : v.timeFlag === 'overnight' ? 'border-l-ncst-navy' : v.timeFlag === 'overtime' ? 'border-l-ncst-gold' : v.warningCount > 0 ? 'border-l-ncst-gold' : 'border-l-ncst-green';
     row.className = `px-4 py-3 border-l-4 ${accent} hover:bg-slate-50/60`;
     row.innerHTML = `
       <div class="flex flex-wrap items-center gap-2">
+        ${arrivalBadge(n)}
         <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-sm tracking-wider">${esc(v.plateNumber)}</span>
         <span class="text-xs font-semibold text-slate-700">${esc(v.makeModelColor || v.vehicleType || '')}</span>
         ${timeChip(v.timeFlag)} ${standing(v)}
@@ -137,6 +163,7 @@
       <div class="mt-2 flex flex-wrap gap-1.5">
         <button type="button" data-act="flag" class="px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer">Flag Violation / Warning</button>
         <button type="button" data-act="dossier" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">Open Dossier</button>
+        ${clipButton(v, v.plateNumber, 'Entry Recorded')}
       </div>`;
     row.querySelector('[data-act="flag"]').addEventListener('click', () => {
       if (!window.SPViolations) return;
@@ -154,11 +181,12 @@
     return row;
   }
 
-  function visitorRow(p) {
+  function visitorRow(p, n) {
     const row = document.createElement('div');
     row.className = `px-4 py-3 border-l-4 ${p.overstayed || p.revoked ? 'border-l-ncst-crimson bg-ncst-crimsonLight/30' : 'border-l-ncst-navy/40'} hover:bg-slate-50/60`;
     row.innerHTML = `
       <div class="flex flex-wrap items-center gap-2">
+        ${arrivalBadge(n)}
         <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-sm tracking-wider">${esc(p.plateNumber)}</span>
         <span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">VISITOR</span>
         <span class="text-xs font-semibold text-slate-700">${esc(p.vehicleModel || '')}</span>
@@ -177,6 +205,7 @@
       <div class="mt-2 flex flex-wrap gap-1.5">
         <button type="button" data-act="report" class="px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer">Report Incident</button>
         <button type="button" data-act="pass" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">View Pass</button>
+        ${clipButton(p, p.plateNumber, 'Entry Recorded')}
       </div>`;
     row.querySelector('[data-act="report"]').addEventListener('click', () => openIncident(p));
     row.querySelector('[data-act="pass"]').addEventListener('click', async () => {

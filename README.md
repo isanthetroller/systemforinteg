@@ -47,6 +47,8 @@ visitors get **single-day passes**.
   hh:mm"). An offline QR is not server-signed; the server accepts it by its pass code. If the plate turns out to belong to a
   registered vehicle, no pass is created and a Held incident is opened.
 - **CCTV simulation widget** (`web-app-admin/assets/cctv_simulation.mp4`, shows "NO SIGNAL" until added).
+- **5 second gate clips** (simulation): every entry/exit in the audit log and every vehicle on the On Campus page has a "5s clip" player. Shows "CLIP PLACEHOLDER" until `assets/cctv_clip_placeholder.mp4` (shared) or `assets/cctv_clips/log-<id>.mp4` (per passage) is added; see `web-app-admin/assets/README.txt`.
+- **On Campus Now** lists vehicles and visitors in arrival order (first in, first listed), numbered #1, #2, ...
 - **Staff Accounts** page; one-time temporary passwords; forced change at first sign-in.
 
 **Student portal** (`web-app-student/`)

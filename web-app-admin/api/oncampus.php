@@ -7,6 +7,10 @@
  * Registered vehicles with status "Inside Campus" and visitors who entered on a day pass
  * but have not exited, with how long they have been inside, who drove in, owner contact,
  * strike standing and any items the visitor brought in.
+ *
+ * Both lists come back in arrival order: the vehicle that entered first is first, so the
+ * guard can monitor them in the order they came in. `entryLogId` is the gate log of that entry
+ * (its CCTV clip).
  */
 
 require_once __DIR__ . '/../config/db.php';
@@ -90,6 +94,7 @@ foreach ($candidateVehicles as $v) {
         'department' => $v['department'],
         'ownerPhone' => $v['owner_phone'],
         'entryTime' => $entry ? date('Y-m-d H:i:s', $entry['time']) : null,
+        'entryLogId' => $entry['logId'] ?? null,
         'enteredBy' => $entry['driver'] ?? null,
         'entryGate' => $entry['gatePoint'] ?? null,
         'admittedBy' => $entry['guard'] ?? null,
@@ -109,12 +114,16 @@ foreach ($candidateVehicles as $v) {
         'exitDenied' => $hasExitDenied,
     ];
 }
-usort($vehicles, fn($a, $b) => ($b['hoursInside'] ?? -1) <=> ($a['hoursInside'] ?? -1));
+// Arrival order: earliest entry first; a vehicle with no recorded entry time goes last
+usort($vehicles, fn($a, $b) => [$a['entryTime'] === null, $a['entryTime']] <=> [$b['entryTime'] === null, $b['entryTime']]);
 
 /* ---------- Visitors on day passes ---------- */
 $visitors = [];
-$stmt = $pdo->query("SELECT * FROM `visitor_passes` WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` IN ('Active', 'Revoked') ORDER BY `entry_time` ASC");
+$stmt = $pdo->query("SELECT * FROM `visitor_passes` WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` IN ('Active', 'Revoked') ORDER BY `entry_time` ASC, `id` ASC");
 foreach ($stmt->fetchAll() as $p) {
+    $entryLog = $pdo->prepare("SELECT `id` FROM `gate_logs` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `action` = 'Entry Recorded' AND `logged_at` = ? ORDER BY `id` DESC LIMIT 1");
+    $entryLog->execute([normalizePlate($p['plate_number']), $p['entry_time']]);
+    $entryLogId = $entryLog->fetchColumn();
     // Check active security hold
     $holdStmt = $pdo->prepare("
         SELECT id, case_number, reason, notes, status 
@@ -155,6 +164,7 @@ foreach ($stmt->fetchAll() as $p) {
         'overstayed' => $p['valid_date'] < $today,
         'revoked' => $p['status'] === 'Revoked',
         'entryTime' => $p['entry_time'],
+        'entryLogId' => $entryLogId !== false ? (int)$entryLogId : null,
         'hoursInside' => round(max(0, $now - $entryTs) / 3600, 1),
         'items' => visitorPassItems($pdo, $p['id']),
         'activeHold' => $activeHold ? [

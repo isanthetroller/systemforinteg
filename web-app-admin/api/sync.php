@@ -204,7 +204,7 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
             elseif ($vehicle['registration_status'] === 'Suspended') $flags[] = 'SUSPENDED';
         } elseif ($visitor) {
             $insideNow = !empty($visitor['entry_time']) && empty($visitor['exit_time']);
-            if ($visitor['status'] === 'Revoked') $flags[] = 'REVOKED';
+            if ($visitor['status'] === 'Revoked' && empty($visitor['exit_time'])) $flags[] = 'REVOKED';
             elseif ($visitor['valid_date'] > $eventDay) $flags[] = 'NOT_YET_VALID';
             elseif ($visitor['valid_date'] < $eventDay && !$insideNow) $flags[] = 'EXPIRED_TEMP';
             elseif (!empty($visitor['exit_time']) && $visitor['status'] !== 'Active') $flags[] = 'PASS_USED';
@@ -272,7 +272,7 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
             if ($gateType === 'Ingress') {
                 $pdo->prepare("UPDATE `visitor_passes` SET `entry_time` = COALESCE(`entry_time`, ?) WHERE `id` = ?")->execute([$occurred, $visitor['id']]);
             } else {
-                $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?")
+                $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Revoked' WHERE `id` = ?")
                     ->execute([$occurred, $visitor['id']]);
             }
         }
@@ -354,7 +354,7 @@ function syncVisitorExit($pdo, $ref, $ts, array $p) {
     if (!$pass) return syncResult($ref, 'rejected', 'NOT_FOUND', 'No visitor pass matches this checkout.');
 
     // Checking out twice is harmless: the first exit time is kept
-    $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = CASE WHEN `status` = 'Revoked' THEN 'Revoked' ELSE 'Used' END WHERE `id` = ?")
+    $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Revoked' WHERE `id` = ?")
         ->execute([$occurred, $pass['id']]);
     return syncResult($ref, 'accepted', null, null, ['id' => (int)$pass['id']]);
 }

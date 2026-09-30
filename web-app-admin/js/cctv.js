@@ -7,6 +7,11 @@
  * Plays assets/cctv_simulation.mp4 on a loop (autoplay, muted, inline). If the file is
  * missing or cannot play, an animated "NO SIGNAL" static screen is shown instead.
  * The clock always shows Philippine Standard Time (Asia/Manila).
+ *
+ * Recorded-clip mode (used for the 5 s entry / exit clips, see cctvclip.js):
+ *   SPCctv.mount(el, { camera, lane, clip: { sources: [url, fallbackUrl], seconds: 5, timestamp: '2026-09-30 08:00:00 PST' } })
+ * shows "REC" instead of "LIVE", a frozen event timestamp, and loops the first `seconds` of the first
+ * source that exists. With no file at all the NO SIGNAL screen reads "Clip placeholder".
  */
 (function () {
   const VIDEO_SRC = 'assets/cctv_simulation.mp4';
@@ -75,21 +80,25 @@
     injectStyle();
     const camera = options.camera || 'CAM 01 (MAIN GATE)';
     const lane = options.lane || 'INGRESS MONITOR - LANE 1';
+    const clip = options.clip || null;
+    const sources = clip ? clip.sources.slice() : [VIDEO_SRC];
+    const clipSeconds = clip ? (clip.seconds || 5) : 0;
+    const badge = clip ? 'REC' : 'LIVE';
 
     host.innerHTML = `
-      <div class="sp-cctv" role="img" aria-label="Simulated live CCTV feed, ${camera}">
-        <video muted autoplay loop playsinline preload="auto" aria-hidden="true">
-          <source src="${VIDEO_SRC}" type="video/mp4">
+      <div class="sp-cctv" role="img" aria-label="Simulated ${clip ? 'recorded CCTV clip' : 'live CCTV feed'}, ${camera}">
+        <video muted autoplay ${clip ? '' : 'loop'} playsinline preload="auto" aria-hidden="true">
+          <source src="${sources[0]}" type="video/mp4">
         </video>
         <div class="sp-cctv-nosignal">
-          <span style="font-size:18px;font-weight:800;letter-spacing:0.3em;">NO SIGNAL</span>
-          <span style="font-size:10px;color:#94a3b8;">Awaiting feed: ${VIDEO_SRC}</span>
+          <span style="font-size:18px;font-weight:800;letter-spacing:0.3em;">${clip ? 'CLIP PLACEHOLDER' : 'NO SIGNAL'}</span>
+          <span style="font-size:10px;color:#94a3b8;">${clip ? `${clipSeconds} s recording &middot; awaiting ${sources[sources.length - 1]}` : `Awaiting feed: ${VIDEO_SRC}`}</span>
         </div>
         <div class="sp-cctv-scan"></div>
         <div class="sp-cctv-vignette"></div>
         <div style="position:absolute;top:8px;left:8px;right:8px;display:flex;flex-direction:column;align-items:flex-start;gap:4px;">
           <div class="sp-cctv-hud" style="position:static;display:flex;align-items:center;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-            <span class="inline-block w-2.5 h-2.5 rounded-full bg-ncst-crimson animate-pulse mr-2 flex-shrink-0"></span> LIVE - ${camera}
+            <span class="inline-block w-2.5 h-2.5 rounded-full bg-ncst-crimson ${clip ? '' : 'animate-pulse '}mr-2 flex-shrink-0"></span> ${badge} - ${camera}
           </div>
           <div class="sp-cctv-hud sp-cctv-clock" style="position:static;white-space:nowrap;">${manilaTimestamp()}</div>
         </div>
@@ -104,16 +113,37 @@
     const source = video.querySelector('source');
     const noSignal = () => root.classList.add('no-signal');
 
-    // Missing file -> <source> error; unsupported / blocked playback -> play() rejection
-    source.addEventListener('error', noSignal);
-    video.addEventListener('error', noSignal);
+    // Missing file -> <source> error; unsupported / blocked playback -> play() rejection.
+    // A clip tries its fallback sources (e.g. the shared placeholder video) before giving up.
+    let sourceIndex = 0;
+    const onSourceFailed = () => {
+      if (sourceIndex < sources.length - 1) {
+        sourceIndex += 1;
+        source.src = sources[sourceIndex];
+        video.load();
+        const retry = video.play();
+        if (retry && typeof retry.catch === 'function') retry.catch(() => {});
+      } else {
+        noSignal();
+      }
+    };
+    source.addEventListener('error', onSourceFailed);
+    video.addEventListener('error', onSourceFailed);
     video.addEventListener('playing', () => root.classList.remove('no-signal'));
     const attempt = video.play();
     if (attempt && typeof attempt.catch === 'function') {
       attempt.catch(() => { if (video.readyState < 2) noSignal(); });
     }
 
-    clocks.add(root.querySelector('.sp-cctv-clock'));
+    if (clip) {
+      // A recorded clip is exactly `seconds` long: loop that window and show the event's own time
+      video.addEventListener('timeupdate', () => {
+        if (video.currentTime >= clipSeconds) video.currentTime = 0;
+      });
+      if (clip.timestamp) root.querySelector('.sp-cctv-clock').textContent = clip.timestamp;
+    } else {
+      clocks.add(root.querySelector('.sp-cctv-clock'));
+    }
     const laneEl = root.querySelector('.sp-cctv-lane');
     return {
       setLane(text) { laneEl.textContent = text; }

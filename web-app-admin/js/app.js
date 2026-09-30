@@ -1021,6 +1021,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     }
 
+    // Arrival order, earliest entry first (same order as the On Campus page)
+    const byArrival = (a, b) => {
+      const ta = a.entryTime ? new Date(String(a.entryTime).replace(' ', 'T') + '+08:00').getTime() : Infinity;
+      const tb = b.entryTime ? new Date(String(b.entryTime).replace(' ', 'T') + '+08:00').getTime() : Infinity;
+      return ta === tb ? 0 : ta - tb;
+    };
+    vehiclesInside = [...vehiclesInside].sort(byArrival);
+    visitorsInside = [...visitorsInside].sort(byArrival);
+
     const totalInside = vehiclesInside.length + visitorsInside.length;
 
     if (totalInside === 0) {
@@ -2108,6 +2117,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </td>
         <td class="py-2.5 px-4 text-right font-mono font-medium text-slate-700 whitespace-nowrap">
           ${escapeHtml(log.timestamp.replace('Today, ', ''))}${offlineChip(log)}
+          ${clipButtonFor(log)}
         </td>
         <td class="py-2.5 px-4 text-right whitespace-nowrap">
           <button type="button" class="audit-details-btn px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 hover:text-ncst-navy text-xs font-semibold text-slate-800 shadow-2xs transition-all cursor-pointer">
@@ -2732,7 +2742,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Open Drawer for Audit Event Inspection
+  // 5 s CCTV clip button for an entry / exit row (simulation, see cctvclip.js). Denied attempts have no clip.
+  function clipButtonFor(log) {
+    if (!window.SPClip || !/entry|exit/i.test(log.action || '') || /denied/i.test(log.action || '')) return '';
+    return `<div class="mt-1">${SPClip.button({ logId: log.id, plate: log.plateNumber, action: log.action, loggedAt: log.loggedAt, gatePoint: log.gatePoint })}</div>`;
+  }
+
   function openAuditDrawer(log) {
+    const showClip = Boolean(window.SPClip) && /entry|exit/i.test(log.action || '') && !/denied/i.test(log.action || '');
     const html = `
       <div class="space-y-4 text-xs">
         <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 flex items-center justify-between">
@@ -2778,6 +2795,12 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
 
+        ${showClip ? `<div>
+          <span class="text-slate-500 block text-[11px] font-bold uppercase mb-1">CCTV Clip &middot; ${SPClip.seconds} s at the ${/exit/i.test(log.action || '') ? 'exit' : 'entrance'}</span>
+          <div id="auditClipHost"></div>
+          <p class="mt-1 text-[10px] text-slate-500">Simulated clip. Footage is supplied by the school; a placeholder shows until the video is added.</p>
+        </div>` : ''}
+
         <div>
           <span class="text-slate-500 block text-[11px] font-bold uppercase mb-1">Passage Verification Notes</span>
           <div class="p-3 bg-slate-50 rounded border border-slate-200 text-slate-700 leading-relaxed">
@@ -2798,6 +2821,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </button>
       </div>` : '';
     openDrawer(`Gate Passage Audit — ${log.plateNumber}`, log.timestamp, html, auditFooter);
+    if (showClip) SPClip.mount(document.getElementById('auditClipHost'), { logId: log.id, plate: log.plateNumber, action: log.action, loggedAt: log.loggedAt, gatePoint: log.gatePoint });
     const auditFlagBtn = document.getElementById('auditFlagBtn');
     if (auditFlagBtn) auditFlagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(auditVehicle, { context: `Gate log: ${log.action} at ${log.gatePoint}, ${log.timestamp}` }));
   }

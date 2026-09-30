@@ -421,7 +421,7 @@
     gate.busy = true;
     try {
       const log = await ApiClient.createLog(payload);
-      SP.showToast(`${action.toUpperCase()}: ${log.plateNumber} — ${log.driverName}`);
+      SP.showToast(`${action.toUpperCase()}: ${log.plateNumber} — ${log.driverName}. 5 s CCTV clip attached.`);
       afterDecision();
     } catch (err) {
       renderError(err.message || 'Could not record the decision.');
