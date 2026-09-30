@@ -502,6 +502,8 @@ class ApiService {
     String? vehicleType,
     String? ownerName,
     int? driverId,
+    int? visitorPassId,
+    bool itemsVerified = false,
   }) async {
     final gateType = (action.contains('Exit') || action.contains('Egress')) ? 'Egress' : 'Ingress';
     final clientRef = SyncQueueService.newClientRef();
@@ -513,6 +515,10 @@ class ApiService {
       'driverRelationship': driverRelationship,
       // The server confirms the driver by id: without it a registered vehicle's entry / exit is refused
       if (driverId != null && driverId > 0) 'driver_id': driverId,
+      // An existing visitor day pass: the entry is recorded against it, and the server insists the guard has
+      // checked the items declared on it (items_verified) before it accepts the entry.
+      if (visitorPassId != null && visitorPassId > 0) 'visitor_pass_id': visitorPassId,
+      if (itemsVerified) 'items_verified': true,
       'gatePoint': gatePoint,
       'gate_type': gateType,
       'action': action,

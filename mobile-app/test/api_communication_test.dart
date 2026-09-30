@@ -313,6 +313,38 @@ void main() {
       expect(lastLogBody?['driverName'], equals('Maria Dela Cruz'));
     });
 
+    test('Gate log for an existing visitor pass carries the pass id and the "items checked" flag', () async {
+      lastLogBody = null;
+      final success = await ApiService.postGateLog(
+        plateNumber: 'NDK-4821',
+        driverName: 'Liza Soberano',
+        driverRelationship: 'Visitor (Day Pass)',
+        vehicleType: 'Visitor Vehicle',
+        ownerName: 'Liza Soberano',
+        visitorPassId: 2,
+        itemsVerified: true,
+      );
+
+      expect(success, isTrue);
+      expect(lastLogBody?['visitor_pass_id'], equals(2));
+      expect(lastLogBody?['items_verified'], isTrue);
+      expect(lastLogBody!.containsKey('driver_id'), isFalse);
+    });
+
+    test('Gate log for a registered vehicle sends neither visitor_pass_id nor items_verified', () async {
+      lastLogBody = null;
+      await ApiService.postGateLog(
+        plateNumber: 'NDK-4821',
+        driverName: 'Maria Dela Cruz',
+        vehicleType: 'Sedan',
+        ownerName: 'Prof. Juan Dela Cruz',
+        driverId: 7,
+      );
+
+      expect(lastLogBody!.containsKey('visitor_pass_id'), isFalse);
+      expect(lastLogBody!.containsKey('items_verified'), isFalse);
+    });
+
     test('Gate log without a known driver id sends no driver_id at all', () async {
       lastLogBody = null;
       await ApiService.postGateLog(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/scanner_controller_safe.dart';
 import '../../../data/mock_data.dart';
+import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
@@ -15,6 +16,7 @@ import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
 import '../widgets/camera_viewfinder.dart';
 import '../widgets/scanned_person_card.dart';
+import '../widgets/scanned_visitor_card.dart';
 
 class QrScannerScreen extends StatefulWidget {
   final Function(AuditLogEntry) onDecision;
@@ -44,6 +46,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   bool _isTorchOn = false;
 
   VehicleRecord? _scannedVehicle;
+  // Set when the scanned plate / pass code belongs to a visitor day pass that already exists on the server
+  ScannedVisitorPass? _visitorPass;
+  final Set<int> _checkedVisitorItems = <int>{};
   late String _selectedDriverName;
   late String _selectedRelationship;
   late String _currentPhotoUrl;
@@ -111,6 +116,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     _cameraController?.stopSafely();
     setState(() {
       _scannedVehicle = vehicle;
+      _visitorPass = null;
+      _checkedVisitorItems.clear();
       if (vehicle.authorizedDrivers.isNotEmpty) {
         final first = vehicle.authorizedDrivers.first;
         _selectedDriverName = first.fullName;
@@ -132,6 +139,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   void _resetScanner() {
     setState(() {
       _scannedVehicle = null;
+      _visitorPass = null;
+      _checkedVisitorItems.clear();
     });
     _cameraController?.startSafely();
   }
@@ -193,6 +202,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         final serverCampusStatus = vData?['result']?.toString() ?? remoteVehicle?.campusStatus;
         final isAntiPassback = (vData != null && vData['currentlyInside'] == true) ||
             (remoteVehicle != null && remoteVehicle.isAntiPassback);
+
+        // No registered vehicle, but the server knows a visitor day pass for this plate / pass code: show that pass
+        // (with the server's verdict and its declared items) instead of an "unregistered pass".
+        final visitorPass = remoteVehicle == null ? ScannedVisitorPass.fromVerify(vData) : null;
+        if (visitorPass != null) {
+          _applyVisitorPass(visitorPass);
+          return;
+        }
 
         if (remoteVehicle != null) {
           final enriched = VehicleRecord(
@@ -288,8 +305,145 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     ManualQrDialog.show(context, _processRawQrCode);
   }
 
+  /// Shows an existing visitor day pass the server recognised, in place of the locally guessed "unregistered" record.
+  void _applyVisitorPass(ScannedVisitorPass pass) {
+    setState(() {
+      _visitorPass = pass;
+      _checkedVisitorItems.clear();
+      _selectedDriverName = pass.visitorName;
+      _selectedRelationship = 'Visitor (Day Pass)';
+      _currentPhotoUrl = '';
+      // Use the pass's real plate and details from here on (blocking, logging), not the text that was typed / scanned
+      _scannedVehicle = _scannedVehicle?.copyWith(
+        plateNumber: pass.plateNumber,
+        makeModelColor: pass.vehicleModel.isNotEmpty ? pass.vehicleModel : null,
+        ownerName: pass.visitorName,
+        ownerRole: 'Visitor (Day Pass)',
+        ownerIdNumber: pass.passCode,
+        category: CampusUserCategory.visitor,
+        isAntiPassback: pass.currentlyInside,
+      );
+    });
+  }
+
+  void _toggleVisitorItem(int index) {
+    setState(() {
+      if (!_checkedVisitorItems.remove(index)) _checkedVisitorItems.add(index);
+    });
+  }
+
+  bool get _visitorItemsAllChecked {
+    final pass = _visitorPass;
+    return pass == null || !pass.hasItems || _checkedVisitorItems.length >= pass.items.length;
+  }
+
+  /// Records the entry of a visitor whose day pass already exists on the server.
+  void _admitVisitor() {
+    final pass = _visitorPass;
+    if (pass == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (!pass.canAdmit) {
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.crimson,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'ENTRY NOT ALLOWED: ${pass.reason.isNotEmpty ? pass.reason : pass.verdictTitle}',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+        ),
+      );
+      return;
+    }
+    if (!_visitorItemsAllChecked) {
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.goldDark,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Check every declared item first (${_checkedVisitorItems.length}/${pass.items.length} ticked).',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+        ),
+      );
+      return;
+    }
+
+    widget.onDecision(
+      AuditLogEntry(
+        id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+        plateNumber: pass.plateNumber,
+        vehicleType: 'Visitor Vehicle',
+        ownerName: pass.visitorName,
+        driverName: pass.visitorName,
+        driverRelationship: 'Visitor (Day Pass)',
+        timeIn: DateTime.now(),
+        status: GateStatus.inside,
+      ),
+    );
+
+    ApiService.postGateLog(
+      plateNumber: pass.plateNumber,
+      driverName: pass.visitorName,
+      driverRelationship: 'Visitor (Day Pass)',
+      gatePoint: 'Gate 1 (Main Ingress)',
+      action: 'Entry Recorded',
+      status: 'Inside Campus',
+      // The server adds the "Items checked in" line itself when items_verified is set
+      notes: 'Visitor pass ${pass.passCode}',
+      vehicleType: 'Visitor Vehicle',
+      ownerName: pass.visitorName,
+      visitorPassId: pass.id,
+      itemsVerified: pass.hasItems,
+    ).then((recorded) {
+      if (recorded) return;
+      _showEntryNotRecorded(messenger, pass.plateNumber);
+    });
+
+    messenger.showSnackBar(
+      SnackBar(
+        backgroundColor: NcstColors.green,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+        content: Text(
+          'ENTRY CLEARED: ${pass.plateNumber} (${pass.visitorName}, visitor pass ${pass.passCode})',
+          style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+        ),
+      ),
+    );
+
+    if (mounted) {
+      if (!widget.isEmbedded && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      } else if (widget.onReturnToDashboard != null) {
+        widget.onReturnToDashboard!();
+      }
+    }
+  }
+
+  /// The server refused an entry the guard just cleared: it exists nowhere but on this phone's screen.
+  void _showEntryNotRecorded(ScaffoldMessengerState messenger, String plate) {
+    messenger.showSnackBar(
+      SnackBar(
+        backgroundColor: NcstColors.crimson,
+        duration: const Duration(seconds: 10),
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          'NOT RECORDED: $plate was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
+          'Do not admit this vehicle; contact the security office.',
+          style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+        ),
+      ),
+    );
+  }
+
   void _handleCleared() async {
     if (_scannedVehicle == null) return;
+    if (_visitorPass != null) {
+      _admitVisitor();
+      return;
+    }
     final vehicle = _scannedVehicle!;
 
     // 1. Guard against Banned / Suspended / Denied vehicles
@@ -421,18 +575,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       driverId: _scannedVehicle!.driverIdForName(_selectedDriverName),
     ).then((recorded) {
       if (recorded) return;
-      messenger.showSnackBar(
-        SnackBar(
-          backgroundColor: NcstColors.crimson,
-          duration: const Duration(seconds: 10),
-          behavior: SnackBarBehavior.floating,
-          content: Text(
-            'NOT RECORDED: $plateForLog was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
-            'Do not admit this vehicle; contact the security office.',
-            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
-          ),
-        ),
-      );
+      _showEntryNotRecorded(messenger, plateForLog);
     });
 
     messenger.showSnackBar(
@@ -599,7 +742,40 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     );
   }
 
+  Widget _buildVisitorBody(ScannedVisitorPass pass) {
+    final allChecked = _visitorItemsAllChecked;
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: ScannedVisitorCard(
+                  pass: pass,
+                  checkedItems: _checkedVisitorItems,
+                  onToggleItem: _toggleVisitorItem,
+                ),
+              ),
+            ),
+          ),
+        ),
+        BottomDecisionBar(
+          onBlock: _showBlockDialog,
+          onCleared: _handleCleared,
+          isClearedEnabled: pass.canAdmit && allChecked,
+          clearedLabel: 'CLEARED (VISITOR)',
+          disabledLabel: !pass.canAdmit
+              ? 'ENTRY NOT ALLOWED'
+              : 'TICK ITEMS (${_checkedVisitorItems.length}/${pass.items.length})',
+        ),
+      ],
+    );
+  }
+
   Widget _buildScannedVerificationBody() {
+    if (_visitorPass != null) return _buildVisitorBody(_visitorPass!);
     final vehicle = _scannedVehicle!;
     final isDesktop = MediaQuery.of(context).size.width >= 880;
 
