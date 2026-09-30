@@ -14,3 +14,11 @@ DirectoryIndex index.html index.php
 
 # Disable directory listing for security
 Options -Indexes
+
+# The host tells browsers to keep pages and scripts for 30 days, so a new deploy would not show up.
+# Ask browsers to check for a newer copy every time (a quick 304 when nothing changed).
+<IfModule mod_headers.c>
+    <FilesMatch "\.(html|js|css)$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+</IfModule>
