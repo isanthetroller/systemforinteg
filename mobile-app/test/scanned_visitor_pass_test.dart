@@ -146,6 +146,52 @@ void main() {
       expect(taps, isEmpty);
     });
 
+    testWidgets('at the exit gate a visitor who is inside gets no "already inside" warning and checks items OUT', (tester) async {
+      final pass = ScannedVisitorPass.fromVerify(verifyResponse(currentlyInside: true))!;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ScannedVisitorCard(pass: pass, checkedItems: const {}, onToggleItem: (_) {}, isExit: true),
+          ),
+        ),
+      ));
+
+      expect(find.text('ALREADY RECORDED INSIDE'), findsNothing);
+      expect(find.text('NO ENTRY RECORDED'), findsNothing);
+      expect(find.textContaining('before recording the exit'), findsOneWidget);
+    });
+
+    testWidgets('at the exit gate a visitor with no recorded entry is flagged', (tester) async {
+      final pass = ScannedVisitorPass.fromVerify(verifyResponse())!; // currentlyInside: false
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ScannedVisitorCard(pass: pass, checkedItems: const {}, onToggleItem: (_) {}, isExit: true),
+          ),
+        ),
+      ));
+
+      expect(find.text('NO ENTRY RECORDED'), findsOneWidget);
+    });
+
+    testWidgets('a refused pass at the exit gate says the EXIT is not allowed', (tester) async {
+      final pass = ScannedVisitorPass.fromVerify(verifyResponse(
+        result: 'REVOKED',
+        accepted: false,
+        reason: 'This single-day pass has already been used (entry and exit recorded).',
+      ))!;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ScannedVisitorCard(pass: pass, checkedItems: const {}, onToggleItem: (_) {}, isExit: true),
+          ),
+        ),
+      ));
+
+      expect(find.text('EXIT NOT ALLOWED'), findsOneWidget);
+      expect(find.text('ENTRY NOT ALLOWED'), findsNothing);
+    });
+
     testWidgets('warns when the visitor is already recorded inside', (tester) async {
       final pass = ScannedVisitorPass.fromVerify(verifyResponse(currentlyInside: true))!;
       await pump(tester, pass, {}, []);

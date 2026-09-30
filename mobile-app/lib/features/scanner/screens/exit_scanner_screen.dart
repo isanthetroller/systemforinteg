@@ -4,12 +4,14 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/scanner_controller_safe.dart';
 import '../../../core/widgets/driver_photo_view.dart';
 import '../../../core/widgets/plate_badge.dart';
+import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../services/api_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../dialogs/manual_qr_dialog.dart';
+import '../widgets/scanned_visitor_card.dart';
 
 enum ExitVerificationStatus {
   valid,       // Cleared for exit
@@ -45,6 +47,11 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   ExitVerificationStatus? _resultStatus;
   VehicleRecord? _verifiedVehicleRecord;
   String? _statusReason;
+  // A visitor day pass leaving campus: Guard 2 checks visitors out as well as registered vehicles
+  ScannedVisitorPass? _exitVisitor;
+  final Set<int> _exitCheckedItems = <int>{};
+  // Which authorized driver is leaving (registered vehicles); defaults to the first one listed
+  String? _exitDriverName;
 
   // Camera Stabilization State
   String? _candidateExitQr;
@@ -100,6 +107,9 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _resultStatus = null;
       _verifiedVehicleRecord = null;
       _statusReason = null;
+      _exitVisitor = null;
+      _exitCheckedItems.clear();
+      _exitDriverName = null;
       _isVerifying = false;
       _candidateExitQr = null;
       _candidateExitStartTime = null;
@@ -223,11 +233,29 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       return;
     }
 
-    // Invalid / Unrecognized QR State (Guard 2 is for registered vehicles only)
+    // Not a registered vehicle: ask the server whether it is a visitor day pass that is leaving campus
+    final egress = await ApiService.verifyPassWithServer(qrCode: clean, plate: clean, gateType: 'Egress');
+    final visitor = ScannedVisitorPass.fromVerify(egress);
+    if (!mounted) return;
+    if (visitor != null) {
+      setState(() {
+        _isVerifying = false;
+        _exitVisitor = visitor;
+        _exitCheckedItems.clear();
+        _verifiedVehicleRecord = null;
+        _resultStatus = visitor.accepted
+            ? ExitVerificationStatus.valid
+            : (visitor.reason.contains('already been used') ? ExitVerificationStatus.alreadyUsed : ExitVerificationStatus.blocked);
+        _statusReason = visitor.reason.isNotEmpty ? visitor.reason : null;
+      });
+      return;
+    }
+
+    // Invalid / Unrecognized QR State
     setState(() {
       _isVerifying = false;
       _resultStatus = ExitVerificationStatus.invalid;
-      _statusReason = 'Pass code "$clean" is not a registered vehicle QR pass. Guard 2 scans registered campus vehicles only.';
+      _statusReason = 'Pass code "$clean" is not a registered vehicle or a visitor day pass.';
     });
   }
 
@@ -264,19 +292,96 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     setState(() {
       _isVerifying = false;
       _verifiedVehicleRecord = vehicle;
+      _exitVisitor = null;
+      _exitDriverName = vehicle.authorizedDrivers.isNotEmpty ? vehicle.authorizedDrivers.first.fullName : null;
       _resultStatus = status;
       _statusReason = reason;
     });
   }
 
+  /// The driver the guard picked (or the first listed one) for a registered vehicle that is leaving.
+  AuthorizedDriver? _selectedExitDriver(VehicleRecord v) {
+    if (v.authorizedDrivers.isEmpty) return null;
+    final wanted = _exitDriverName?.trim().toLowerCase();
+    for (final d in v.authorizedDrivers) {
+      if (d.fullName.trim().toLowerCase() == wanted) return d;
+    }
+    return v.authorizedDrivers.first;
+  }
+
+  bool get _exitItemsAllChecked {
+    final pass = _exitVisitor;
+    return pass == null || !pass.hasItems || _exitCheckedItems.length >= pass.items.length;
+  }
+
+  /// Records the exit of a visitor whose day pass exists on the server; the declared items are checked out.
+  Future<void> _confirmVisitorExit() async {
+    final pass = _exitVisitor;
+    if (pass == null || !pass.canAdmit || !_exitItemsAllChecked) return;
+
+    final recorded = await ApiService.postGateLog(
+      plateNumber: pass.plateNumber,
+      driverName: pass.visitorName,
+      driverRelationship: 'Visitor (Day Pass)',
+      gatePoint: widget.currentGuard.assignedGate,
+      action: 'Exit Approved',
+      status: 'Outside',
+      guardName: widget.currentGuard.fullName,
+      // The server adds the "Items checked out" line itself when items_verified is set
+      notes: 'Visitor pass ${pass.passCode}',
+      vehicleType: 'Visitor Vehicle',
+      ownerName: pass.visitorName,
+      visitorPassId: pass.id,
+      itemsVerified: pass.hasItems,
+    );
+    if (!recorded) {
+      _showNotRecorded(pass.plateNumber);
+    } else {
+      widget.onDecision?.call(
+        AuditLogEntry(
+          id: 'LOG-${DateTime.now().millisecondsSinceEpoch}',
+          plateNumber: pass.plateNumber,
+          vehicleType: 'Visitor Vehicle',
+          ownerName: pass.visitorName,
+          driverName: pass.visitorName,
+          driverRelationship: 'Visitor (Day Pass)',
+          timeIn: DateTime.now(),
+          action: 'Exit Approved',
+          status: GateStatus.exited,
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    if (recorded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Visitor exit confirmed: ${pass.plateNumber} (${pass.visitorName}).'),
+          backgroundColor: NcstColors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+    if (widget.onReturnToDashboard != null) {
+      widget.onReturnToDashboard!();
+    } else {
+      _resetScanner();
+    }
+  }
+
   Future<void> _handleConfirmExit() async {
+    if (_exitVisitor != null) {
+      await _confirmVisitorExit();
+      return;
+    }
     final now = DateTime.now();
     AuditLogEntry? exitEntry;
 
     if (_verifiedVehicleRecord != null) {
       final v = _verifiedVehicleRecord!;
-      final driver = v.authorizedDrivers.isNotEmpty ? v.authorizedDrivers.first.fullName : v.ownerName;
-      final rel = v.authorizedDrivers.isNotEmpty ? v.authorizedDrivers.first.relationship : 'Self (Owner)';
+      final chosen = _selectedExitDriver(v);
+      final driver = chosen?.fullName ?? v.ownerName;
+      final rel = chosen?.relationship ?? 'Self (Owner)';
 
       exitEntry = AuditLogEntry(
         id: 'LOG-${now.millisecondsSinceEpoch}',
@@ -378,7 +483,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
                   // Verification Result Dossier
                   if (_resultStatus != null) ...[
-                    _buildVerificationResultCard(isCompact),
+                    _exitVisitor != null ? _buildVisitorExitSection() : _buildVerificationResultCard(isCompact),
                     const SizedBox(height: 16),
                   ],
 
@@ -664,6 +769,46 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     );
   }
 
+  Widget _buildVisitorExitSection() {
+    final pass = _exitVisitor!;
+    final canConfirm = pass.canAdmit && _exitItemsAllChecked;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ScannedVisitorCard(
+          pass: pass,
+          checkedItems: _exitCheckedItems,
+          isExit: true,
+          onToggleItem: (i) => setState(() {
+            if (!_exitCheckedItems.remove(i)) _exitCheckedItems.add(i);
+          }),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _resetScanner,
+                child: const Text('SCAN ANOTHER'),
+              ),
+            ),
+            if (pass.canAdmit) ...[
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton.icon(
+                  onPressed: canConfirm ? _handleConfirmExit : null,
+                  icon: const Icon(Icons.check, size: 18),
+                  label: Text(canConfirm ? 'CONFIRM EXIT' : 'TICK ITEMS (${_exitCheckedItems.length}/${pass.items.length})'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildVerificationResultCard(bool isCompact) {
     Color bannerColor;
     Color textColor;
@@ -836,7 +981,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   }
 
   Widget _buildVehicleDossier(VehicleRecord v) {
-    final driver = v.authorizedDrivers.isNotEmpty ? v.authorizedDrivers.first : null;
+    final driver = _selectedExitDriver(v);
 
     return Column(
       children: [
@@ -881,6 +1026,33 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
             ),
           ],
         ),
+        if (v.authorizedDrivers.length > 1) ...[
+          const SizedBox(height: 10),
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'WHO IS DRIVING OUT?',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: NcstColors.navy, letterSpacing: 0.8),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (var i = 0; i < v.authorizedDrivers.length; i++)
+                  ChoiceChip(
+                    key: ValueKey('exit-driver-$i'),
+                    label: Text(v.authorizedDrivers[i].fullName),
+                    selected: v.authorizedDrivers[i].fullName == driver?.fullName,
+                    onSelected: (_) => setState(() => _exitDriverName = v.authorizedDrivers[i].fullName),
+                  ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
 
         Container(

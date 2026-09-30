@@ -11,11 +11,16 @@ class ScannedVisitorCard extends StatelessWidget {
   final Set<int> checkedItems;
   final ValueChanged<int> onToggleItem;
 
+  /// True at the exit gate: the visitor is expected to be inside (no "already inside" warning), and the guard is
+  /// warned when no entry was recorded. Items are checked out instead of in.
+  final bool isExit;
+
   const ScannedVisitorCard({
     super.key,
     required this.pass,
     required this.checkedItems,
     required this.onToggleItem,
+    this.isExit = false,
   });
 
   @override
@@ -56,7 +61,7 @@ class ScannedVisitorCard extends StatelessWidget {
               const SizedBox(height: 12),
               _banner(
                 icon: Icons.error_outline,
-                title: 'ENTRY NOT ALLOWED',
+                title: isExit ? 'EXIT NOT ALLOWED' : 'ENTRY NOT ALLOWED',
                 lines: [pass.reason],
                 background: const Color(0xFFFEE2E2),
                 border: NcstColors.crimson,
@@ -72,12 +77,22 @@ class ScannedVisitorCard extends StatelessWidget {
                 border: NcstColors.goldDark,
               ),
             ],
-            if (pass.currentlyInside) ...[
+            if (!isExit && pass.currentlyInside) ...[
               const SizedBox(height: 12),
               _banner(
                 icon: Icons.history_toggle_off,
                 title: 'ALREADY RECORDED INSIDE',
                 lines: const ['This visitor already entered today and has not been recorded leaving.'],
+                background: const Color(0xFFFEF3C7),
+                border: NcstColors.goldDark,
+              ),
+            ],
+            if (isExit && ok && !pass.currentlyInside) ...[
+              const SizedBox(height: 12),
+              _banner(
+                icon: Icons.history_toggle_off,
+                title: 'NO ENTRY RECORDED',
+                lines: const ['This visitor is not recorded as inside campus. Check how they got in.'],
                 background: const Color(0xFFFEF3C7),
                 border: NcstColors.goldDark,
               ),
@@ -119,7 +134,9 @@ class ScannedVisitorCard extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                ok ? 'Look at each item and tick it before recording the entry.' : 'Items are not checked because entry is not allowed.',
+                ok
+                    ? 'Look at each item and tick it before recording the ${isExit ? 'exit' : 'entry'}.'
+                    : 'Items are not checked because ${isExit ? 'exit' : 'entry'} is not allowed.',
                 style: const TextStyle(fontSize: 11.5, color: NcstColors.slate600),
               ),
               for (var i = 0; i < pass.items.length; i++)
