@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../../core/utils/scanner_controller_safe.dart';
 import '../../../core/widgets/driver_photo_view.dart';
 import '../../../core/widgets/plate_badge.dart';
 import '../../../models/user_model.dart';
@@ -85,14 +86,10 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      try {
-        _cameraController?.stop();
-      } catch (_) {}
+      _cameraController?.stopSafely();
     } else if (state == AppLifecycleState.resumed) {
       if (!_isVerifying && _resultStatus == null) {
-        try {
-          _cameraController?.start();
-        } catch (_) {}
+        _cameraController?.startSafely();
       }
     }
   }
@@ -112,9 +109,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _isExitLocked = false;
       _exitStatusPrompt = 'Align QR code inside frame';
     });
-    try {
-      _cameraController?.start();
-    } catch (_) {}
+    _cameraController?.startSafely();
   }
 
   void _handleExitBarcodeDetect(String raw) {
@@ -204,9 +199,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _isVerifying = true;
     });
 
-    try {
-      _cameraController?.stop();
-    } catch (_) {}
+    _cameraController?.stopSafely();
 
     final clean = raw.trim();
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../../core/utils/scanner_controller_safe.dart';
 import '../../../data/mock_data.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
@@ -97,23 +98,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      try {
-        _cameraController?.stop();
-      } catch (_) {}
+      _cameraController?.stopSafely();
     } else if (state == AppLifecycleState.resumed) {
       if (_scannedVehicle == null) {
-        try {
-          _cameraController?.start();
-        } catch (_) {}
+        _cameraController?.startSafely();
       }
     }
   }
 
   void _onQrDetected(VehicleRecord vehicle) {
     // Cut camera native buffer and memory usage immediately upon successful scan
-    try {
-      _cameraController?.stop();
-    } catch (_) {}
+    _cameraController?.stopSafely();
     setState(() {
       _scannedVehicle = vehicle;
       if (vehicle.authorizedDrivers.isNotEmpty) {
@@ -138,9 +133,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     setState(() {
       _scannedVehicle = null;
     });
-    try {
-      _cameraController?.start();
-    } catch (_) {}
+    _cameraController?.startSafely();
   }
 
   void _processRawQrCode(String raw) async {
