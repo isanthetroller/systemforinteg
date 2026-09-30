@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20260930b">
 </head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
@@ -126,12 +126,12 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="js/config.js"></script>
-  <script src="js/aes.js"></script>
-  <script src="js/qrcode.min.js"></script>
-  <script src="js/api.js"></script>
+  <script src="js/config.js?v=20260930b"></script>
+  <script src="js/aes.js?v=20260930b"></script>
+  <script src="js/qrcode.min.js?v=20260930b"></script>
+  <script src="js/api.js?v=20260930b"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js"><\/script>');</script>
+  <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930b"><\/script>');</script>
   <script>
     window.SPAlert = window.SPAlert || {
       confirm: async ({ title, text }) => window.confirm((title ? title + '\n\n' : '') + (text || '')),
@@ -146,7 +146,7 @@
       tempPassword: async ({ title, password }) => window.prompt(title + '\nCopy this temporary password:', password)
     };
   </script>
-  <script src="js/alerts.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/alerts.js?v=20260930b"></script>
+  <script src="js/app.js?v=20260930b"></script>
 </body>
 </html>
