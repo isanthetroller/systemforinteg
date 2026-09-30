@@ -59,7 +59,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   Timer? _ocrStabilizationTicker;
   bool _isOcrStabilizing = false;
   bool _isOcrLocked = false;
-  bool _ocrSteadyMode = true;
+  final bool _ocrSteadyMode = true;
   String _ocrStatusPrompt = 'Align card/plate inside guide frame';
   final Duration _ocrStabilizationDuration = const Duration(milliseconds: 1000);
 
@@ -1012,54 +1012,111 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: NcstColors.slate100,
-      resizeToAvoidBottomInset: true, // Essential for Messenger-style bottom dock
+      backgroundColor: NcstColors.slate50,
       appBar: AppBar(
-        title: const Text('Visitor Gate Clearance'),
         backgroundColor: NcstColors.navy,
         foregroundColor: NcstColors.white,
+        elevation: 0,
         automaticallyImplyLeading: false,
+        titleSpacing: 16,
+        title: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: NcstColors.gold.withValues(alpha: 0.5), width: 1.5),
+              ),
+              child: const Center(
+                child: Icon(Icons.shield_outlined, color: NcstColors.gold, size: 18),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'VISITOR REGISTRATION',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.8,
+                      color: Colors.white,
+                    ),
+                  ),
+                  Text(
+                    'SecurePark Clearance • Gate ${widget.currentGuard.assignedGate}',
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: NcstColors.goldLight,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: 'Toggle Flashlight',
             icon: Icon(
               _isTorchOn ? Icons.flash_on : Icons.flash_off,
-              color: _isTorchOn ? NcstColors.gold : NcstColors.white,
+              color: _isTorchOn ? NcstColors.gold : Colors.white70,
+              size: 20,
             ),
             onPressed: _toggleTorch,
           ),
           IconButton(
             tooltip: 'Switch Camera',
-            icon: const Icon(Icons.flip_camera_ios, color: NcstColors.white, size: 20),
+            icon: const Icon(Icons.flip_camera_ios, color: Colors.white70, size: 19),
             onPressed: _switchCamera,
           ),
           if (widget.onReturnToDashboard != null)
-            TextButton.icon(
-              onPressed: widget.onReturnToDashboard,
-              icon: const Icon(Icons.close, color: NcstColors.white, size: 18),
-              label: const Text('Cancel', style: TextStyle(color: NcstColors.white)),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton(
+                onPressed: widget.onReturnToDashboard,
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+              ),
             ),
         ],
       ),
       body: SafeArea(
         child: Column(
           children: [
-            // Scrollable Content: Live Camera Viewfinder + Access Clearance Checklist
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
                 child: Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 500),
+                    constraints: const BoxConstraints(maxWidth: 480),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // 1. Live Camera Viewfinder Card with Mode Switcher
+                        // 1. Header Overview Banner
+                        _buildHeaderSummaryBanner(),
+                        const SizedBox(height: 14),
+
+                        // 2. Camera Viewfinder Card with Mode Switcher
                         _buildCameraSection(),
                         const SizedBox(height: 14),
 
-                        // 2. Real-Time Access Clearance Checklist
-                        _buildChecklistCard(),
+                        // 3. Structured Form Sections (Visitor, Vehicle, Purpose)
+                        _buildFormSections(),
                       ],
                     ),
                   ),
@@ -1067,8 +1124,8 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
               ),
             ),
 
-            // 3. Messenger-Style Bottom Purpose of Visit Input Bar
-            _buildMessengerPurposeDock(),
+            // 4. Primary Registration & Pass Issuance Bottom Dock
+            _buildBottomActionDock(),
           ],
         ),
       ),
@@ -1076,36 +1133,111 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   }
 
   // -------------------------------------------------------------
-  // WIDGET: CAMERA SECTION & MODE TABS
+  // HEADER OVERVIEW BANNER
+  // -------------------------------------------------------------
+  Widget _buildHeaderSummaryBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: NcstColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: NcstColors.slate200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: NcstColors.navy.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.badge_outlined, color: NcstColors.navy, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Temporary Day Pass Issuance',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: NcstColors.slate900,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Scan ID and license plate to generate an encrypted QR gate pass.',
+                  style: TextStyle(fontSize: 11, color: NcstColors.slate500, height: 1.25),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _isChecklistReady ? NcstColors.greenLight : NcstColors.slate100,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: _isChecklistReady ? NcstColors.green.withValues(alpha: 0.4) : NcstColors.slate200,
+              ),
+            ),
+            child: Text(
+              _isChecklistReady ? 'READY' : 'REQUIRED',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: _isChecklistReady ? NcstColors.green : NcstColors.slate500,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // CAMERA SCANNER SECTION
   // -------------------------------------------------------------
   Widget _buildCameraSection() {
     return Container(
       decoration: BoxDecoration(
         color: NcstColors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: NcstColors.slate200),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Mode Tabs Selector
+          // Segmented Scan Mode Selector
           Row(
             children: [
-              _buildModeTab('1. ID Scan', CameraScanMode.idCard, Icons.badge_outlined),
-              const SizedBox(width: 6),
-              _buildModeTab('2. Plate Scan', CameraScanMode.licensePlate, Icons.directions_car_outlined),
-              const SizedBox(width: 6),
-              _buildModeTab('3. Photo', CameraScanMode.vehiclePhoto, Icons.camera_alt_outlined),
+              _buildModeTab('ID Card', CameraScanMode.idCard, Icons.badge_outlined),
+              const SizedBox(width: 8),
+              _buildModeTab('License Plate', CameraScanMode.licensePlate, Icons.directions_car_outlined),
+              const SizedBox(width: 8),
+              _buildModeTab('Photo', CameraScanMode.vehiclePhoto, Icons.camera_alt_outlined),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
 
           // Live Camera Stream Container
           Container(
@@ -1113,28 +1245,19 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             width: double.infinity,
             decoration: BoxDecoration(
               color: const Color(0xFF0F172A),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: _isOcrLocked
                     ? NcstColors.green
                     : (_isOcrStabilizing
                         ? const Color(0xFF38BDF8)
                         : (_activeScanMode == CameraScanMode.idCard
-                            ? (_visitorName.isNotEmpty ? NcstColors.green : NcstColors.gold)
+                            ? (_visitorName.isNotEmpty ? NcstColors.green : NcstColors.navy)
                             : (_activeScanMode == CameraScanMode.licensePlate
-                                ? (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.green)
-                                : (_hasCapturedPhoto ? NcstColors.green : NcstColors.navyLight)))),
-                width: _isOcrStabilizing || _isOcrLocked ? 2.5 : 2,
+                                ? (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.navy)
+                                : (_hasCapturedPhoto ? NcstColors.green : NcstColors.navy)))),
+                width: 2,
               ),
-              boxShadow: _isOcrStabilizing
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF38BDF8).withValues(alpha: 0.35),
-                        blurRadius: 10,
-                        spreadRadius: 2,
-                      ),
-                    ]
-                  : null,
             ),
             clipBehavior: Clip.antiAlias,
             child: Stack(
@@ -1157,9 +1280,8 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                 else
                   _buildCameraFallback(),
 
-                // Mode-Specific Overlays (Kept completely empty inside just like Scan/Entry)
+                // Mode Overlays
                 if (_activeScanMode == CameraScanMode.idCard) ...[
-                  // ID Card Frame Overlay
                   Container(
                     width: 220,
                     height: 135,
@@ -1168,13 +1290,12 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                         color: _isOcrLocked
                             ? NcstColors.green
                             : (_isOcrStabilizing ? const Color(0xFF38BDF8) : (_visitorName.isNotEmpty ? NcstColors.green : NcstColors.gold)),
-                        width: _isOcrStabilizing ? 2.5 : 2,
+                        width: 2,
                       ),
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
                 ] else if (_activeScanMode == CameraScanMode.licensePlate) ...[
-                  // License Plate Frame Overlay
                   Container(
                     width: 240,
                     height: 75,
@@ -1182,46 +1303,48 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                       border: Border.all(
                         color: _isOcrLocked
                             ? NcstColors.green
-                            : (_isOcrStabilizing ? const Color(0xFF38BDF8) : (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.green)),
-                        width: _isOcrStabilizing ? 2.5 : 2,
+                            : (_isOcrStabilizing ? const Color(0xFF38BDF8) : (_licensePlate.isNotEmpty ? NcstColors.green : NcstColors.gold)),
+                        width: 2,
                       ),
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
                 ] else ...[
-                  // Vehicle Photo Snapshot Overlay
                   if (_hasCapturedPhoto) ...[
                     Container(
-                      color: const Color(0xFF1E293B).withValues(alpha: 0.9),
+                      color: const Color(0xFF0F172A).withValues(alpha: 0.88),
                       child: Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.check_circle_rounded, color: NcstColors.green, size: 48),
+                            const Icon(Icons.check_circle_rounded, color: NcstColors.green, size: 44),
                             const SizedBox(height: 6),
                             const Text(
                               'SECURITY SNAPSHOT RECORDED',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13),
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12),
                             ),
                             if (_licensePlate.isNotEmpty)
-                              Text('PLATE: $_licensePlate', style: const TextStyle(color: NcstColors.gold, fontWeight: FontWeight.w800, fontSize: 12)),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text('PLATE: $_licensePlate', style: const TextStyle(color: NcstColors.gold, fontWeight: FontWeight.w800, fontSize: 12)),
+                              ),
                           ],
                         ),
                       ),
                     ),
                   ] else ...[
                     Container(
-                      width: 180,
+                      width: 190,
                       height: 120,
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.white60, width: 1.5),
+                        border: Border.all(color: Colors.white70, width: 1.5),
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ),
                   ],
                 ],
 
-                // Top HUD Banner with camera stabilization prompt & progress
+                // Top HUD Banner
                 if (_activeScanMode != CameraScanMode.vehiclePhoto)
                   Positioned(
                     top: 8,
@@ -1236,12 +1359,6 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                                 ? const Color(0xFF0369A1).withValues(alpha: 0.92)
                                 : Colors.black.withValues(alpha: 0.65)),
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: _isOcrLocked
-                              ? Colors.white
-                              : (_isOcrStabilizing ? const Color(0xFF38BDF8) : Colors.white24),
-                          width: 1,
-                        ),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -1271,7 +1388,6 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                                 color: Colors.white,
                                 fontSize: 10.5,
                                 fontWeight: FontWeight.w700,
-                                letterSpacing: 0.3,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -1281,10 +1397,10 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                     ),
                   ),
 
-                // Linear Progress Bar at bottom of camera viewfinder
+                // Bottom Progress Bar
                 if (_isOcrStabilizing)
                   Positioned(
-                    bottom: 10,
+                    bottom: 8,
                     left: 20,
                     right: 20,
                     child: ClipRRect(
@@ -1298,7 +1414,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                     ),
                   ),
 
-                // Loading Animation Overlay when scan is processing
+                // Processing Indicator
                 if (_isScanningProcessing)
                   Container(
                     color: Colors.black.withValues(alpha: 0.82),
@@ -1307,29 +1423,20 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           const SizedBox(
-                            width: 36,
-                            height: 36,
+                            width: 32,
+                            height: 32,
                             child: CircularProgressIndicator(
-                              strokeWidth: 3,
+                              strokeWidth: 2.5,
                               valueColor: AlwaysStoppedAnimation<Color>(NcstColors.gold),
                             ),
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 10),
                           Text(
-                            _scanningProcessingMessage ?? 'Processing Scanned ID...',
+                            _scanningProcessingMessage ?? 'Processing Frame...',
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 12.5,
+                              fontSize: 12,
                               fontWeight: FontWeight.w700,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'Extracting information...',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 10.5,
                             ),
                           ),
                         ],
@@ -1339,88 +1446,22 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
               ],
             ),
           ),
-          const SizedBox(height: 8),
-
-          // Camera Stabilization Mode Toggle Pill
-          if (_activeScanMode != CameraScanMode.vehiclePhoto) ...[
-            InkWell(
-              onTap: () {
-                setState(() {
-                  _ocrSteadyMode = !_ocrSteadyMode;
-                  _ocrStabilizationTicker?.cancel();
-                  _isOcrStabilizing = false;
-                  _isOcrLocked = false;
-                  _candidateOcrText = null;
-                  _candidateOcrStartTime = null;
-                  _lastSeenOcrTime = null;
-                  _ocrStabilizationProgress = 0.0;
-                  _ocrStatusPrompt = _ocrSteadyMode
-                      ? 'Align card/plate inside guide frame'
-                      : 'Instant OCR active';
-                });
-              },
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _ocrSteadyMode ? const Color(0xFFE0F2FE) : NcstColors.slate200,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _ocrSteadyMode ? const Color(0xFF0284C7) : NcstColors.slate300,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _ocrSteadyMode ? Icons.motion_photos_paused_rounded : Icons.flash_on_rounded,
-                      size: 13,
-                      color: _ocrSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate600,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      _ocrSteadyMode ? 'Camera Steady Hold: ON (~1.0s)' : 'Instant Detection: ON',
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: _ocrSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-          ],
-
-          // Helper label below viewfinder (matching Scan/Entry)
-          Text(
-            _activeScanMode == CameraScanMode.idCard
-                ? 'Align visitor ID within frame to automatically extract name via OCR'
-                : (_activeScanMode == CameraScanMode.licensePlate
-                    ? 'Align vehicle license plate to automatically extract plate number'
-                    : 'Snap front photo of vehicle for security audit record'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: NcstColors.slate600,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
           const SizedBox(height: 10),
 
-          // Camera Action Row
+          // Camera Action Controls
           if (_activeScanMode == CameraScanMode.vehiclePhoto) ...[
             SizedBox(
-              width: double.infinity,
+              height: 44,
               child: ElevatedButton.icon(
                 onPressed: _hasCapturedPhoto ? _retakePhoto : _snapVehiclePhoto,
                 icon: Icon(_hasCapturedPhoto ? Icons.refresh : Icons.camera_alt, size: 18),
-                label: Text(_hasCapturedPhoto ? 'RETAKE VEHICLE PHOTO' : 'SNAP VEHICLE PHOTO'),
+                label: Text(
+                  _hasCapturedPhoto ? 'RETAKE VEHICLE PHOTO' : 'SNAP VEHICLE PHOTO',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.4),
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _hasCapturedPhoto ? NcstColors.slate700 : NcstColors.navy,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 11),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
               ),
@@ -1429,28 +1470,32 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isScanningProcessing ? null : () => _runOcrOnCurrentFrame(isUserTriggered: true),
-                    icon: const Icon(Icons.document_scanner_rounded, size: 18),
-                    label: const Text('SNAP & SCAN ID (OCR)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: NcstColors.navy,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  child: SizedBox(
+                    height: 44,
+                    child: ElevatedButton.icon(
+                      onPressed: _isScanningProcessing ? null : () => _runOcrOnCurrentFrame(isUserTriggered: true),
+                      icon: const Icon(Icons.document_scanner_rounded, size: 18),
+                      label: const Text('SNAP & SCAN ID', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11.5)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: NcstColors.navy,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: _showManualNameDialog,
-                  icon: const Icon(Icons.edit_note, size: 18),
-                  label: const Text('MANUAL NAME', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: NcstColors.navy,
-                    side: const BorderSide(color: NcstColors.navy),
-                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                SizedBox(
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    onPressed: _showManualNameDialog,
+                    icon: const Icon(Icons.edit_note, size: 18),
+                    label: const Text('MANUAL', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11.5)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: NcstColors.navy,
+                      side: const BorderSide(color: NcstColors.navy),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
                   ),
                 ),
               ],
@@ -1459,28 +1504,32 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isScanningProcessing ? null : () => _runOcrOnCurrentFrame(isUserTriggered: true),
-                    icon: const Icon(Icons.crop_free_rounded, size: 18),
-                    label: const Text('SNAP & SCAN PLATE (OCR)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: NcstColors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  child: SizedBox(
+                    height: 44,
+                    child: ElevatedButton.icon(
+                      onPressed: _isScanningProcessing ? null : () => _runOcrOnCurrentFrame(isUserTriggered: true),
+                      icon: const Icon(Icons.crop_free_rounded, size: 18),
+                      label: const Text('SNAP & SCAN PLATE', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11.5)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: NcstColors.navy,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: _showManualPlateDialog,
-                  icon: const Icon(Icons.edit_note, size: 18),
-                  label: const Text('MANUAL PLATE', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: NcstColors.navy,
-                    side: const BorderSide(color: NcstColors.navy),
-                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                SizedBox(
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    onPressed: _showManualPlateDialog,
+                    icon: const Icon(Icons.edit_note, size: 18),
+                    label: const Text('MANUAL', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11.5)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: NcstColors.navy,
+                      side: const BorderSide(color: NcstColors.navy),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
                   ),
                 ),
               ],
@@ -1510,7 +1559,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
         },
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 7),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
             color: isSelected ? NcstColors.navy : NcstColors.slate100,
             borderRadius: BorderRadius.circular(8),
@@ -1518,13 +1567,13 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 14, color: isSelected ? Colors.white : NcstColors.slate700),
-              const SizedBox(width: 4),
+              Icon(icon, size: 15, color: isSelected ? Colors.white : NcstColors.slate700),
+              const SizedBox(width: 5),
               Flexible(
                 child: Text(
                   label,
                   style: TextStyle(
-                    fontSize: 10.5,
+                    fontSize: 11,
                     fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
                     color: isSelected ? Colors.white : NcstColors.slate700,
                   ),
@@ -1541,274 +1590,321 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   Widget _buildCameraFallback() {
     return Container(
       color: const Color(0xFF0F172A),
+      child: const Center(
+        child: Icon(Icons.videocam_off_outlined, color: Colors.white38, size: 36),
+      ),
     );
   }
 
   // -------------------------------------------------------------
-  // WIDGET: ACCESS CLEARANCE CHECKLIST
+  // STRUCTURED FORM SECTIONS (Grouped by Category)
   // -------------------------------------------------------------
-  Widget _buildChecklistCard() {
-    final hasName = _visitorName.trim().isNotEmpty;
-    final hasPlate = _licensePlate.trim().isNotEmpty;
-    final hasPhoto = _hasCapturedPhoto;
-    final hasPurpose = _purposeController.text.trim().isNotEmpty;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: NcstColors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: NcstColors.slate200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: const [
-                  Icon(Icons.checklist_rtl_rounded, color: NcstColors.navy, size: 20),
-                  SizedBox(width: 8),
-                  Text(
-                    'Entry Clearance Checklist',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: NcstColors.navy,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: _isChecklistReady ? NcstColors.greenLight : NcstColors.slate100,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  _isChecklistReady ? 'READY TO ISSUE' : 'PENDING SCAN',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: _isChecklistReady ? NcstColors.green : NcstColors.slate600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Divider(height: 1),
-          const SizedBox(height: 10),
-
-          // Active Pass Expiration Policy Rule Banner
-          Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: NcstColors.navy.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: NcstColors.navy.withValues(alpha: 0.15)),
+  Widget _buildFormSections() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // GROUP 1: VISITOR INFORMATION
+        _buildSectionCard(
+          title: 'VISITOR INFORMATION',
+          icon: Icons.person_outline_rounded,
+          children: [
+            _buildFieldTile(
+              label: 'Full Name',
+              value: _visitorName.isNotEmpty ? _visitorName : 'Awaiting ID scan or manual input',
+              isSet: _visitorName.isNotEmpty,
+              isRequired: true,
+              onTap: () {
+                setState(() => _activeScanMode = CameraScanMode.idCard);
+                _showManualNameDialog();
+              },
             ),
-            child: Row(
-              children: [
-                const Icon(Icons.timer_outlined, size: 16, color: NcstColors.navy),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    'Pass Validity: valid all day today, until midnight (the pass works with no connection and syncs later)',
-                    style: const TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      color: NcstColors.navy,
-                    ),
-                  ),
-                ),
-              ],
+            const SizedBox(height: 8),
+            _buildFieldTile(
+              label: 'Contact Number',
+              value: _contactNumber.isNotEmpty ? _contactNumber : 'Optional (e.g. 0917-123-4567)',
+              isSet: _contactNumber.isNotEmpty,
+              isRequired: false,
+              onTap: _showManualNameDialog,
             ),
-          ),
+          ],
+        ),
+        const SizedBox(height: 14),
 
-          // Item 1: Visitor Identity
-          _buildChecklistItem(
-            title: '1. Visitor Full Name',
-            subtitle: hasName ? _visitorName : 'Awaiting ID scan via camera',
-            isComplete: hasName,
-            onTap: () {
-              setState(() => _activeScanMode = CameraScanMode.idCard);
-            },
-            onAction: _showManualNameDialog,
-            actionIcon: Icons.edit,
-          ),
-          const SizedBox(height: 10),
+        // GROUP 2: VEHICLE DETAILS
+        _buildSectionCard(
+          title: 'VEHICLE DETAILS',
+          icon: Icons.directions_car_outlined,
+          children: [
+            _buildFieldTile(
+              label: 'License Plate',
+              value: _licensePlate.isNotEmpty ? _licensePlate : 'Awaiting plate scan or manual input',
+              isSet: _licensePlate.isNotEmpty,
+              isRequired: true,
+              customWidget: _licensePlate.isNotEmpty ? PlateBadge(plateNumber: _licensePlate) : null,
+              onTap: () {
+                setState(() => _activeScanMode = CameraScanMode.licensePlate);
+                _showManualPlateDialog();
+              },
+            ),
+            const SizedBox(height: 10),
 
-          // Item 2: License Plate
-          _buildChecklistItem(
-            title: '2. Vehicle License Plate',
-            subtitle: hasPlate ? _licensePlate : 'Awaiting vehicle plate scan',
-            isComplete: hasPlate,
-            customWidget: hasPlate ? PlateBadge(plateNumber: _licensePlate) : null,
-            onTap: () {
-              setState(() => _activeScanMode = CameraScanMode.licensePlate);
-            },
-            onAction: _showManualPlateDialog,
-            actionIcon: Icons.edit,
-          ),
-          const SizedBox(height: 10),
-
-          // Vehicle Classification Selector
-          Padding(
-            padding: const EdgeInsets.only(left: 36, bottom: 6),
-            child: Wrap(
+            // Vehicle Type Selector Chips
+            const Text(
+              'Vehicle Classification',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: NcstColors.slate600),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
               spacing: 6,
-              runSpacing: 4,
+              runSpacing: 6,
               children: _vehicleTypes.map((type) {
                 final isSelected = _selectedVehicleType == type;
                 return ChoiceChip(
-                  label: Text(type, style: TextStyle(fontSize: 10, fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500)),
+                  label: Text(
+                    type,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+                    ),
+                  ),
                   selected: isSelected,
                   selectedColor: NcstColors.navy,
                   labelStyle: TextStyle(color: isSelected ? Colors.white : NcstColors.slate700),
                   backgroundColor: NcstColors.slate100,
                   side: BorderSide(color: isSelected ? NcstColors.navy : NcstColors.slate200),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
                   onSelected: (val) {
                     if (val) setState(() => _selectedVehicleType = type);
                   },
                 );
               }).toList(),
             ),
-          ),
-          const SizedBox(height: 4),
+            const SizedBox(height: 10),
 
-          // Item 3: Vehicle Security Photo
-          _buildChecklistItem(
-            title: '3. Front Vehicle Security Photo',
-            subtitle: hasPhoto
-                ? 'Captured at ${_photoCaptureTime != null ? "${_photoCaptureTime!.hour.toString().padLeft(2, '0')}:${_photoCaptureTime!.minute.toString().padLeft(2, '0')}" : "Gate"}'
-                : 'Snap front photo with plate & driver visible',
-            isComplete: hasPhoto,
-            onTap: () {
-              setState(() => _activeScanMode = CameraScanMode.vehiclePhoto);
-            },
-            onAction: () {
-              setState(() => _activeScanMode = CameraScanMode.vehiclePhoto);
-            },
-            actionIcon: hasPhoto ? Icons.refresh : Icons.camera_alt,
-          ),
-          const SizedBox(height: 10),
+            // Front Vehicle Photo Status
+            _buildFieldTile(
+              label: 'Front Security Photo',
+              value: _hasCapturedPhoto
+                  ? 'Snapshot captured at ${_photoCaptureTime != null ? "${_photoCaptureTime!.hour.toString().padLeft(2, '0')}:${_photoCaptureTime!.minute.toString().padLeft(2, '0')}" : "Gate"}'
+                  : 'Tap to take front vehicle photo with camera',
+              isSet: _hasCapturedPhoto,
+              isRequired: false,
+              onTap: () {
+                setState(() => _activeScanMode = CameraScanMode.vehiclePhoto);
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
 
-          // Item 4: Purpose of Visit
-          _buildChecklistItem(
-            title: '4. Purpose of Visit',
-            subtitle: hasPurpose
-                ? _purposeController.text.trim()
-                : 'Type visit purpose in the bottom messenger dock',
-            isComplete: hasPurpose,
-            onTap: () => _purposeFocusNode.requestFocus(),
-            onAction: () => _purposeFocusNode.requestFocus(),
-            actionIcon: Icons.chat_bubble_outline,
-          ),
-          const SizedBox(height: 10),
+        // GROUP 3: VISIT PURPOSE & CLEARANCE
+        _buildSectionCard(
+          title: 'PURPOSE & CLEARANCE',
+          icon: Icons.assignment_outlined,
+          children: [
+            const Text(
+              'Quick Destination / Department',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: NcstColors.slate600),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: _purposeQuickTags.map((tag) {
+                final isSelected = _purposeController.text.contains(tag);
+                return ActionChip(
+                  label: Text(
+                    tag,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                      color: isSelected ? Colors.white : NcstColors.navy,
+                    ),
+                  ),
+                  backgroundColor: isSelected ? NcstColors.navy : NcstColors.slate100,
+                  side: BorderSide(
+                    color: isSelected ? NcstColors.navy : NcstColors.slate200,
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  onPressed: () {
+                    setState(() {
+                      _purposeController.text = tag;
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 10),
 
-          // Item 5: Items Brought In (Optional checklist)
-          _buildChecklistItem(
-            title: '5. Items Brought In (Optional)',
-            subtitle: _declaredItems.isNotEmpty
-                ? '${_declaredItems.length} item(s) declared: ${_declaredItems.map((e) => "${e['name']} (x${e['quantity']})").join(", ")}'
-                : 'No items declared (tap + to declare chairs, tables, equipment)',
-            isComplete: _declaredItems.isNotEmpty,
-            onTap: _showAddItemDialog,
-            onAction: _showAddItemDialog,
-            actionIcon: Icons.add_circle_outline,
+            // Purpose Text Input
+            TextField(
+              controller: _purposeController,
+              focusNode: _purposeFocusNode,
+              textCapitalization: TextCapitalization.sentences,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                labelText: 'Purpose of Visit & Host Destination *',
+                hintText: 'e.g. Registrar document inquiry',
+                hintStyle: const TextStyle(fontSize: 12, color: NcstColors.slate400),
+                prefixIcon: const Icon(Icons.chat_bubble_outline_rounded, color: NcstColors.navy, size: 18),
+                filled: true,
+                fillColor: NcstColors.slate50,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: NcstColors.slate200),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: NcstColors.slate200),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: NcstColors.navy, width: 1.5),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Declared Items Brought In
+            _buildFieldTile(
+              label: 'Declared Items Brought In',
+              value: _declaredItems.isNotEmpty
+                  ? '${_declaredItems.length} item(s) declared: ${_declaredItems.map((e) => "${e['name']} x${e['quantity']}").join(', ')}'
+                  : 'No equipment or chairs declared (tap to declare items)',
+              isSet: _declaredItems.isNotEmpty,
+              isRequired: false,
+              onTap: _showAddItemDialog,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionCard({
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: NcstColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: NcstColors.slate200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
           ),
+        ],
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: NcstColors.navy),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.6,
+                  color: NcstColors.navy,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+          ...children,
         ],
       ),
     );
   }
 
-  Widget _buildChecklistItem({
-    required String title,
-    required String subtitle,
-    required bool isComplete,
+  Widget _buildFieldTile({
+    required String label,
+    required String value,
+    required bool isSet,
+    required bool isRequired,
     required VoidCallback onTap,
-    required VoidCallback onAction,
-    required IconData actionIcon,
     Widget? customWidget,
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isComplete ? NcstColors.greenLight.withValues(alpha: 0.35) : NcstColors.slate50,
-          borderRadius: BorderRadius.circular(10),
+          color: isSet ? NcstColors.greenLight.withValues(alpha: 0.25) : NcstColors.slate50,
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isComplete ? NcstColors.green.withValues(alpha: 0.4) : NcstColors.slate200,
+            color: isSet ? NcstColors.green.withValues(alpha: 0.35) : NcstColors.slate200,
           ),
         ),
         child: Row(
           children: [
-            // Checkmark Circle Icon
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: isComplete ? NcstColors.green : NcstColors.slate200,
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: isComplete
-                    ? const Icon(Icons.check, size: 16, color: Colors.white)
-                    : const Icon(Icons.circle_outlined, size: 14, color: NcstColors.slate400),
-              ),
-            ),
-            const SizedBox(width: 10),
-
-            // Text Info
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: isComplete ? NcstColors.navy : NcstColors.slate800,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: NcstColors.slate700,
+                        ),
+                      ),
+                      if (isRequired)
+                        const Text(
+                          ' *',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: NcstColors.crimson,
+                          ),
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 3),
                   if (customWidget != null) ...[
                     customWidget,
                   ] else ...[
                     Text(
-                      subtitle,
+                      value,
                       style: TextStyle(
-                        fontSize: 11,
-                        color: isComplete ? NcstColors.slate900 : NcstColors.slate500,
-                        fontWeight: isComplete ? FontWeight.w700 : FontWeight.w500,
+                        fontSize: 13,
+                        fontWeight: isSet ? FontWeight.w700 : FontWeight.w400,
+                        color: isSet ? NcstColors.slate900 : NcstColors.slate400,
                       ),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ],
               ),
             ),
-
-            // Action Icon
-            IconButton(
-              icon: Icon(actionIcon, size: 18, color: NcstColors.navy),
-              onPressed: onAction,
-              visualDensity: VisualDensity.compact,
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: NcstColors.slate100,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(
+                isSet ? Icons.edit_outlined : Icons.chevron_right_rounded,
+                size: 16,
+                color: NcstColors.slate600,
+              ),
             ),
           ],
         ),
@@ -1817,10 +1913,14 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   }
 
   // -------------------------------------------------------------
-  // WIDGET: MESSENGER-STYLE PURPOSE OF VISIT BOTTOM DOCK
+  // PRIMARY ACTION BOTTOM DOCK
   // -------------------------------------------------------------
-  Widget _buildMessengerPurposeDock() {
-    final hasPurpose = _purposeController.text.trim().isNotEmpty;
+  Widget _buildBottomActionDock() {
+    final ready = _isChecklistReady;
+    final List<String> missing = [];
+    if (_visitorName.trim().isEmpty) missing.add('Visitor Name');
+    if (_licensePlate.trim().isEmpty) missing.add('License Plate');
+    if (_purposeController.text.trim().isEmpty) missing.add('Purpose');
 
     return Container(
       decoration: BoxDecoration(
@@ -1828,135 +1928,65 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
         border: const Border(top: BorderSide(color: NcstColors.slate200, width: 1)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
+            color: Colors.black.withValues(alpha: 0.06),
             offset: const Offset(0, -3),
-            blurRadius: 10,
+            blurRadius: 8,
           ),
         ],
       ),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Messenger Quick-Reply Purpose Chips
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
-            child: Row(
-              children: _purposeQuickTags.map((tag) {
-                final isSelected = _purposeController.text.contains(tag);
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ActionChip(
-                    label: Text(
-                      tag,
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-                        color: isSelected ? Colors.white : NcstColors.navy,
-                      ),
-                    ),
-                    backgroundColor: isSelected ? NcstColors.navy : NcstColors.slate100,
-                    side: BorderSide(
-                      color: isSelected ? NcstColors.navy : NcstColors.slate200,
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () {
-                      setState(() {
-                        _purposeController.text = tag;
-                      });
-                    },
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-
-          // Messenger Bottom Input Box
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: NcstColors.slate100,
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
-                        color: _purposeFocusNode.hasFocus ? NcstColors.navy : NcstColors.slate200,
-                        width: 1.5,
-                      ),
-                    ),
-                    child: TextField(
-                      controller: _purposeController,
-                      focusNode: _purposeFocusNode,
-                      textCapitalization: TextCapitalization.sentences,
-                      onChanged: (_) => setState(() {}),
-                      onSubmitted: (_) {
-                        _purposeFocusNode.unfocus();
-                        setState(() {});
-                      },
-                      decoration: const InputDecoration(
-                        hintText: 'Type purpose of visit & host destination...',
-                        hintStyle: TextStyle(fontSize: 12, color: NcstColors.slate500),
-                        prefixIcon: Icon(Icons.chat_bubble_outline_rounded, color: NcstColors.navy, size: 18),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                        isDense: true,
-                      ),
+          if (!ready)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.info_outline, size: 14, color: NcstColors.slate500),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Missing: ${missing.join(', ')}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: NcstColors.slate500,
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-
-                // Messenger Send / Confirm Button
-                Material(
-                  color: hasPurpose ? NcstColors.navy : NcstColors.slate400,
-                  shape: const CircleBorder(),
-                  child: InkWell(
-                    onTap: hasPurpose
-                        ? () {
-                            _purposeFocusNode.unfocus();
-                            setState(() {});
-                          }
-                        : null,
-                    customBorder: const CircleBorder(),
-                    child: const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: Icon(Icons.send_rounded, color: Colors.white, size: 18),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Generate Pass Primary Button (Activates as checklist completes)
-          if (_isChecklistReady)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-              child: ElevatedButton.icon(
-                onPressed: _isGeneratingPass ? null : _completeRegistration,
-                icon: const Icon(Icons.qr_code_2, size: 20),
-                label: _isGeneratingPass
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Text(
-                        'GENERATE TEMPORARY QR PASS',
-                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-                      ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: NcstColors.green,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 13),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
+                ],
               ),
             ),
+          SizedBox(
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: (_isGeneratingPass || !ready) ? null : _completeRegistration,
+              icon: _isGeneratingPass
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.qr_code_rounded, size: 20),
+              label: Text(
+                ready ? 'ISSUE VISITOR QR PASS' : 'COMPLETE REQUIRED FIELDS',
+                style: const TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: ready ? NcstColors.navy : NcstColors.slate300,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: NcstColors.slate200,
+                disabledForegroundColor: NcstColors.slate400,
+                elevation: ready ? 1 : 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
         ],
       ),
     );
