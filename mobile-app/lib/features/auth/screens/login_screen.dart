@@ -118,7 +118,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _showServerConfigDialog() {
     String selectedUrl = _currentServerUrl;
-    final customController = TextEditingController(text: selectedUrl);
     bool testing = false;
     bool? testSuccess;
     String testFeedback = '';
@@ -128,7 +127,10 @@ class _LoginScreenState extends State<LoginScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return StatefulBuilder(
+        // The sheet's text controller is owned (and disposed) by this wrapper, after the sheet has left the screen
+        return _OwnedTextController(
+          initialText: selectedUrl,
+          builder: (customController) => StatefulBuilder(
           builder: (modalContext, setModalState) {
             return Container(
               padding: EdgeInsets.only(
@@ -339,6 +341,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             );
           },
+          ),
         );
       },
     );
@@ -935,4 +938,30 @@ class _ForcePasswordChangeDialogState extends State<_ForcePasswordChangeDialog> 
       ],
     );
   }
+}
+
+/// Owns a [TextEditingController] for exactly as long as its subtree exists. A controller created by the code that
+/// opens a dialog or bottom sheet cannot be disposed safely when the route is popped, because the fields are still
+/// on screen while the exit animation runs; disposing it here happens only once the subtree is really gone.
+class _OwnedTextController extends StatefulWidget {
+  final String initialText;
+  final Widget Function(TextEditingController controller) builder;
+
+  const _OwnedTextController({required this.initialText, required this.builder});
+
+  @override
+  State<_OwnedTextController> createState() => _OwnedTextControllerState();
+}
+
+class _OwnedTextControllerState extends State<_OwnedTextController> {
+  late final TextEditingController _controller = TextEditingController(text: widget.initialText);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(_controller);
 }
