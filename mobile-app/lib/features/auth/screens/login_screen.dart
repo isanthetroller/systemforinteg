@@ -108,96 +108,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
   /// Asks the guard to replace the temporary password. Returns true once the server has accepted the new one.
   Future<bool> _forcePasswordChange(String currentPassword) async {
-    final newController = TextEditingController();
-    final confirmController = TextEditingController();
-    String? error;
-    bool saving = false;
-
     final changed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Choose a new password'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'You signed in with a temporary password. Set your own to continue '
-                '(at least 8 characters, with letters and numbers).',
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: newController,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'New password'),
-              ),
-              TextField(
-                controller: confirmController,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'Confirm new password'),
-              ),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Text(
-                    error!,
-                    style: const TextStyle(color: NcstColors.crimson, fontWeight: FontWeight.w600),
-                  ),
-                ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
-              child: const Text('CANCEL'),
-            ),
-            ElevatedButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      final password = newController.text;
-                      if (password.length < 8 ||
-                          !RegExp(r'[A-Za-z]').hasMatch(password) ||
-                          !RegExp(r'\d').hasMatch(password)) {
-                        setDialogState(() => error = 'Use at least 8 characters, with letters and numbers.');
-                        return;
-                      }
-                      if (password == currentPassword) {
-                        setDialogState(() => error = 'The new password must be different from the temporary one.');
-                        return;
-                      }
-                      if (password != confirmController.text) {
-                        setDialogState(() => error = 'The two passwords do not match.');
-                        return;
-                      }
-                      setDialogState(() {
-                        saving = true;
-                        error = null;
-                      });
-                      final problem = await ApiService.changePassword(
-                        currentPassword: currentPassword,
-                        newPassword: password,
-                      );
-                      if (problem == null) {
-                        if (ctx.mounted) Navigator.of(ctx).pop(true);
-                      } else {
-                        setDialogState(() {
-                          saving = false;
-                          error = problem;
-                        });
-                      }
-                    },
-              child: Text(saving ? 'SAVING...' : 'CHANGE PASSWORD'),
-            ),
-          ],
-        ),
-      ),
+      builder: (_) => _ForcePasswordChangeDialog(currentPassword: currentPassword),
     );
-
-    newController.dispose();
-    confirmController.dispose();
     return changed == true;
   }
 
@@ -912,6 +827,110 @@ class _LoginScreenState extends State<LoginScreen> {
             color: NcstColors.slate400,
           ),
           textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+}
+
+/// The "choose a new password" dialog. It owns its text controllers: they must live until the dialog's exit
+/// animation has finished (the fields are still on screen while it closes), so they are disposed by this widget's
+/// own State and never by the code that opened the dialog.
+class _ForcePasswordChangeDialog extends StatefulWidget {
+  final String currentPassword;
+  const _ForcePasswordChangeDialog({required this.currentPassword});
+
+  @override
+  State<_ForcePasswordChangeDialog> createState() => _ForcePasswordChangeDialogState();
+}
+
+class _ForcePasswordChangeDialogState extends State<_ForcePasswordChangeDialog> {
+  final _newController = TextEditingController();
+  final _confirmController = TextEditingController();
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _newController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final password = _newController.text;
+    if (password.length < 8 || !RegExp(r'[A-Za-z]').hasMatch(password) || !RegExp(r'\d').hasMatch(password)) {
+      setState(() => _error = 'Use at least 8 characters, with letters and numbers.');
+      return;
+    }
+    if (password == widget.currentPassword) {
+      setState(() => _error = 'The new password must be different from the temporary one.');
+      return;
+    }
+    if (password != _confirmController.text) {
+      setState(() => _error = 'The two passwords do not match.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final problem = await ApiService.changePassword(
+      currentPassword: widget.currentPassword,
+      newPassword: password,
+    );
+    if (!mounted) return;
+    if (problem == null) {
+      Navigator.of(context).pop(true);
+    } else {
+      setState(() {
+        _saving = false;
+        _error = problem;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Choose a new password'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'You signed in with a temporary password. Set your own to continue '
+            '(at least 8 characters, with letters and numbers).',
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _newController,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'New password'),
+          ),
+          TextField(
+            controller: _confirmController,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Confirm new password'),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: NcstColors.crimson, fontWeight: FontWeight.w600),
+              ),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('CANCEL'),
+        ),
+        ElevatedButton(
+          onPressed: _saving ? null : _submit,
+          child: Text(_saving ? 'SAVING...' : 'CHANGE PASSWORD'),
         ),
       ],
     );
