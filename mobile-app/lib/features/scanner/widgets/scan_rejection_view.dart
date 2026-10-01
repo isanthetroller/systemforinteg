@@ -396,12 +396,15 @@ class ScanRejectionView extends StatelessWidget {
                           child: ElevatedButton.icon(
                             onPressed: onInspect,
                             icon: const Icon(Icons.shield_outlined, size: 20),
-                            label: Text(
-                              inspectButtonLabel ?? 'INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT',
-                              style: const TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.4,
+                            label: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                inspectButtonLabel ?? 'INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT',
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.4,
+                                ),
                               ),
                             ),
                             style: ElevatedButton.styleFrom(

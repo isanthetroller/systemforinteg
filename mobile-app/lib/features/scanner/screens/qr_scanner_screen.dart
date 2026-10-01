@@ -1168,16 +1168,19 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
               child: OutlinedButton.icon(
                 onPressed: _resetScanner,
                 icon: const Icon(Icons.check_circle_outline_rounded, color: NcstColors.slate700, size: 18),
-                label: const Text(
-                  'FINISH INSPECTION',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 11,
-                    color: NcstColors.slate800,
+                label: const FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    'FINISH INSPECTION',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      color: NcstColors.slate800,
+                    ),
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
                   side: const BorderSide(color: NcstColors.slate300, width: 1.5),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
@@ -1189,18 +1192,21 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
               child: ElevatedButton.icon(
                 onPressed: _showBlockDialog,
                 icon: const Icon(Icons.report_problem_rounded, color: NcstColors.white, size: 18),
-                label: const Text(
-                  'REPORT INCIDENT / HOLD',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 11,
-                    color: NcstColors.white,
+                label: const FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    'REPORT INCIDENT / HOLD',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      color: NcstColors.white,
+                    ),
                   ),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: NcstColors.crimson,
                   foregroundColor: NcstColors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   elevation: 0,
                 ),
