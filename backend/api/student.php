@@ -11,6 +11,7 @@
  * GET /api/student.php?action=activity     Gate audit log (entries, exits, denied attempts) of own vehicles
  *                                          optional: &plate=<own plate>  &limit=<1-200, default 50>
  * GET /api/student.php?action=alerts       Own vehicles flagged at the gate: active (Held) cases and recent closed ones
+ *                                          (each carries logId = the refused passage, for its gate clip)
  *
  * Sign in:          POST /api/auth.php?action=login&realm=student  { username: <student ID>, password }
  * Change password:  POST /api/auth.php?action=change_password
@@ -51,9 +52,26 @@ function ownerSafeNote($notes) {
     return $n === '' ? null : $n;
 }
 
-function incidentView($r) {
+/**
+ * The refused passage (Entry / Exit Denied) that raised an incident, so the owner can play its gate clip.
+ * Matched by plate within 10 minutes of the case being opened; null when the case was not raised at a gate.
+ */
+function incidentLogId($pdo, $r) {
+    $at = strtotime($r['reported_at']);
+    if (!$at) return null;
+    $stmt = $pdo->prepare("SELECT `id` FROM `gate_logs`
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?
+          AND `action` IN ('Entry Denied', 'Exit Denied') AND `logged_at` BETWEEN ? AND ?
+        ORDER BY `id` DESC LIMIT 1");
+    $stmt->execute([normalizePlate($r['plate_number']), date('Y-m-d H:i:s', $at - 600), date('Y-m-d H:i:s', $at + 600)]);
+    $id = $stmt->fetchColumn();
+    return $id === false ? null : (int)$id;
+}
+
+function incidentView($pdo, $r) {
     return [
         'id' => (int)$r['id'],
+        'logId' => incidentLogId($pdo, $r),
         'caseNumber' => $r['case_number'],
         'plateNumber' => $r['plate_number'],
         'reason' => $r['reason'],
@@ -183,13 +201,13 @@ switch ($action) {
         $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE `status` = 'Held' AND " . plateInClause($plates) . "
             ORDER BY `reported_at` DESC, `id` DESC LIMIT 20");
         $stmt->execute($plates);
-        $active = array_map('incidentView', $stmt->fetchAll());
+        $active = array_map(fn($r) => incidentView($pdo, $r), $stmt->fetchAll());
 
         $since = date('Y-m-d H:i:s', strtotime('-30 days'));
         $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE `status` <> 'Held' AND `reported_at` >= ? AND " . plateInClause($plates) . "
             ORDER BY `reported_at` DESC, `id` DESC LIMIT 10");
         $stmt->execute(array_merge([$since], $plates));
-        sendResponse(200, ['active' => $active, 'recent' => array_map('incidentView', $stmt->fetchAll())]);
+        sendResponse(200, ['active' => $active, 'recent' => array_map(fn($r) => incidentView($pdo, $r), $stmt->fetchAll())]);
 
     default:
         sendResponse(400, null, 'Unknown action. Use me, vehicles, violations, activity or alerts.');

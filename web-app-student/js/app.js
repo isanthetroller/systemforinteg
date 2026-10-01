@@ -6,6 +6,8 @@
  *   Activity  gate audit log (entries, exits, refused passages) and flag history of the owner's vehicles
  *   Strikes   3-strike meter, warnings / violations history
  *   Account   profile, change password, how the pass works
+ * Every entry, exit and refused passage has a 5 second gate clip (simulated: one shared clip, or
+ * cctv_clips/log-<id>.mp4 when the school supplies one); a flag's clip is the refused passage that raised it.
  * A red banner on every tab appears while one of the owner's vehicles is held at the gate; the app
  * re-checks every 15 seconds while it is open.
  *
@@ -52,6 +54,50 @@
   }
 
   function normPlate(p) { return String(p || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+
+  /* ---- Gate clips ---- */
+  const CLIP_BASE = String(window.SECUREPARK_ASSETS_URL || '../assets').replace(/\/+$/, '');
+
+  function isExitPassage(d) {
+    return /exit|egress/i.test(d.action || '') || /gate 2|egress/i.test(d.gatePoint || '');
+  }
+
+  function clipButton(d, label, extraClass) {
+    const text = label || (isExitPassage(d) ? 'Exit clip' : 'Entry clip');
+    return `<button type="button" class="clip-btn ${extraClass || ''}" data-clip="${esc(encodeURIComponent(JSON.stringify(d)))}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>${esc(text)} · 5s</button>`;
+  }
+
+  function openClip(d) {
+    const video = $('clipVideo');
+    const exit = isExitPassage(d);
+    $('clipTitle').textContent = `${exit ? 'Exit' : 'Entry'} clip · ${d.plate || ''}`;
+    $('clipSub').textContent = [exit ? 'Exit gate camera' : 'Main gate camera', d.gatePoint, d.loggedAt ? fmtDateTime(d.loggedAt) : ''].filter(Boolean).join(' · ');
+    $('clipMissing').hidden = true;
+    video.pause();
+    video.textContent = '';
+    // The passage's own clip first (when the school has supplied one), then the shared clip
+    const sources = (d.logId ? [`${CLIP_BASE}/cctv_clips/log-${encodeURIComponent(d.logId)}.mp4`] : []).concat(`${CLIP_BASE}/cctv_clip_placeholder.mp4`);
+    sources.forEach((src, i) => {
+      const el = document.createElement('source');
+      el.src = src;
+      el.type = 'video/mp4';
+      if (i === sources.length - 1) el.addEventListener('error', () => { $('clipMissing').hidden = false; });
+      video.appendChild(el);
+    });
+    $('clipModal').hidden = false;
+    video.load();
+    const started = video.play();
+    if (started && started.catch) started.catch(() => { /* autoplay refused: the controls start it */ });
+  }
+
+  function closeClip() {
+    const video = $('clipVideo');
+    video.pause();
+    video.textContent = '';
+    video.load();
+    $('clipModal').hidden = true;
+  }
 
   function activeAlertsFor(v) {
     return data.alerts.active.filter(a => normPlate(a.plateNumber) === normPlate(v.plateNumber));
@@ -288,7 +334,7 @@
       : '';
     const flags = activeAlertsFor(v);
     const flagNotice = flags.length
-      ? `<div class="notice bad">This vehicle is being <strong>held at the gate</strong> (${esc(flags[0].gatePoint)}). If you did not authorize this, contact the guard or the Campus Security Office right away. See the <strong>Activity</strong> tab.</div>`
+      ? `<div class="notice bad">This vehicle is being <strong>held at the gate</strong> (${esc(flags[0].gatePoint)}). If you did not authorize this, contact the guard or the Campus Security Office right away. See the <strong>Activity</strong> tab.<div class="alert-clip">${clipButton({ logId: flags[0].logId, plate: flags[0].plateNumber, action: '', gatePoint: flags[0].gatePoint, loggedAt: flags[0].reportedAt }, 'Watch gate clip', 'danger')}</div></div>`
       : '';
     const blockNotice = v.isBanned
       ? `<div class="notice bad">Your vehicle reached ${STRIKE_LIMIT} strikes or received a violation and is banned from entering campus. Go to the Campus Security Office to settle it. See the <strong>Strikes</strong> tab for details.</div>`
@@ -410,6 +456,7 @@
           <div class="alert-reason">Reason: ${esc(a.reason)}</div>
           ${stranger ? `<div class="alert-driver">Person at the gate: <strong>${esc(a.driverName)}</strong>${a.driverRelationship && a.driverRelationship !== 'Unverified' ? ' · ' + esc(a.driverRelationship) : ''}</div>` : ''}
           <div class="alert-case">Case ${esc(a.caseNumber)}</div>
+          <div class="alert-clip">${clipButton({ logId: a.logId, plate: a.plateNumber, action: '', gatePoint: a.gatePoint, loggedAt: a.reportedAt }, 'Watch gate clip', 'on-red')}</div>
         </div>`;
       }).join('')}
       <p class="alert-help">Security is holding this vehicle. <strong>If you did not give anyone permission to drive it, tell the guard or the Campus Security Office right away.</strong></p>
@@ -455,6 +502,7 @@
             <span class="badge ${a.status === 'Held' ? 'pending' : esc(a.status.toLowerCase())}">${a.status === 'Held' ? 'ACTIVE · HELD' : esc(a.status)}</span>
             <span class="badge dismissed">${esc(a.caseNumber)}</span>
             ${a.resolvedAt ? `<div class="desc" style="color:var(--muted)">Closed ${esc(fmtDateTime(a.resolvedAt))}</div>` : ''}
+            <div class="tl-actions">${clipButton({ logId: a.logId, plate: a.plateNumber, action: '', gatePoint: a.gatePoint, loggedAt: a.reportedAt }, 'Watch gate clip', 'danger')}</div>
           </li>`).join('')}</ul></div>`
       : '';
 
@@ -484,6 +532,7 @@
               <div class="tl-sub">${esc(a.plateNumber)} · ${esc(a.gatePoint || '')}</div>
               ${driver ? `<div class="tl-sub">${driver}</div>` : ''}
               ${a.note ? `<div class="tl-note">${esc(a.note)}</div>` : ''}
+              <div class="tl-actions">${clipButton({ logId: a.id, plate: a.plateNumber, action: a.action, gatePoint: a.gatePoint, loggedAt: a.loggedAt }, null, t.cls === 'denied' ? 'danger' : '')}</div>
             </div></li>`;
         }).join('')}</ul>`).join('');
     }
@@ -545,8 +594,15 @@
       if (e.target.closest('[data-action="open-activity"]')) selectTab('tabActivity');
     });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    document.addEventListener('click', (e) => {
+      const trigger = e.target.closest && e.target.closest('[data-clip]');
+      if (!trigger) return;
+      try { openClip(JSON.parse(decodeURIComponent(trigger.getAttribute('data-clip')))); } catch (_) { /* malformed descriptor: ignore */ }
+    });
+    $('clipClose').addEventListener('click', closeClip);
+    $('clipModal').addEventListener('click', (e) => { if (e.target === $('clipModal')) closeClip(); });
     $('qrZoom').addEventListener('click', () => { $('qrZoom').hidden = true; });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('qrZoom').hidden = true; });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('qrZoom').hidden = true; if (!$('clipModal').hidden) closeClip(); } });
     boot();
   });
 

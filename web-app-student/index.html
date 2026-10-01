@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20261001a">
+  <link rel="stylesheet" href="css/style.css?v=20261001b">
 </head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
@@ -195,12 +195,27 @@
     </div>
   </div>
 
+  <!-- Gate clip player (5 second CCTV clip of one passage) -->
+  <div id="clipModal" class="clip-modal" hidden role="dialog" aria-modal="true" aria-label="Gate camera clip">
+    <div class="clip-box">
+      <div class="clip-top">
+        <div><div id="clipTitle" class="clip-title"></div><div id="clipSub" class="clip-subtitle"></div></div>
+        <button type="button" id="clipClose" class="btn btn-outline btn-sm">Close</button>
+      </div>
+      <div class="clip-stage">
+        <video id="clipVideo" muted playsinline controls preload="none"></video>
+        <div id="clipMissing" class="clip-missing" hidden>Clip not available yet. The school supplies the gate footage.</div>
+      </div>
+      <p class="clip-note">5 second clip from the gate camera. Demonstration footage supplied by the school.</p>
+    </div>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="js/config.js?v=20261001a"></script>
-  <script src="js/aes.js?v=20261001a"></script>
-  <script src="js/qrcode.min.js?v=20261001a"></script>
-  <script src="js/api.js?v=20261001a"></script>
+  <script src="js/config.js?v=20261001b"></script>
+  <script src="js/aes.js?v=20261001b"></script>
+  <script src="js/qrcode.min.js?v=20261001b"></script>
+  <script src="js/api.js?v=20261001b"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -217,7 +232,7 @@
       tempPassword: async ({ title, password }) => window.prompt(title + '\nCopy this temporary password:', password)
     };
   </script>
-  <script src="js/alerts.js?v=20261001a"></script>
-  <script src="js/app.js?v=20261001a"></script>
+  <script src="js/alerts.js?v=20261001b"></script>
+  <script src="js/app.js?v=20261001b"></script>
 </body>
 </html>
