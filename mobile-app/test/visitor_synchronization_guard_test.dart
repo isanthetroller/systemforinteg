@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:systemforinteg/core/constants/api_constants.dart';
 import 'package:systemforinteg/features/scanner/screens/exit_scanner_screen.dart';
+import 'package:systemforinteg/features/scanner/screens/qr_scanner_screen.dart';
 import 'package:systemforinteg/features/scanner/widgets/scan_rejection_view.dart';
 import 'package:systemforinteg/features/scanner/widgets/scanned_visitor_card.dart';
 import 'package:systemforinteg/models/user_model.dart';
@@ -210,7 +211,7 @@ void main() {
 
         if (visitorPassCode != null && dbVisitors.containsKey(visitorPassCode)) {
           final vRecord = dbVisitors[visitorPassCode]!;
-          final isBlocked = vRecord['status'] == 'Blocked' || vRecord['status'] == 'Revoked';
+          final isBlocked = vRecord['status'] == 'Blocked' || vRecord['status'] == 'Revoked' || vRecord['has_incident'] == true;
           final isUsed = vRecord['status'] == 'Used' || vRecord['exitTime'] != null;
           final isInside = vRecord['isInside'] == true;
 
@@ -225,6 +226,12 @@ void main() {
                   'currentlyInside': isInside,
                   'reason': 'This visitor pass is currently BLOCKED by security.',
                   'visitor': vRecord,
+                  'incident': {
+                    'id': 102,
+                    'caseNumber': 'INC-2026-VIS-01',
+                    'reason': 'Security Incident Hold on visitor.',
+                    'status': 'Held',
+                  },
                 },
               }),
               200,
@@ -270,7 +277,30 @@ void main() {
         final codeUpper = rawCode.toUpperCase();
         if (dbVehicles.containsKey(codeUpper)) {
           final veh = dbVehicles[codeUpper]!;
+          final isBlocked = veh['status'] == 'Blocked / Alert' || veh['is_banned'] == 1 || veh['has_incident'] == true;
           final isInside = veh['status'] == 'Inside Campus';
+          if (isBlocked) {
+            return http.Response(
+              jsonEncode({
+                'status': 'success',
+                'data': {
+                  'result': 'BANNED',
+                  'accepted': false,
+                  'currentlyInside': isInside,
+                  'reason': 'Security Incident Hold on vehicle.',
+                  'vehicle': veh,
+                  'incident': {
+                    'id': 101,
+                    'caseNumber': 'INC-2026-VEH-01',
+                    'reason': 'Reckless driving inside campus',
+                    'status': 'Held',
+                  },
+                },
+              }),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }
           return http.Response(
             jsonEncode({
               'status': 'success',
@@ -303,6 +333,27 @@ void main() {
         return http.Response(
           jsonEncode({'status': 'success', 'message': 'Gate log recorded'}),
           200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+
+      // POST /api/incidents.php
+      if (path.contains('incidents.php') && method == 'POST') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final plate = (body['plate_number'] ?? body['plateNumber'] ?? '').toString().toUpperCase();
+        if (dbVehicles.containsKey(plate)) {
+          dbVehicles[plate]!['status'] = 'Blocked / Alert';
+          dbVehicles[plate]!['has_incident'] = true;
+        }
+        for (final vis in dbVisitors.values) {
+          if ((vis['plateNumber'] ?? '').toString().toUpperCase() == plate) {
+            vis['status'] = 'Blocked';
+            vis['has_incident'] = true;
+          }
+        }
+        return http.Response(
+          jsonEncode({'status': 'success', 'message': 'Incident reported and hold placed.'}),
+          201,
           headers: {'content-type': 'application/json'},
         );
       }
@@ -664,6 +715,217 @@ void main() {
       expect(find.byType(ScanRejectionView), findsOneWidget);
       expect(find.text('Connection / API Error'), findsOneWidget);
       expect(find.text('Registered Vehicle'), findsNothing);
+    });
+
+    testWidgets('Test 8: Vehicle Incident Hold Blocks Guard 2 Exit -> Admin Resolves Incident -> Status Restored to "Inside Campus" -> Guard 2 Scan Succeeds', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      // 1. Vehicle is inside campus but an incident is active
+      dbVehicles['ABC-1111']!['status'] = 'Blocked / Alert';
+      dbVehicles['ABC-1111']!['has_incident'] = true;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ExitScannerScreen(
+              currentGuard: guard2,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+
+      // Guard 2 scans the blocked vehicle
+      state.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // Guard 2 must REJECT exit: vehicle cannot proceed
+      expect(find.byType(ScanRejectionView), findsOneWidget);
+      expect(find.text('Vehicle Blocked'), findsOneWidget);
+      expect(find.text('CLEARED (EXIT)'), findsNothing);
+
+      // 2. Admin resolves incident on Web Admin
+      // Because latest gate log was Entry Recorded with no subsequent Exit Approved,
+      // the status is restored to 'Inside Campus' (NOT 'Outside'!)
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      dbVehicles['ABC-1111']!['has_incident'] = false;
+
+      // Reset Guard 2 scanner and scan again
+      state.testResetScanner();
+      await tester.pumpAndSettle();
+
+      state.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // Now exit is ALLOWED
+      expect(find.byType(ScanRejectionView), findsNothing);
+      expect(find.text('CLEARED (EXIT)'), findsOneWidget);
+    });
+
+    testWidgets('Test 9: Visitor Incident Hold Blocks Guard 2 Exit -> Resolving Incident Clears Visitor For Exit', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      // Register visitor
+      final now = DateTime.now();
+      final visitorPass = VisitorPass(
+        passId: 'VP-2026-HOLD',
+        visitorName: 'Held Visitor',
+        contactNumber: '09180001111',
+        plateNumber: 'HLD-9999',
+        vehicleModel: 'Blue Sedan',
+        purposeOfVisit: 'Vendor Meeting',
+        personToVisit: 'Procurement Head',
+        entryTime: now,
+        expiryTime: now.add(const Duration(hours: 4)),
+        status: VisitorPassStatus.active,
+        registeredByGuard: guard1.fullName,
+        gatePoint: guard1.assignedGate,
+        items: const [],
+      );
+      await VisitorRepository().registerPass(visitorPass);
+
+      // Incident occurs -> Visitor pass has active incident hold
+      dbVisitors['VP-2026-HOLD']!['has_incident'] = true;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ExitScannerScreen(
+              currentGuard: guard2,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+
+      // Guard 2 scans the visitor pass under incident hold
+      state.testVerifyPass(jsonEncode({
+        'v': 1,
+        'pid': 'VP-2026-HOLD',
+        'plate_number': 'HLD9999',
+        'type': 'visitor_temp',
+        'valid': DateTime.now().toIso8601String().substring(0, 10),
+      }));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // Guard 2 must REJECT exit: visitor under incident hold cannot exit
+      expect(find.byType(ScanRejectionView), findsOneWidget);
+      expect(find.text('Visitor Pass Blocked'), findsOneWidget);
+      expect(find.text('CLEARED (VISITOR EXIT)'), findsNothing);
+
+      // Admin resolves incident hold
+      dbVisitors['VP-2026-HOLD']!['has_incident'] = false;
+
+      // Reset and scan again
+      state.testResetScanner();
+      await tester.pumpAndSettle();
+
+      state.testVerifyPass('VP-2026-HOLD');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // Now Guard 2 displays visitor details and exit is permitted
+      expect(find.byType(ScanRejectionView), findsNothing);
+      expect(find.byType(ScannedVisitorCard), findsOneWidget);
+      expect(find.text('Held Visitor'), findsOneWidget);
+      expect(find.text('CLEARED (VISITOR EXIT)'), findsOneWidget);
+    });
+
+    testWidgets('Test 10: Guard 1 Patrol Inspection on In-Campus Vehicle -> Inspects without Gate Transit -> Reports Incident -> Blocked at Guard 2', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      // ABC-1111 is already inside campus
+      expect(dbVehicles['ABC-1111']!['status'], 'Inside Campus');
+      final initialLogsCount = dbLogs.length;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: QrScannerScreen(
+              onDecision: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic ingressState = tester.state(find.byType(QrScannerScreen));
+
+      // Guard 1 scans already-inside vehicle
+      ingressState.testProcessRawQrCode('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // Duplicate Entry Attempt anti-passback rejection appears
+      expect(find.byType(ScanRejectionView), findsOneWidget);
+      expect(find.text('Duplicate Entry Attempt'), findsOneWidget);
+      expect(find.text('INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT'), findsOneWidget);
+
+      // Guard 1 taps INSPECT ON-CAMPUS VEHICLE
+      await tester.tap(find.text('INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT'));
+      await tester.pumpAndSettle();
+
+      // Patrol Inspection Mode is active
+      expect(find.text('PATROL INSPECTION MODE (ON-CAMPUS VEHICLE)'), findsOneWidget);
+      expect(find.text('FINISH INSPECTION'), findsOneWidget);
+      expect(find.text('REPORT INCIDENT / HOLD'), findsOneWidget);
+      expect(find.text('Prof. John Smith'), findsWidgets);
+
+      // No fake gate transit log was created!
+      expect(dbLogs.length, initialLogsCount);
+
+      // Guard 1 reports incident on this car
+      await tester.tap(find.text('REPORT INCIDENT / HOLD'));
+      await tester.pumpAndSettle();
+
+      // Dialog opens: select a reason
+      expect(find.text('Report In-Campus Incident'), findsOneWidget);
+      await tester.tap(find.text('Security Officer Intervention'));
+      await tester.pumpAndSettle();
+
+      // Vehicle in database is now Blocked / Alert
+      expect(dbVehicles['ABC-1111']!['status'], 'Blocked / Alert');
+
+      // Still no Entry Denied or Entry Recorded gate log created during patrol inspection
+      expect(dbLogs.where((l) => l['action'] == 'Entry Recorded' || l['action'] == 'Entry Denied').length, 0);
+
+      // Guard 2 now scans ABC-1111 at exit gate
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ExitScannerScreen(
+              currentGuard: guard2,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic egressState = tester.state(find.byType(ExitScannerScreen));
+      egressState.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // Guard 2 strictly rejects the vehicle!
+      expect(find.byType(ScanRejectionView), findsOneWidget);
+      expect(find.text('Vehicle Blocked'), findsOneWidget);
+      expect(find.text('CLEARED (EXIT)'), findsNothing);
     });
   });
 }

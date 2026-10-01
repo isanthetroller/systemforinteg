@@ -141,12 +141,14 @@ class ScannedVisitorPass {
   /// The guard may record an entry only when the server accepted the pass at this gate.
   bool get canAdmit => accepted;
 
-  /// True if the pass is blocked, revoked, or banned
+  /// True if the pass is blocked, revoked, banned, or under security hold
   bool get isBlocked =>
       status.toLowerCase().contains('block') ||
+      status.toLowerCase().contains('hold') ||
       result == 'REVOKED' ||
       result == 'BANNED' ||
-      reason.toLowerCase().contains('block');
+      reason.toLowerCase().contains('block') ||
+      reason.toLowerCase().contains('hold');
 
   /// Declared items must each be checked by the guard before the entry can be recorded.
   bool get hasItems => items.isNotEmpty;

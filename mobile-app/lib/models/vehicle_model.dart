@@ -121,6 +121,7 @@ class VehicleRecord {
           campusStatus!.toLowerCase().contains('ban') ||
           campusStatus!.toLowerCase().contains('suspend') ||
           campusStatus!.toLowerCase().contains('revok') ||
+          campusStatus!.toLowerCase().contains('hold') ||
           campusStatus!.toLowerCase().contains('forg')));
 
   /// True if vehicle is in blocked / held status

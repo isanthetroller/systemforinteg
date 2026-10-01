@@ -179,12 +179,22 @@ function handleResolveIncident($pdo, $admin) {
         $upd = $pdo->prepare("UPDATE `security_incidents` SET `status` = 'Resolved', `resolved_at` = NOW(), `notes` = ? WHERE `id` = ?");
         $upd->execute([($row['notes'] ?? '') . $resolutionEntry, $id]);
 
-        // If no other held incidents for this plate, restore vehicle status
+        // If no other held incidents for this plate, restore vehicle status based on actual gate custody
         $check = $pdo->prepare("SELECT id FROM `security_incidents` WHERE `plate_number` = ? AND `status` = 'Held'");
         $check->execute([$plate]);
         if (!$check->fetch()) {
-            $rest = $pdo->prepare("UPDATE `vehicles` SET `status` = 'Outside' WHERE `plate_number` = ? AND `status` = 'Blocked / Alert'");
-            $rest->execute([$plate]);
+            $normPlate = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)$plate));
+            $logStmt = $pdo->prepare("SELECT `action` FROM `gate_logs` 
+                WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+                  AND `action` IN ('Entry Recorded', 'Exit Approved')
+                ORDER BY `id` DESC LIMIT 1");
+            $logStmt->execute([$normPlate]);
+            $lastAction = $logStmt->fetchColumn();
+
+            // Only mark Outside if exit was approved or no entry was recorded; otherwise vehicle remains Inside Campus
+            $restoredStatus = ($lastAction === 'Entry Recorded') ? 'Inside Campus' : 'Outside';
+            $rest = $pdo->prepare("UPDATE `vehicles` SET `status` = ? WHERE `plate_number` = ? AND `status` = 'Blocked / Alert'");
+            $rest->execute([$restoredStatus, $plate]);
         }
 
         $pdo->commit();

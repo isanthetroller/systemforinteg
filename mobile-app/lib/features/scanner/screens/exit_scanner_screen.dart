@@ -54,6 +54,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   // Active Verification State
   bool _isVerifying = false;
   bool _isSubmitting = false;
+  DateTime? _lastScanTime;
   ExitVerificationStatus? _resultStatus;
   ScanRejectionDetails? _rejectionDetails;
   VehicleRecord? _verifiedVehicleRecord;
@@ -113,19 +114,29 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _currentPhotoUrl = '';
       _isVerifying = false;
       _isSubmitting = false;
+      _lastScanTime = null;
     });
     _cameraController?.startSafely();
   }
 
   @visibleForTesting
-  void testVerifyPass(String raw) => _verifyPass(raw);
+  void testVerifyPass(String raw) {
+    _lastScanTime = null;
+    _verifyPass(raw);
+  }
 
   @visibleForTesting
   void testResetScanner() => _resetScanner();
 
   /// Evaluates scanned QR code against real-time database state for exit eligibility
   Future<void> _verifyPass(String raw) async {
-    if (_isVerifying || _isSubmitting || _resultStatus != null || _rejectionDetails != null) return;
+    final now = DateTime.now();
+    if (_lastScanTime != null && now.difference(_lastScanTime!).inMilliseconds < 1500) {
+      return;
+    }
+    _lastScanTime = now;
+
+    if (_isVerifying || _isSubmitting || _resultStatus != null || _rejectionDetails != null || _exitVisitor != null || _verifiedVehicleRecord != null) return;
 
     setState(() {
       _isVerifying = true;
@@ -358,7 +369,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       final currentlyInside = verifyResult['currentlyInside'] == true;
       if (!currentlyInside && registeredVehicle.campusStatus == 'Inside Campus') {
         registeredVehicle = registeredVehicle.copyWith(campusStatus: 'Outside');
-      } else if (currentlyInside && registeredVehicle.campusStatus != 'Inside Campus') {
+      } else if (currentlyInside && registeredVehicle.campusStatus != 'Inside Campus' && !registeredVehicle.isBlocked) {
         registeredVehicle = registeredVehicle.copyWith(campusStatus: 'Inside Campus');
       }
     }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/widgets/driver_photo_view.dart';
 import '../../../core/widgets/plate_badge.dart';
+import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../theme/ncst_theme.dart';
 
@@ -20,6 +21,7 @@ class ScanRejectionDetails {
   final String message;
   final String resolutionInstructions;
   final VehicleRecord? vehicle;
+  final ScannedVisitorPass? visitor;
   final String? rawQr;
   final String? plateNumber;
   final String? ownerName;
@@ -32,6 +34,7 @@ class ScanRejectionDetails {
     required this.message,
     String? resolutionInstructions,
     this.vehicle,
+    this.visitor,
     this.rawQr,
     this.plateNumber,
     this.ownerName,
@@ -60,13 +63,17 @@ class ScanRejectionDetails {
 class ScanRejectionView extends StatelessWidget {
   final ScanRejectionDetails details;
   final VoidCallback onScanAnother;
+  final VoidCallback? onInspect;
   final String? buttonLabel;
+  final String? inspectButtonLabel;
 
   const ScanRejectionView({
     super.key,
     required this.details,
     required this.onScanAnother,
+    this.onInspect,
     this.buttonLabel,
+    this.inspectButtonLabel,
   });
 
   Color get _headerColor {
@@ -379,6 +386,35 @@ class ScanRejectionView extends StatelessWidget {
                         const SizedBox(height: 20),
                       ] else ...[
                         const SizedBox(height: 12),
+                      ],
+
+                      // Optional In-Campus Patrol Inspection / Incident Action Button
+                      if (onInspect != null) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton.icon(
+                            onPressed: onInspect,
+                            icon: const Icon(Icons.shield_outlined, size: 20),
+                            label: Text(
+                              inspectButtonLabel ?? 'INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT',
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: NcstColors.crimson,
+                              foregroundColor: NcstColors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                       ],
 
                       // Primary Safe Action Button

@@ -51,6 +51,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
   bool _isValidating = false;
   bool _isSubmitting = false;
+  bool _isPatrolInspection = false;
+  DateTime? _lastScanTime;
   ScanRejectionDetails? _rejectionDetails;
 
   VehicleRecord? _scannedVehicle;
@@ -152,15 +154,26 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _rejectionDetails = null;
       _isValidating = false;
       _isSubmitting = false;
+      _isPatrolInspection = false;
+      _lastScanTime = null;
     });
     _cameraController?.startSafely();
   }
 
   @visibleForTesting
-  void testProcessRawQrCode(String raw) => _processRawQrCode(raw);
+  void testProcessRawQrCode(String raw) {
+    _lastScanTime = null;
+    _processRawQrCode(raw);
+  }
 
   void _processRawQrCode(String raw) async {
-    if (_isValidating || _isSubmitting || _scannedVehicle != null || _rejectionDetails != null) return;
+    final now = DateTime.now();
+    if (_lastScanTime != null && now.difference(_lastScanTime!).inMilliseconds < 1500) {
+      return;
+    }
+    _lastScanTime = now;
+
+    if (_isValidating || _isSubmitting || _scannedVehicle != null || _visitorPass != null || _rejectionDetails != null) return;
     final clean = raw.trim();
     if (clean.isEmpty) return;
 
@@ -168,6 +181,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     setState(() {
       _isValidating = true;
       _rejectionDetails = null;
+      _isPatrolInspection = false;
     });
 
     await _syncVehicleWithDb(null, clean);
@@ -341,6 +355,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 ownerName: visitor.visitorName,
                 statusBadge: 'INSIDE CAMPUS',
                 reason: visitor.reason.isNotEmpty ? visitor.reason : 'Anti-passback: Vehicle must exit before entering again.',
+                visitor: visitor,
               );
             });
             return;
@@ -479,6 +494,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ownerName: remoteVehicle.ownerName,
             statusBadge: remoteVehicle.campusStatus ?? 'Inside Campus',
             reason: 'Anti-passback protection: Vehicle must exit through Guard 2 before another entry can be recorded.',
+            vehicle: remoteVehicle,
           );
         });
         return;
@@ -843,21 +859,63 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     }
   }
 
+  void _startPatrolInspection() {
+    final vehicle = _rejectionDetails?.vehicle;
+    final visitor = _rejectionDetails?.visitor;
+    setState(() {
+      _isPatrolInspection = true;
+      _rejectionDetails = null;
+      if (visitor != null) {
+        _visitorPass = visitor;
+        _scannedVehicle = null;
+      } else if (vehicle != null) {
+        _scannedVehicle = vehicle;
+        _visitorPass = null;
+        if (vehicle.authorizedDrivers.isNotEmpty) {
+          final first = vehicle.authorizedDrivers.first;
+          _selectedDriverName = first.fullName;
+          _selectedRelationship = first.relationship;
+          final isOwner = first.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+              first.relationship.toLowerCase().contains('self') ||
+              first.relationship.toLowerCase().contains('owner');
+          _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
+              ? first.photoUrl!
+              : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : (vehicle.ownerPhotoUrl ?? ''));
+        } else {
+          _selectedDriverName = vehicle.ownerName;
+          _selectedRelationship = 'Registered Owner';
+          _currentPhotoUrl = vehicle.ownerPhotoUrl ?? '';
+        }
+      }
+    });
+  }
+
   void _showBlockDialog() {
-    if (_scannedVehicle == null) return;
-    BlockReasonDialog.show(context, _executeBlock);
+    if (_scannedVehicle == null && _visitorPass == null) return;
+    BlockReasonDialog.show(
+      context,
+      _executeBlock,
+      title: _isPatrolInspection ? 'Report In-Campus Incident' : 'Block Vehicle Entry',
+      subtitle: _isPatrolInspection ? 'Select reason for security hold / incident:' : 'Select reason for entry denial:',
+    );
   }
 
   void _executeBlock(String reason) {
-    if (_scannedVehicle == null) return;
+    if (_scannedVehicle == null && _visitorPass == null) return;
+
+    final plate = _scannedVehicle?.plateNumber ?? _visitorPass!.plateNumber;
+    final driver = _scannedVehicle != null ? _selectedDriverName : _visitorPass!.visitorName;
+    final rel = _scannedVehicle != null ? _selectedRelationship : 'Visitor (Day Pass)';
+    final owner = _scannedVehicle?.ownerName ?? _visitorPass!.visitorName;
+    final type = _scannedVehicle?.vehicleType ?? _visitorPass!.vehicleModel;
 
     final blockedEntry = AuditLogEntry(
       id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-      plateNumber: _scannedVehicle!.plateNumber,
-      vehicleType: _scannedVehicle!.vehicleType,
-      ownerName: _scannedVehicle!.ownerName,
-      driverName: _selectedDriverName,
-      driverRelationship: _selectedRelationship,
+      plateNumber: plate,
+      vehicleType: type,
+      ownerName: owner,
+      driverName: driver,
+      driverRelationship: rel,
       timeIn: DateTime.now(),
       status: GateStatus.blocked,
       blockReason: reason,
@@ -865,35 +923,60 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
     widget.onDecision(blockedEntry);
 
-    // Asynchronously synchronize blocked event with InfinityFree MySQL Backend API
-    ApiService.postGateLog(
-      plateNumber: _scannedVehicle!.plateNumber,
-      driverName: _selectedDriverName,
-      driverRelationship: _selectedRelationship,
-      gatePoint: 'Gate 1 (Main Ingress)',
-      action: 'Entry Denied',
-      status: 'Blocked',
-      notes: reason,
-      vehicleType: _scannedVehicle!.vehicleType,
-      ownerName: _scannedVehicle!.ownerName,
-    );
-    ApiService.reportIncident(
-      plateNumber: _scannedVehicle!.plateNumber,
-      driverName: _selectedDriverName,
-      reason: reason,
-      gatePoint: 'Gate 1 (Main Ingress)',
-      notes: 'Entry blocked at gate verification',
-    );
+    if (_isPatrolInspection) {
+      // In-campus patrol inspection hold: do NOT post an Entry Denied gate log,
+      // because an in-campus inspection is NOT a gate transit attempt.
+      ApiService.reportIncident(
+        plateNumber: plate,
+        driverName: driver,
+        reason: reason,
+        gatePoint: 'Gate 1 (Patrol / In-Campus Inspection)',
+        notes: 'In-campus inspection hold: $reason',
+      );
+      if (_scannedVehicle != null) {
+        final updated = _scannedVehicle!.copyWith(campusStatus: 'Blocked / Alert');
+        MockData.upsertVehicle(updated);
+        LocalCacheService.upsertVehicle(updated);
+      }
+    } else {
+      // Gate transit block: post Entry Denied gate log and incident report
+      ApiService.postGateLog(
+        plateNumber: plate,
+        driverName: driver,
+        driverRelationship: rel,
+        gatePoint: 'Gate 1 (Main Ingress)',
+        action: 'Entry Denied',
+        status: 'Blocked',
+        notes: reason,
+        vehicleType: type,
+        ownerName: owner,
+        driverId: _scannedVehicle?.driverIdForName(driver),
+        visitorPassId: _visitorPass?.id,
+      );
+      ApiService.reportIncident(
+        plateNumber: plate,
+        driverName: driver,
+        reason: reason,
+        gatePoint: 'Gate 1 (Main Ingress)',
+        notes: 'Entry blocked at gate verification: $reason',
+      );
+    }
+
     if (!widget.isEmbedded && Navigator.canPop(context)) {
       Navigator.of(context).pop();
     } else if (widget.onReturnToDashboard != null) {
       widget.onReturnToDashboard!();
+    } else {
+      _resetScanner();
     }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: NcstColors.crimson,
         content: Text(
-          'ENTRY BLOCKED: ${_scannedVehicle!.plateNumber} ($reason)',
+          _isPatrolInspection
+              ? 'HOLD ISSUED: $plate ($reason)'
+              : 'ENTRY BLOCKED: $plate ($reason)',
           style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
         ),
         behavior: SnackBarBehavior.floating,
@@ -928,8 +1011,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         details: _rejectionDetails!,
         onScanAnother: _resetScanner,
         buttonLabel: 'SCAN ANOTHER VEHICLE',
+        onInspect: (_rejectionDetails!.vehicle != null || _rejectionDetails!.visitor != null)
+            ? _startPatrolInspection
+            : null,
+        inspectButtonLabel: 'INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT',
       );
-    } else if (_scannedVehicle == null) {
+    } else if (_scannedVehicle == null && _visitorPass == null) {
       content = _buildViewfinderSection();
     } else {
       content = _buildScannedVerificationBody();
@@ -945,7 +1032,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           : null,
       title: Text(_rejectionDetails != null
           ? 'Scan Rejected'
-          : (_scannedVehicle == null ? 'Scan Driver QR Pass' : 'Scanned Verification')),
+          : (_isPatrolInspection
+              ? 'On-Campus Vehicle Inspection'
+              : (_scannedVehicle == null && _visitorPass == null ? 'Scan Driver QR Pass' : 'Scanned Verification'))),
       backgroundColor: _rejectionDetails != null && _rejectionDetails!.type == ScanRejectionType.blocked
           ? NcstColors.crimson
           : NcstColors.navy,
@@ -1019,10 +1108,116 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     );
   }
 
+  Widget _buildInspectionNoticeHeader(String plate, String person) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: const BoxDecoration(
+        color: NcstColors.navy,
+        border: Border(
+          bottom: BorderSide(color: NcstColors.gold, width: 2),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.shield_outlined, color: NcstColors.gold, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'PATROL INSPECTION MODE (ON-CAMPUS VEHICLE)',
+                  style: TextStyle(
+                    color: NcstColors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$plate ($person) is currently inside campus. Inspecting details will NOT record an entry or exit gate log.',
+                  style: const TextStyle(
+                    color: NcstColors.slate300,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInspectionDecisionBar(String plate) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: const BoxDecoration(
+        color: NcstColors.white,
+        border: Border(top: BorderSide(color: NcstColors.slate200)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              flex: 5,
+              child: OutlinedButton.icon(
+                onPressed: _resetScanner,
+                icon: const Icon(Icons.check_circle_outline_rounded, color: NcstColors.slate700, size: 18),
+                label: const Text(
+                  'FINISH INSPECTION',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                    color: NcstColors.slate800,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  side: const BorderSide(color: NcstColors.slate300, width: 1.5),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 6,
+              child: ElevatedButton.icon(
+                onPressed: _showBlockDialog,
+                icon: const Icon(Icons.report_problem_rounded, color: NcstColors.white, size: 18),
+                label: const Text(
+                  'REPORT INCIDENT / HOLD',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                    color: NcstColors.white,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: NcstColors.crimson,
+                  foregroundColor: NcstColors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  elevation: 0,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildVisitorBody(ScannedVisitorPass pass) {
     final allChecked = _visitorItemsAllChecked;
     return Column(
       children: [
+        if (_isPatrolInspection)
+          _buildInspectionNoticeHeader(pass.plateNumber, pass.visitorName),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -1038,15 +1233,18 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ),
           ),
         ),
-        BottomDecisionBar(
-          onBlock: _showBlockDialog,
-          onCleared: _handleCleared,
-          isClearedEnabled: pass.canAdmit && allChecked,
-          clearedLabel: 'CLEARED (VISITOR)',
-          disabledLabel: !pass.canAdmit
-              ? 'ENTRY NOT ALLOWED'
-              : 'TICK ITEMS (${_checkedVisitorItems.length}/${pass.items.length})',
-        ),
+        if (_isPatrolInspection)
+          _buildInspectionDecisionBar(pass.plateNumber)
+        else
+          BottomDecisionBar(
+            onBlock: _showBlockDialog,
+            onCleared: _handleCleared,
+            isClearedEnabled: pass.canAdmit && allChecked,
+            clearedLabel: 'CLEARED (VISITOR)',
+            disabledLabel: !pass.canAdmit
+                ? 'ENTRY NOT ALLOWED'
+                : 'TICK ITEMS (${_checkedVisitorItems.length}/${pass.items.length})',
+          ),
       ],
     );
   }
@@ -1058,6 +1256,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
     return Column(
       children: [
+        if (_isPatrolInspection)
+          _buildInspectionNoticeHeader(vehicle.plateNumber, vehicle.ownerName),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -1144,27 +1344,30 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ),
           ),
         ),
-        BottomDecisionBar(
-          onBlock: _showBlockDialog,
-          onCleared: _handleCleared,
-          isClearedEnabled: (vehicle.isEligibleForEntry || vehicle.isUnregistered) && !_isSubmitting,
-          clearedLabel: vehicle.isBlocked
-              ? 'ACCESS DENIED (BLOCKED)'
-              : (vehicle.isInsideCampus
-                  ? 'ALREADY INSIDE'
-                  : (vehicle.isUnregistered
-                      ? 'REGISTER VISITOR'
-                      : 'CLEARED (TO GO)')),
-          disabledLabel: vehicle.isBlocked
-              ? 'VEHICLE BLOCKED'
-              : (vehicle.isInsideCampus ? 'ALREADY INSIDE CAMPUS' : null),
-          clearedIcon: vehicle.isUnregistered
-              ? Icons.how_to_reg_rounded
-              : Icons.check_rounded,
-          clearedColor: vehicle.isUnregistered
-              ? NcstColors.goldDark
-              : NcstColors.green,
-        ),
+        if (_isPatrolInspection)
+          _buildInspectionDecisionBar(vehicle.plateNumber)
+        else
+          BottomDecisionBar(
+            onBlock: _showBlockDialog,
+            onCleared: _handleCleared,
+            isClearedEnabled: (vehicle.isEligibleForEntry || vehicle.isUnregistered) && !_isSubmitting,
+            clearedLabel: vehicle.isBlocked
+                ? 'ACCESS DENIED (BLOCKED)'
+                : (vehicle.isInsideCampus
+                    ? 'ALREADY INSIDE'
+                    : (vehicle.isUnregistered
+                        ? 'REGISTER VISITOR'
+                        : 'CLEARED (TO GO)')),
+            disabledLabel: vehicle.isBlocked
+                ? 'VEHICLE BLOCKED'
+                : (vehicle.isInsideCampus ? 'ALREADY INSIDE CAMPUS' : null),
+            clearedIcon: vehicle.isUnregistered
+                ? Icons.how_to_reg_rounded
+                : Icons.check_rounded,
+            clearedColor: vehicle.isUnregistered
+                ? NcstColors.goldDark
+                : NcstColors.green,
+          ),
       ],
     );
   }
