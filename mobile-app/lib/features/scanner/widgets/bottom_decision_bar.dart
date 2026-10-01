@@ -7,7 +7,7 @@ class BottomDecisionBar extends StatelessWidget {
   final bool isClearedEnabled;
   final String clearedLabel;
   /// Text on the (disabled) cleared button. Defaults to the refusal wording used for banned / suspended vehicles.
-  final String disabledLabel;
+  final String? disabledLabel;
   final IconData clearedIcon;
   final Color? clearedColor;
 
@@ -17,7 +17,7 @@ class BottomDecisionBar extends StatelessWidget {
     required this.onCleared,
     this.isClearedEnabled = true,
     this.clearedLabel = 'CLEARED (TO GO)',
-    this.disabledLabel = 'ENTRY REFUSED',
+    this.disabledLabel,
     this.clearedIcon = Icons.check_rounded,
     this.clearedColor,
   });
@@ -94,7 +94,7 @@ class BottomDecisionBar extends StatelessWidget {
                         label: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            isClearedEnabled ? clearedLabel : disabledLabel,
+                            isClearedEnabled ? clearedLabel : (disabledLabel ?? 'ACTION REFUSED'),
                             style: TextStyle(
                               fontSize: isCompact ? 13 : 15,
                               fontWeight: FontWeight.w800,

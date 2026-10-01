@@ -320,12 +320,13 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
           return const SizedBox.shrink();
       }
     } else {
-      // Guard 2 — Exit: Dashboard and QR Scan only (no visitor)
+      // Guard 2 — Exit: Dashboard and Scan / Exit only (no visitor)
       switch (_selectedIndex) {
         case 0:
           return _buildDashboardFeed(isEntrance);
         case 1:
           return ExitScannerScreen(
+            isEmbedded: true,
             currentGuard: _currentUser,
             onDecision: (entry) {
               setState(() {
@@ -412,7 +413,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
           });
         },
         backgroundColor: NcstColors.white,
-        selectedItemColor: isEntrance ? NcstColors.green : NcstColors.navy,
+        selectedItemColor: NcstColors.green,
         unselectedItemColor: NcstColors.slate500,
         selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11),
         unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11),
@@ -444,7 +445,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                 BottomNavigationBarItem(
                   icon: Icon(Icons.qr_code_scanner_outlined),
                   activeIcon: Icon(Icons.qr_code_scanner),
-                  label: 'QR Scan',
+                  label: 'Scan / Exit',
                 ),
               ],
       ),

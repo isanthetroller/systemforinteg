@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../core/constants/api_constants.dart';
 import '../models/vehicle_model.dart';
 import '../models/visitor_pass_model.dart';
+import '../data/mock_data.dart';
 import 'local_cache_service.dart';
 import 'sync_queue_service.dart';
 
@@ -29,6 +30,9 @@ class ApiService {
 
   /// The server's message for the last refused write, or why it could not be sent.
   static String? lastWriteError;
+
+  /// The server's error message for the last pass verification, or network error.
+  static String? lastVerifyError;
 
   /// True when the last visitor pass could not reach the server and was saved on this phone to sync later.
   static bool lastWriteQueued = false;
@@ -205,10 +209,10 @@ class ApiService {
     final clean = query.trim();
     if (clean.isEmpty) return null;
     VehicleRecord? record;
-    if (clean.startsWith('{') || clean.contains('"plateNumber"')) {
+    if (clean.startsWith('{') || clean.contains('"plateNumber"') || clean.startsWith('NCST-QR-')) {
       record = (await lookupVehicleByQr(clean)) ?? (await lookupVehicleByPlate(clean));
     } else {
-      record = await lookupVehicleByPlate(clean);
+      record = (await lookupVehicleByPlate(clean)) ?? (await lookupVehicleByQr(clean));
     }
     if (record != null) return record;
 
@@ -225,8 +229,13 @@ class ApiService {
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] != null) {
-          return VehicleRecord.fromQrJson(body['data'], rawPayload: 'SERVER_DB_RECORD');
+          final record = VehicleRecord.fromQrJson(body['data'], rawPayload: 'SERVER_DB_RECORD', isSyncedWithDb: true);
+          await LocalCacheService.upsertVehicle(record);
+          MockData.upsertVehicle(record);
+          return record;
         }
+      } else if (res.statusCode == 404) {
+        return null;
       }
     } catch (e) {
       debugPrint('[ApiService] QR lookup failed or offline: $e');
@@ -243,8 +252,13 @@ class ApiService {
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] != null) {
-          return VehicleRecord.fromQrJson(body['data'], rawPayload: 'SERVER_DB_RECORD');
+          final record = VehicleRecord.fromQrJson(body['data'], rawPayload: 'SERVER_DB_RECORD', isSyncedWithDb: true);
+          await LocalCacheService.upsertVehicle(record);
+          MockData.upsertVehicle(record);
+          return record;
         }
+      } else if (res.statusCode == 404) {
+        return null;
       }
     } catch (e) {
       debugPrint('[ApiService] Lookup failed or offline: $e');
@@ -557,6 +571,8 @@ class ApiService {
     final outcome = await _postForOutcome(ApiConstants.logsEndpoint, payload);
     if (outcome == WriteOutcome.accepted) {
       debugPrint('[ApiService] Gate passage logged to server for $plateNumber');
+      unawaited(LocalCacheService.updateVehicleCampusStatus(plateNumber, status));
+      MockData.updateVehicleCampusStatus(plateNumber, status);
       unawaited(SyncQueueService().processQueue());
       return true;
     }
@@ -571,6 +587,8 @@ class ApiService {
 
     // 3. No connection: queue it with the time it happened; it is sent the moment the connection is back
     debugPrint('[ApiService] Offline: queuing gate passage for $plateNumber');
+    unawaited(LocalCacheService.updateVehicleCampusStatus(plateNumber, status));
+    MockData.updateVehicleCampusStatus(plateNumber, status);
     await SyncQueueService().enqueue(
       type: 'gate_log',
       payload: payload,
@@ -733,14 +751,28 @@ class ApiService {
       });
       final res = await _post(uri, payload);
       if (res.statusCode == 200) {
+        lastVerifyError = null;
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] is Map<String, dynamic>) {
           return body['data'] as Map<String, dynamic>;
         }
         return body;
+      } else if (res.statusCode >= 500) {
+        lastVerifyError = 'Cannot connect to server (HTTP ${res.statusCode})';
+        return {
+          'status': 'error',
+          'error_type': 'network_error',
+          'message': lastVerifyError,
+        };
       }
     } catch (e) {
       debugPrint('[ApiService] Verify pass exception: $e');
+      lastVerifyError = 'Network connection failure ($e)';
+      return {
+        'status': 'error',
+        'error_type': 'network_error',
+        'message': lastVerifyError,
+      };
     }
     return null;
   }

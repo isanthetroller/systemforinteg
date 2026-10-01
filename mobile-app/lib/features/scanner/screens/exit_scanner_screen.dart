@@ -2,15 +2,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/scanner_controller_safe.dart';
-import '../../../core/widgets/driver_photo_view.dart';
-import '../../../core/widgets/plate_badge.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../services/api_service.dart';
 import '../../../theme/ncst_theme.dart';
+import '../dialogs/block_reason_dialog.dart';
 import '../dialogs/manual_qr_dialog.dart';
+import '../widgets/authorized_drivers_card.dart';
+import '../widgets/bottom_decision_bar.dart';
+import '../widgets/camera_viewfinder.dart';
+import '../widgets/scan_rejection_view.dart';
+import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
 
 enum ExitVerificationStatus {
@@ -25,12 +29,14 @@ class ExitScannerScreen extends StatefulWidget {
   final GuardUser currentGuard;
   final Function(AuditLogEntry)? onDecision;
   final VoidCallback? onReturnToDashboard;
+  final bool isEmbedded;
 
   const ExitScannerScreen({
     super.key,
     required this.currentGuard,
     this.onDecision,
     this.onReturnToDashboard,
+    this.isEmbedded = true,
   });
 
   @override
@@ -44,26 +50,17 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
   // Active Verification State
   bool _isVerifying = false;
+  bool _isSubmitting = false;
   ExitVerificationStatus? _resultStatus;
+  ScanRejectionDetails? _rejectionDetails;
   VehicleRecord? _verifiedVehicleRecord;
   String? _statusReason;
   // A visitor day pass leaving campus: Guard 2 checks visitors out as well as registered vehicles
   ScannedVisitorPass? _exitVisitor;
   final Set<int> _exitCheckedItems = <int>{};
-  // Which authorized driver is leaving (registered vehicles); defaults to the first one listed
-  String? _exitDriverName;
-
-  // Camera Stabilization State
-  String? _candidateExitQr;
-  DateTime? _candidateExitStartTime;
-  DateTime? _lastSeenExitTime;
-  double _exitStabilizationProgress = 0.0;
-  Timer? _exitStabilizationTicker;
-  bool _isExitStabilizing = false;
-  bool _isExitLocked = false;
-  bool _exitSteadyMode = true;
-  String _exitStatusPrompt = 'Align QR code inside frame';
-  final Duration _stabilizationDuration = const Duration(milliseconds: 900);
+  String _selectedDriverName = '';
+  String _selectedRelationship = '';
+  String _currentPhotoUrl = '';
 
   @override
   void initState() {
@@ -85,7 +82,6 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _exitStabilizationTicker?.cancel();
     _cameraController?.dispose();
     super.dispose();
   }
@@ -102,150 +98,151 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   }
 
   void _resetScanner() {
-    _exitStabilizationTicker?.cancel();
     setState(() {
       _resultStatus = null;
+      _rejectionDetails = null;
       _verifiedVehicleRecord = null;
       _statusReason = null;
       _exitVisitor = null;
       _exitCheckedItems.clear();
-      _exitDriverName = null;
+      _selectedDriverName = '';
+      _selectedRelationship = '';
+      _currentPhotoUrl = '';
       _isVerifying = false;
-      _candidateExitQr = null;
-      _candidateExitStartTime = null;
-      _lastSeenExitTime = null;
-      _exitStabilizationProgress = 0.0;
-      _isExitStabilizing = false;
-      _isExitLocked = false;
-      _exitStatusPrompt = 'Align QR code inside frame';
+      _isSubmitting = false;
     });
     _cameraController?.startSafely();
   }
 
-  void _handleExitBarcodeDetect(String raw) {
-    if (_isExitLocked || _isVerifying || _resultStatus != null) return;
+  @visibleForTesting
+  void testVerifyPass(String raw) => _verifyPass(raw);
 
-    if (!_exitSteadyMode) {
-      _isExitLocked = true;
-      _verifyPass(raw);
-      return;
-    }
-
-    final now = DateTime.now();
-    if (_candidateExitQr != raw) {
-      _candidateExitQr = raw;
-      _candidateExitStartTime = now;
-      _lastSeenExitTime = now;
-      _exitStabilizationProgress = 0.0;
-      _isExitStabilizing = true;
-      _exitStatusPrompt = 'HOLD CAMERA STEADY...';
-      _startExitStabilizationTimer();
-      if (mounted) setState(() {});
-    } else {
-      _lastSeenExitTime = now;
-    }
-  }
-
-  void _startExitStabilizationTimer() {
-    _exitStabilizationTicker?.cancel();
-    final targetMs = _stabilizationDuration.inMilliseconds;
-    const intervalMs = 30;
-
-    _exitStabilizationTicker = Timer.periodic(const Duration(milliseconds: intervalMs), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      if (_candidateExitQr == null || _candidateExitStartTime == null || _lastSeenExitTime == null) {
-        timer.cancel();
-        return;
-      }
-
-      final now = DateTime.now();
-      // Check if camera moved away (no detection heartbeat for > 400ms)
-      if (now.difference(_lastSeenExitTime!).inMilliseconds > 400) {
-        timer.cancel();
-        setState(() {
-          _candidateExitQr = null;
-          _candidateExitStartTime = null;
-          _isExitStabilizing = false;
-          _exitStabilizationProgress = 0.0;
-          _exitStatusPrompt = 'Camera moved • Hold steady to scan';
-        });
-        return;
-      }
-
-      final elapsedMs = now.difference(_candidateExitStartTime!).inMilliseconds;
-      final progress = (elapsedMs / targetMs).clamp(0.0, 1.0);
-
-      if (progress >= 1.0) {
-        timer.cancel();
-        final capturedCode = _candidateExitQr!;
-        setState(() {
-          _exitStabilizationProgress = 1.0;
-          _isExitStabilizing = false;
-          _isExitLocked = true;
-          _exitStatusPrompt = '✓ CAMERA STABILIZED • QR LOCKED';
-        });
-
-        Future.delayed(const Duration(milliseconds: 120), () {
-          if (!mounted) return;
-          _verifyPass(capturedCode);
-        });
-      } else {
-        setState(() {
-          _exitStabilizationProgress = progress;
-          _exitStatusPrompt = 'Hold steady... ${(progress * 100).toInt()}%';
-        });
-      }
-    });
-  }
-
-  /// Evaluates scanned QR code against the 6 verification criteria
+  /// Evaluates scanned QR code against real-time database state for exit eligibility
   Future<void> _verifyPass(String raw) async {
-    if (_isVerifying || _resultStatus != null) return;
+    if (_isVerifying || _isSubmitting || _resultStatus != null || _rejectionDetails != null) return;
 
     setState(() {
       _isVerifying = true;
+      _rejectionDetails = null;
+      _resultStatus = null;
+      _statusReason = null;
     });
 
     _cameraController?.stopSafely();
 
     final clean = raw.trim();
 
-    // Verify Registered Student / Faculty / Employee Vehicle
-    var registeredVehicle = await ApiService.lookupVehicle(clean);
-    if (registeredVehicle == null || !registeredVehicle.isParsedFromQr || registeredVehicle.ownerIdNumber == 'UNKNOWN') {
-      registeredVehicle = GateRepository().resolveVehicle(clean);
+    // Query live API for fresh status - live database is source of truth
+    VehicleRecord? registeredVehicle;
+    Map<String, dynamic>? verifyResult;
+    try {
+      registeredVehicle = await ApiService.lookupVehicle(clean);
+      verifyResult = await ApiService.verifyPassWithServer(qrCode: clean, plate: clean, gateType: 'Egress');
+    } catch (_) {
+      // Handled below
     }
-    if (registeredVehicle == null || registeredVehicle.ownerIdNumber == 'UNKNOWN') {
-      final verifyResult = await ApiService.verifyPassWithServer(qrCode: clean, plate: clean, gateType: 'Egress');
-      if (verifyResult != null && verifyResult['vehicle'] is Map<String, dynamic>) {
+
+    // Check if network error occurred on remote check
+    final isNetworkError = ApiService.lastVerifyError != null ||
+        (verifyResult != null && (verifyResult['error_type'] == 'network_error' || verifyResult['status'] == 'offline'));
+    if (isNetworkError) {
+      if (!mounted) return;
+      setState(() {
+        _isVerifying = false;
+        _rejectionDetails = ScanRejectionDetails(
+          type: ScanRejectionType.networkError,
+          title: 'Connection / API Error',
+          message: 'Unable to verify vehicle state in real-time with the database. Exit verification stopped for security.',
+          reason: ApiService.lastVerifyError ?? 'Network connection failure',
+        );
+      });
+      return;
+    }
+
+    if (registeredVehicle == null || (!registeredVehicle.isParsedFromQr && (registeredVehicle.ownerIdNumber == 'UNKNOWN' || registeredVehicle.ownerIdNumber.startsWith('VISITOR-')))) {
+      final local = GateRepository().resolveVehicle(clean);
+      if (local.isParsedFromQr || (local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-'))) {
+        registeredVehicle = local;
+      } else {
+        registeredVehicle = null;
+      }
+    }
+    if (verifyResult != null && verifyResult['vehicle'] is Map<String, dynamic>) {
+      final vMap = verifyResult['vehicle'] as Map<String, dynamic>;
+      if (registeredVehicle != null) {
+        registeredVehicle = registeredVehicle.copyWith(
+          campusStatus: (vMap['status'] ?? registeredVehicle.campusStatus)?.toString(),
+          registrationStatus: (vMap['registration_status'] ?? registeredVehicle.registrationStatus)?.toString(),
+          isBanned: vMap['is_banned'] != null ? (vMap['is_banned'] == 1 || vMap['is_banned'] == true || vMap['is_banned'] == '1') : registeredVehicle.isBanned,
+          isSyncedWithDb: true,
+        );
+      } else {
         registeredVehicle = VehicleRecord.fromQrJson(
-          verifyResult['vehicle'] as Map<String, dynamic>,
+          vMap,
           rawPayload: clean,
           isSyncedWithDb: true,
         );
       }
     }
+
+    // Reconcile currentlyInside with server verify response
+    if (verifyResult != null && verifyResult['currentlyInside'] != null && registeredVehicle != null) {
+      final currentlyInside = verifyResult['currentlyInside'] == true;
+      if (!currentlyInside && registeredVehicle.campusStatus == 'Inside Campus') {
+        registeredVehicle = registeredVehicle.copyWith(campusStatus: 'Outside');
+      } else if (currentlyInside && registeredVehicle.campusStatus != 'Inside Campus') {
+        registeredVehicle = registeredVehicle.copyWith(campusStatus: 'Inside Campus');
+      }
+    }
+
+    // If registered vehicle found
     if (registeredVehicle != null && registeredVehicle.isParsedFromQr && registeredVehicle.ownerIdNumber != 'UNKNOWN' && !registeredVehicle.ownerRole.contains('Guest')) {
       _evaluateRegisteredVehicle(registeredVehicle);
       return;
     }
 
-    // Not a registered vehicle: ask the server whether it is a visitor day pass that is leaving campus
-    final egress = await ApiService.verifyPassWithServer(qrCode: clean, plate: clean, gateType: 'Egress');
-    final visitor = ScannedVisitorPass.fromVerify(egress);
+    // Visitor Day Pass check
+    final visitor = ScannedVisitorPass.fromVerify(verifyResult);
     if (!mounted) return;
     if (visitor != null) {
+      if (visitor.isBlocked || (!visitor.accepted && visitor.reason.toLowerCase().contains('block'))) {
+        setState(() {
+          _isVerifying = false;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.blocked,
+            title: 'Visitor Pass Blocked',
+            message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before the vehicle can exit.',
+            plateNumber: visitor.plateNumber,
+            ownerName: visitor.visitorName,
+            statusBadge: 'BLOCKED',
+            reason: visitor.reason.isNotEmpty ? visitor.reason : 'Security Hold on visitor pass.',
+          );
+        });
+        return;
+      }
+
+      if (!visitor.accepted && (visitor.reason.contains('already been used') || visitor.reason.contains('already checked out') || visitor.reason.contains('outside'))) {
+        setState(() {
+          _isVerifying = false;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.duplicateExit,
+            title: 'Vehicle Not Inside Campus',
+            message: 'This visitor pass has already completed exit or was not recorded as inside campus. Duplicate exit operations are rejected.',
+            plateNumber: visitor.plateNumber,
+            ownerName: visitor.visitorName,
+            statusBadge: 'ALREADY EXITED',
+            reason: visitor.reason,
+          );
+        });
+        return;
+      }
+
       setState(() {
         _isVerifying = false;
         _exitVisitor = visitor;
         _exitCheckedItems.clear();
         _verifiedVehicleRecord = null;
-        _resultStatus = visitor.accepted
-            ? ExitVerificationStatus.valid
-            : (visitor.reason.contains('already been used') ? ExitVerificationStatus.alreadyUsed : ExitVerificationStatus.blocked);
+        _resultStatus = visitor.accepted ? ExitVerificationStatus.valid : ExitVerificationStatus.blocked;
         _statusReason = visitor.reason.isNotEmpty ? visitor.reason : null;
       });
       return;
@@ -254,59 +251,100 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     // Invalid / Unrecognized QR State
     setState(() {
       _isVerifying = false;
-      _resultStatus = ExitVerificationStatus.invalid;
-      _statusReason = 'Pass code "$clean" is not a registered vehicle or a visitor day pass.';
+      _rejectionDetails = ScanRejectionDetails(
+        type: ScanRejectionType.notFound,
+        title: 'Invalid / Unrecognized QR Code',
+        message: 'Pass code "$clean" is not a recognized vehicle or visitor pass in the campus registry.',
+        statusBadge: 'NOT FOUND',
+      );
     });
   }
 
   /// The server refused to record this exit, so it exists nowhere but on this phone's screen: tell the guard.
   void _showNotRecorded(String plate) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: NcstColors.crimson,
-        duration: const Duration(seconds: 10),
-        content: Text(
-          'NOT RECORDED: the exit of $plate was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
-          'Tell the security office.',
+    try {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.crimson,
+          duration: const Duration(seconds: 10),
+          content: Text(
+            'NOT RECORDED: the exit of $plate was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
+            'Tell the security office.',
+          ),
         ),
-      ),
-    );
+      );
+    } catch (_) {}
   }
 
   void _evaluateRegisteredVehicle(VehicleRecord vehicle) {
-    ExitVerificationStatus status = ExitVerificationStatus.valid;
-    String? reason;
-
-    if (vehicle.isAccessDenied) {
-      status = ExitVerificationStatus.valid;
-      reason = 'HOLD ALERT: Vehicle is banned/suspended. Exit allowed to clear campus, but incident must be reported.';
-    } else if (vehicle.campusStatus != null &&
-        vehicle.campusStatus!.toLowerCase().contains('outside')) {
-      reason = 'ATTENTION: No entry record found today — this vehicle was not recorded as inside campus.';
-    } else if (vehicle.hasActiveFlag) {
-      // Vehicle is cleared for exit log, but flagged warning must be shown
-      reason = 'FLAGGED VEHICLE: ${vehicle.flagReason ?? "Security flag active"}';
+    // 1. Strict BLOCKED Vehicle Check: Guard cannot override
+    if (vehicle.isBlocked) {
+      setState(() {
+        _isVerifying = false;
+        _verifiedVehicleRecord = null;
+        _resultStatus = null;
+        _rejectionDetails = ScanRejectionDetails(
+          type: ScanRejectionType.blocked,
+          title: 'Vehicle Blocked',
+          message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before the vehicle can exit.',
+          plateNumber: vehicle.plateNumber,
+          ownerName: vehicle.ownerName,
+          statusBadge: vehicle.campusStatus ?? 'BLOCKED',
+          reason: vehicle.isBanned
+              ? 'Vehicle is marked as BANNED in the system database.'
+              : (vehicle.registrationStatus?.toLowerCase() == 'suspended'
+                  ? 'Registration is SUSPENDED.'
+                  : (vehicle.flagReason ?? 'Administrative hold on vehicle.')),
+        );
+      });
+      return;
     }
 
+    // 2. Strict Duplicate Exit Check: Vehicle must currently be inside campus
+    if (!vehicle.isInsideCampus) {
+      setState(() {
+        _isVerifying = false;
+        _verifiedVehicleRecord = null;
+        _resultStatus = null;
+        _rejectionDetails = ScanRejectionDetails(
+          type: ScanRejectionType.duplicateExit,
+          title: 'Vehicle Not Inside Campus',
+          message: 'This vehicle is not currently inside campus (Status: ${vehicle.campusStatus ?? 'Outside'}). A duplicate exit scan cannot be processed.',
+          plateNumber: vehicle.plateNumber,
+          ownerName: vehicle.ownerName,
+          statusBadge: vehicle.campusStatus ?? 'Outside',
+          reason: 'Vehicle must enter through Guard 1 before another exit can be granted.',
+        );
+      });
+      return;
+    }
+
+    // 3. Vehicle is eligible for exit
     setState(() {
       _isVerifying = false;
+      _rejectionDetails = null;
       _verifiedVehicleRecord = vehicle;
       _exitVisitor = null;
-      _exitDriverName = vehicle.authorizedDrivers.isNotEmpty ? vehicle.authorizedDrivers.first.fullName : null;
-      _resultStatus = status;
-      _statusReason = reason;
-    });
-  }
+      _resultStatus = ExitVerificationStatus.valid;
+      _statusReason = vehicle.hasActiveFlag ? 'FLAGGED VEHICLE: ${vehicle.flagReason ?? "Security flag active"}' : null;
 
-  /// The driver the guard picked (or the first listed one) for a registered vehicle that is leaving.
-  AuthorizedDriver? _selectedExitDriver(VehicleRecord v) {
-    if (v.authorizedDrivers.isEmpty) return null;
-    final wanted = _exitDriverName?.trim().toLowerCase();
-    for (final d in v.authorizedDrivers) {
-      if (d.fullName.trim().toLowerCase() == wanted) return d;
-    }
-    return v.authorizedDrivers.first;
+      if (vehicle.authorizedDrivers.isNotEmpty) {
+        final first = vehicle.authorizedDrivers.first;
+        _selectedDriverName = first.fullName;
+        _selectedRelationship = first.relationship;
+        final isOwner = first.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+            first.relationship.toLowerCase().contains('self') ||
+            first.relationship.toLowerCase().contains('owner');
+        _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
+            ? first.photoUrl!
+            : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : '');
+      } else {
+        _selectedDriverName = vehicle.ownerName;
+        _selectedRelationship = 'Registered Owner';
+        _currentPhotoUrl = vehicle.ownerPhotoUrl ?? '';
+      }
+    });
   }
 
   bool get _exitItemsAllChecked {
@@ -370,61 +408,263 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   }
 
   Future<void> _handleConfirmExit() async {
+    if (_isSubmitting) return;
+
     if (_exitVisitor != null) {
       await _confirmVisitorExit();
       return;
     }
+    final v = _verifiedVehicleRecord;
+    if (v == null) return;
+
+    // Strict validation check before confirming exit
+    if (v.isBlocked || !v.isInsideCampus) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: NcstColors.crimson,
+          content: Text('ACTION DENIED: Vehicle is not eligible for exit.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    if (v.hasActiveFlag) {
+      final shouldProceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Row(
+            children: const [
+              Icon(Icons.warning_amber_rounded, color: NcstColors.crimson, size: 24),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Flagged Vehicle Notice', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Vehicle ${v.plateNumber} has an active security flag.',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Reason: ${v.flagReason ?? "Security flag on file"}',
+                style: const TextStyle(color: NcstColors.slate700),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Do you wish to permit exit despite the active flag? Ensure security protocol has been followed.',
+                style: TextStyle(fontSize: 13, color: NcstColors.slate600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('CANCEL', style: TextStyle(color: NcstColors.slate600, fontWeight: FontWeight.w700)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: NcstColors.goldDark,
+                foregroundColor: NcstColors.white,
+              ),
+              child: const Text('PERMIT EXIT', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldProceed != true) {
+        setState(() => _isSubmitting = false);
+        return;
+      }
+      if (!mounted) return;
+    }
+
     final now = DateTime.now();
-    AuditLogEntry? exitEntry;
+    final driver = _selectedDriverName.isNotEmpty ? _selectedDriverName : v.ownerName;
+    final rel = _selectedRelationship.isNotEmpty ? _selectedRelationship : 'Registered Owner';
 
-    if (_verifiedVehicleRecord != null) {
-      final v = _verifiedVehicleRecord!;
-      final chosen = _selectedExitDriver(v);
-      final driver = chosen?.fullName ?? v.ownerName;
-      final rel = chosen?.relationship ?? 'Self (Owner)';
+    final exitEntry = AuditLogEntry(
+      id: 'LOG-${now.millisecondsSinceEpoch.toString().substring(7)}',
+      plateNumber: v.plateNumber,
+      vehicleType: v.vehicleType,
+      ownerName: v.ownerName,
+      driverName: driver,
+      driverRelationship: rel,
+      timeIn: now.subtract(const Duration(hours: 1)),
+      action: 'Exit Approved',
+      status: GateStatus.exited,
+      blockReason: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : null,
+    );
 
-      exitEntry = AuditLogEntry(
-        id: 'LOG-${now.millisecondsSinceEpoch}',
+    final recorded = await ApiService.postGateLog(
+      plateNumber: v.plateNumber,
+      driverName: driver,
+      driverRelationship: rel,
+      gatePoint: widget.currentGuard.assignedGate,
+      action: 'Exit Approved',
+      status: 'Outside',
+      guardName: widget.currentGuard.fullName,
+      notes: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : 'Standard student/faculty exit',
+      vehicleType: v.vehicleType,
+      ownerName: v.ownerName,
+      driverId: v.driverIdForName(driver),
+    );
+    if (!recorded) _showNotRecorded(v.plateNumber);
+
+    widget.onDecision?.call(exitEntry);
+
+    if (mounted) {
+      setState(() => _isSubmitting = false);
+      try {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text('EXIT CLEARED: ${v.plateNumber} ($driver)'),
+            backgroundColor: NcstColors.green,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } catch (_) {}
+      if (!widget.isEmbedded && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      } else if (widget.onReturnToDashboard != null) {
+        widget.onReturnToDashboard!();
+      } else {
+        _resetScanner();
+      }
+    }
+  }
+
+  void _showBlockDialog() {
+    if (_verifiedVehicleRecord == null && _exitVisitor == null) return;
+    BlockReasonDialog.show(
+      context,
+      _executeBlock,
+      title: 'Block Vehicle Exit',
+      subtitle: 'Select reason for exit hold / denial:',
+    );
+  }
+
+  void _executeBlock(String reason) {
+    final v = _verifiedVehicleRecord;
+    final visitor = _exitVisitor;
+
+    if (v != null) {
+      final driver = _selectedDriverName.isNotEmpty ? _selectedDriverName : v.ownerName;
+      final rel = _selectedRelationship.isNotEmpty ? _selectedRelationship : 'Registered Owner';
+
+      final blockedEntry = AuditLogEntry(
+        id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
         plateNumber: v.plateNumber,
         vehicleType: v.vehicleType,
         ownerName: v.ownerName,
         driverName: driver,
         driverRelationship: rel,
-        timeIn: now,
-        action: 'Exit Approved',
-        status: GateStatus.exited,
-        blockReason: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : null,
+        timeIn: DateTime.now(),
+        action: 'Exit Denied',
+        status: GateStatus.blocked,
+        blockReason: reason,
       );
 
-      final recorded = await ApiService.postGateLog(
+      widget.onDecision?.call(blockedEntry);
+
+      ApiService.postGateLog(
         plateNumber: v.plateNumber,
         driverName: driver,
         driverRelationship: rel,
         gatePoint: widget.currentGuard.assignedGate,
-        action: 'Exit Approved',
-        status: 'Outside',
+        action: 'Exit Denied',
+        status: 'Blocked',
+        notes: reason,
         guardName: widget.currentGuard.fullName,
-        notes: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : 'Standard student/faculty exit',
         vehicleType: v.vehicleType,
         ownerName: v.ownerName,
         driverId: v.driverIdForName(driver),
       );
-      if (!recorded) _showNotRecorded(v.plateNumber);
-    }
+      ApiService.reportIncident(
+        plateNumber: v.plateNumber,
+        driverName: driver,
+        reason: reason,
+        gatePoint: widget.currentGuard.assignedGate,
+        notes: 'Exit blocked at gate verification: $reason',
+      );
 
-    if (exitEntry != null) {
-      widget.onDecision?.call(exitEntry);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.crimson,
+          content: Text(
+            'EXIT BLOCKED: ${v.plateNumber} ($reason)',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else if (visitor != null) {
+      final blockedEntry = AuditLogEntry(
+        id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+        plateNumber: visitor.plateNumber,
+        vehicleType: 'Visitor Vehicle',
+        ownerName: visitor.visitorName,
+        driverName: visitor.visitorName,
+        driverRelationship: 'Visitor (Day Pass)',
+        timeIn: DateTime.now(),
+        action: 'Exit Denied',
+        status: GateStatus.blocked,
+        blockReason: reason,
+      );
+
+      widget.onDecision?.call(blockedEntry);
+
+      ApiService.postGateLog(
+        plateNumber: visitor.plateNumber,
+        driverName: visitor.visitorName,
+        driverRelationship: 'Visitor (Day Pass)',
+        gatePoint: widget.currentGuard.assignedGate,
+        action: 'Exit Denied',
+        status: 'Blocked',
+        notes: reason,
+        guardName: widget.currentGuard.fullName,
+        vehicleType: 'Visitor Vehicle',
+        ownerName: visitor.visitorName,
+        visitorPassId: visitor.id,
+      );
+      ApiService.reportIncident(
+        plateNumber: visitor.plateNumber,
+        driverName: visitor.visitorName,
+        reason: reason,
+        gatePoint: widget.currentGuard.assignedGate,
+        notes: 'Visitor exit blocked: $reason',
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.crimson,
+          content: Text(
+            'VISITOR EXIT BLOCKED: ${visitor.plateNumber} ($reason)',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Vehicle exit confirmed and logged to server.'),
-          backgroundColor: NcstColors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-      if (widget.onReturnToDashboard != null) {
+      if (!widget.isEmbedded && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      } else if (widget.onReturnToDashboard != null) {
         widget.onReturnToDashboard!();
       } else {
         _resetScanner();
@@ -434,336 +674,257 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
   @override
   Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final isCompact = media.size.width < 360;
+    final Widget content;
+    if (_isVerifying) {
+      content = const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: NcstColors.navy),
+            SizedBox(height: 14),
+            Text(
+              'Verifying Pass on Server...',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                color: NcstColors.slate700,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_rejectionDetails != null) {
+      content = ScanRejectionView(
+        details: _rejectionDetails!,
+        onScanAnother: _resetScanner,
+        buttonLabel: 'SCAN ANOTHER VEHICLE',
+      );
+    } else if (_resultStatus == null) {
+      content = _buildViewfinderSection();
+    } else {
+      content = _buildScannedVerificationBody();
+    }
 
-    return Scaffold(
-      backgroundColor: NcstColors.slate100,
-      appBar: AppBar(
-        title: const Text('Exit Pass Scanner'),
-        backgroundColor: NcstColors.navy,
-        foregroundColor: NcstColors.white,
-        actions: [
+    final appBar = AppBar(
+      leading: (widget.isEmbedded && widget.onReturnToDashboard != null)
+          ? IconButton(
+              icon: const Icon(Icons.arrow_back),
+              tooltip: 'Back to Dashboard',
+              onPressed: widget.onReturnToDashboard,
+            )
+          : null,
+      title: Text(_rejectionDetails != null
+          ? 'Scan Rejected'
+          : (_resultStatus == null ? 'Scan Driver QR Pass' : 'Scanned Verification')),
+      backgroundColor: _rejectionDetails != null && _rejectionDetails!.type == ScanRejectionType.blocked
+          ? NcstColors.crimson
+          : NcstColors.navy,
+      foregroundColor: NcstColors.white,
+      actions: [
+        if (_resultStatus == null && _rejectionDetails == null) ...[
           IconButton(
-            icon: const Icon(Icons.keyboard_outlined),
             tooltip: 'Enter QR Manually',
+            icon: const Icon(Icons.keyboard_outlined, color: NcstColors.white),
             onPressed: () => ManualQrDialog.show(context, _verifyPass),
           ),
           IconButton(
-            icon: Icon(_isTorchOn ? Icons.flash_on : Icons.flash_off),
             tooltip: 'Toggle Flashlight',
-            onPressed: () {
+            icon: Icon(
+              _isTorchOn ? Icons.flash_on : Icons.flash_off,
+              color: _isTorchOn ? NcstColors.gold : NcstColors.white,
+            ),
+            onPressed: () async {
               try {
-                _cameraController?.toggleTorch();
-                setState(() {
-                  _isTorchOn = !_isTorchOn;
-                });
-              } catch (_) {}
+                await _cameraController?.toggleTorch();
+                setState(() => _isTorchOn = !_isTorchOn);
+              } catch (_) {
+                setState(() => _isTorchOn = !_isTorchOn);
+              }
             },
           ),
-          if (widget.onReturnToDashboard != null)
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: widget.onReturnToDashboard,
-            ),
-        ],
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.all(isCompact ? 12 : 16),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Camera Viewfinder Box (or Camera Error)
-                  _buildCameraViewfinder(isCompact),
-                  const SizedBox(height: 14),
-
-                  // Verification Result Dossier
-                  if (_resultStatus != null) ...[
-                    _exitVisitor != null ? _buildVisitorExitSection() : _buildVerificationResultCard(isCompact),
-                    const SizedBox(height: 16),
-                  ],
-
-                  // Production Scanner Clearance Guidance
-                  _buildScannerHelperCard(),
-                ],
-              ),
+        ] else
+          TextButton.icon(
+            onPressed: _resetScanner,
+            icon: const Icon(Icons.qr_code_scanner, color: NcstColors.gold, size: 18),
+            label: const Text(
+              'Re-Scan QR',
+              style: TextStyle(color: NcstColors.gold, fontWeight: FontWeight.w700),
             ),
           ),
+      ],
+    );
+
+    if (widget.isEmbedded) {
+      return Container(
+        color: NcstColors.slate50,
+        child: Column(
+          children: [
+            appBar,
+            Expanded(child: content),
+          ],
         ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: NcstColors.slate50,
+      appBar: appBar,
+      body: SafeArea(
+        child: content,
       ),
     );
   }
 
-  Widget _buildCameraViewfinder(bool isCompact) {
-    Color borderColor;
-    if (_isExitLocked) {
-      borderColor = NcstColors.green;
-    } else if (_isExitStabilizing) {
-      borderColor = const Color(0xFF38BDF8);
-    } else {
-      borderColor = NcstColors.navyLight;
+  Widget _buildViewfinderSection() {
+    return CameraViewfinder(
+      cameraController: _cameraController,
+      cameraHasError: _cameraHasError,
+      onQrDetected: _verifyPass,
+      onManualQrPressed: () => ManualQrDialog.show(context, _verifyPass),
+      onFlipCameraPressed: () async {
+        try {
+          await _cameraController?.switchCamera();
+        } catch (_) {}
+      },
+    );
+  }
+
+  Widget _buildScannedVerificationBody() {
+    if (_exitVisitor != null) {
+      return _buildVisitorExitSection();
     }
 
-    return Column(
-      children: [
-        Container(
-          height: 205,
-          decoration: BoxDecoration(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: borderColor,
-              width: _isExitStabilizing || _isExitLocked ? 2.5 : 2.0,
-            ),
-            boxShadow: _isExitStabilizing
-                ? [
-                    BoxShadow(
-                      color: const Color(0xFF38BDF8).withValues(alpha: 0.35),
-                      blurRadius: 12,
-                      spreadRadius: 2,
-                    ),
-                  ]
-                : null,
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            alignment: Alignment.center,
+    final vehicle = _verifiedVehicleRecord;
+    if (vehicle == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (!_cameraHasError && _cameraController != null)
-                MobileScanner(
-                  controller: _cameraController!,
-                  onDetect: (capture) {
-                    final barcodes = capture.barcodes;
-                    if (barcodes.isNotEmpty) {
-                      final raw = barcodes.first.rawValue;
-                      if (raw != null && raw.isNotEmpty) {
-                        _handleExitBarcodeDetect(raw);
-                      }
-                    }
-                  },
-                )
-              else
-                const Center(
-                  child: Icon(Icons.qr_code_scanner, size: 64, color: NcstColors.slate400),
-                ),
-
-              // Reticle Viewport
-              Container(
-                width: 220,
-                height: 130,
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: _isExitLocked
-                        ? NcstColors.green
-                        : (_isExitStabilizing ? const Color(0xFF38BDF8) : NcstColors.gold),
-                    width: _isExitStabilizing ? 2.5 : 2,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Center(
-                  child: _isExitStabilizing
-                      ? Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.5,
-                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF38BDF8)),
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'STABILIZING CAMERA (${(_exitStabilizationProgress * 100).toInt()}%)',
-                              style: const TextStyle(
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                          ],
-                        )
-                      : (_isExitLocked
-                          ? const Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.check_circle_rounded, color: NcstColors.green, size: 26),
-                                SizedBox(height: 4),
-                                Text(
-                                  'QR CODE LOCKED',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                    color: NcstColors.green,
-                                    letterSpacing: 0.8,
-                                  ),
-                                ),
-                              ],
-                            )
-                          : const Text(
-                              'ALIGN PASS QR CODE',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: 0.8,
-                              ),
-                            )),
+              const Icon(Icons.help_outline_rounded, color: NcstColors.crimson, size: 56),
+              const SizedBox(height: 14),
+              Text(
+                _statusReason ?? 'Pass is invalid or unrecognized.',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: NcstColors.slate800),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              ElevatedButton.icon(
+                onPressed: _resetScanner,
+                icon: const Icon(Icons.qr_code_scanner, size: 18),
+                label: const Text('SCAN ANOTHER PASS'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: NcstColors.navy,
+                  foregroundColor: NcstColors.white,
                 ),
               ),
-
-              // Top HUD Banner with prompt & progress
-              Positioned(
-                top: 8,
-                left: 12,
-                right: 12,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: _isExitLocked
-                        ? NcstColors.green.withValues(alpha: 0.92)
-                        : (_isExitStabilizing
-                            ? const Color(0xFF0369A1).withValues(alpha: 0.92)
-                            : Colors.black.withValues(alpha: 0.65)),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _isExitLocked
-                          ? Colors.white
-                          : (_isExitStabilizing ? const Color(0xFF38BDF8) : Colors.white24),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_isExitStabilizing) ...[
-                        const SizedBox(
-                          width: 11,
-                          height: 11,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ] else if (_isExitLocked) ...[
-                        const Icon(Icons.check_circle_rounded, color: Colors.white, size: 13),
-                        const SizedBox(width: 5),
-                      ] else ...[
-                        const Icon(Icons.center_focus_strong, color: Colors.white70, size: 12),
-                        const SizedBox(width: 5),
-                      ],
-                      Flexible(
-                        child: Text(
-                          _exitStatusPrompt,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.3,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Linear Progress Bar at bottom of viewfinder
-              if (_isExitStabilizing)
-                Positioned(
-                  bottom: 12,
-                  left: 24,
-                  right: 24,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: _exitStabilizationProgress,
-                      backgroundColor: Colors.white24,
-                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF38BDF8)),
-                      minHeight: 4,
-                    ),
-                  ),
-                ),
-
-              if (_isVerifying)
-                Container(
-                  color: Colors.black.withValues(alpha: 0.7),
-                  child: const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(color: NcstColors.gold),
-                        SizedBox(height: 10),
-                        Text(
-                          'VERIFYING PASS ON SERVER...',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
-        const SizedBox(height: 6),
-        // Guard Stabilization Mode Toggle Pill
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            InkWell(
-              onTap: () {
-                setState(() {
-                  _exitSteadyMode = !_exitSteadyMode;
-                  _exitStabilizationTicker?.cancel();
-                  _isExitStabilizing = false;
-                  _candidateExitQr = null;
-                  _candidateExitStartTime = null;
-                  _lastSeenExitTime = null;
-                  _exitStabilizationProgress = 0.0;
-                  _exitStatusPrompt = _exitSteadyMode ? 'Align QR code inside frame' : 'Instant detection active';
-                });
-              },
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _exitSteadyMode ? const Color(0xFFE0F2FE) : NcstColors.slate200,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _exitSteadyMode ? const Color(0xFF0284C7) : NcstColors.slate300,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _exitSteadyMode ? Icons.motion_photos_paused_rounded : Icons.flash_on_rounded,
-                      size: 13,
-                      color: _exitSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate600,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      _exitSteadyMode ? 'Camera Steady Hold: ON (~0.9s)' : 'Instant Detection: ON',
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: _exitSteadyMode ? const Color(0xFF0369A1) : NcstColors.slate700,
+      );
+    }
+
+    final isDesktop = MediaQuery.of(context).size.width >= 880;
+
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1000),
+                child: isDesktop
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: ScannedPersonCard(
+                              vehicle: vehicle,
+                              driverName: _selectedDriverName,
+                              relationship: _selectedRelationship,
+                              photoUrl: _currentPhotoUrl,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            flex: 6,
+                            child: AuthorizedDriversCard(
+                              vehicle: vehicle,
+                              selectedDriverName: _selectedDriverName,
+                              onSelectOwner: () {
+                                setState(() {
+                                  _selectedDriverName = vehicle.ownerName;
+                                  _selectedRelationship = 'Registered Owner';
+                                  _currentPhotoUrl = vehicle.ownerPhotoUrl ?? '';
+                                });
+                              },
+                              onSelectDriver: (driver) {
+                                setState(() {
+                                  _selectedDriverName = driver.fullName;
+                                  _selectedRelationship = driver.relationship;
+                                  final isOwner = driver.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+                                      driver.relationship.toLowerCase().contains('self') ||
+                                      driver.relationship.toLowerCase().contains('owner');
+                                  _currentPhotoUrl = (driver.photoUrl != null && driver.photoUrl!.isNotEmpty)
+                                      ? driver.photoUrl!
+                                      : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : '');
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          ScannedPersonCard(
+                            vehicle: vehicle,
+                            driverName: _selectedDriverName,
+                            relationship: _selectedRelationship,
+                            photoUrl: _currentPhotoUrl,
+                          ),
+                          const SizedBox(height: 16),
+                          AuthorizedDriversCard(
+                            vehicle: vehicle,
+                            selectedDriverName: _selectedDriverName,
+                            onSelectOwner: () {
+                              setState(() {
+                                _selectedDriverName = vehicle.ownerName;
+                                _selectedRelationship = 'Registered Owner';
+                                _currentPhotoUrl = vehicle.ownerPhotoUrl ?? '';
+                              });
+                            },
+                            onSelectDriver: (driver) {
+                              setState(() {
+                                _selectedDriverName = driver.fullName;
+                                _selectedRelationship = driver.relationship;
+                                final isOwner = driver.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+                                    driver.relationship.toLowerCase().contains('self') ||
+                                    driver.relationship.toLowerCase().contains('owner');
+                                _currentPhotoUrl = (driver.photoUrl != null && driver.photoUrl!.isNotEmpty)
+                                    ? driver.photoUrl!
+                                    : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : '');
+                              });
+                            },
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
-                ),
               ),
             ),
-          ],
+          ),
+        ),
+        BottomDecisionBar(
+          onBlock: _showBlockDialog,
+          onCleared: _handleConfirmExit,
+          isClearedEnabled: vehicle.isEligibleForExit && !_isSubmitting,
+          clearedLabel: 'CLEARED (EXIT)',
+          disabledLabel: vehicle.isBlocked
+              ? 'VEHICLE BLOCKED'
+              : (!vehicle.isInsideCampus ? 'NOT INSIDE CAMPUS' : null),
+          clearedIcon: Icons.check_circle_rounded,
+          clearedColor: NcstColors.green,
         ),
       ],
     );
@@ -773,375 +934,35 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     final pass = _exitVisitor!;
     final canConfirm = pass.canAdmit && _exitItemsAllChecked;
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ScannedVisitorCard(
-          pass: pass,
-          checkedItems: _exitCheckedItems,
-          isExit: true,
-          onToggleItem: (i) => setState(() {
-            if (!_exitCheckedItems.remove(i)) _exitCheckedItems.add(i);
-          }),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _resetScanner,
-                child: const Text('SCAN ANOTHER'),
-              ),
-            ),
-            if (pass.canAdmit) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 2,
-                child: ElevatedButton.icon(
-                  onPressed: canConfirm ? _handleConfirmExit : null,
-                  icon: const Icon(Icons.check, size: 18),
-                  label: Text(canConfirm ? 'CONFIRM EXIT' : 'TICK ITEMS (${_exitCheckedItems.length}/${pass.items.length})'),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: ScannedVisitorCard(
+                  pass: pass,
+                  checkedItems: _exitCheckedItems,
+                  isExit: true,
+                  onToggleItem: (i) => setState(() {
+                    if (!_exitCheckedItems.remove(i)) _exitCheckedItems.add(i);
+                  }),
                 ),
               ),
-            ],
-          ],
+            ),
+          ),
+        ),
+        BottomDecisionBar(
+          onBlock: _showBlockDialog,
+          onCleared: _confirmVisitorExit,
+          isClearedEnabled: canConfirm,
+          clearedLabel: 'CLEARED (VISITOR EXIT)',
+          disabledLabel: !pass.canAdmit
+              ? 'EXIT NOT ALLOWED'
+              : 'TICK ITEMS (${_exitCheckedItems.length}/${pass.items.length})',
         ),
       ],
-    );
-  }
-
-  Widget _buildVerificationResultCard(bool isCompact) {
-    Color bannerColor;
-    Color textColor;
-    IconData icon;
-    String statusTitle;
-
-    switch (_resultStatus!) {
-      case ExitVerificationStatus.valid:
-        bannerColor = NcstColors.greenLight;
-        textColor = NcstColors.green;
-        icon = Icons.check_circle_rounded;
-        statusTitle = 'VALID — CLEARED FOR EXIT';
-        break;
-      case ExitVerificationStatus.blocked:
-        bannerColor = NcstColors.crimsonLight;
-        textColor = NcstColors.crimson;
-        icon = Icons.block_rounded;
-        statusTitle = 'PASS BLOCKED — ACCESS HOLD';
-        break;
-      case ExitVerificationStatus.expired:
-        bannerColor = NcstColors.crimsonLight;
-        textColor = NcstColors.crimson;
-        icon = Icons.timer_off_rounded;
-        statusTitle = 'PASS EXPIRED — OVERTIME STAY';
-        break;
-      case ExitVerificationStatus.alreadyUsed:
-        bannerColor = NcstColors.slate200;
-        textColor = NcstColors.slate800;
-        icon = Icons.history_rounded;
-        statusTitle = 'ALREADY CHECKED OUT';
-        break;
-      case ExitVerificationStatus.invalid:
-        bannerColor = NcstColors.crimsonLight;
-        textColor = NcstColors.crimson;
-        icon = Icons.help_outline_rounded;
-        statusTitle = 'UNRECOGNIZED / INVALID QR';
-        break;
-    }
-
-    final isFlagged = _verifiedVehicleRecord != null && _verifiedVehicleRecord!.hasActiveFlag;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: NcstColors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: textColor.withValues(alpha: 0.4), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.all(isCompact ? 14 : 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Status Header Banner
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: bannerColor,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: textColor, size: 22),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    statusTitle,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      color: textColor,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // If Flagged Student/Employee: Show Prominent Flag Alert Banner!
-          if (isFlagged) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: NcstColors.crimsonLight,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: NcstColors.crimson, width: 1.5),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded, color: NcstColors.crimson, size: 20),
-                      const SizedBox(width: 6),
-                      Text(
-                        'FLAGGED ${_verifiedVehicleRecord!.categoryDisplay.toUpperCase()}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                          color: NcstColors.crimson,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Infraction: ${_verifiedVehicleRecord!.flagReason ?? "Security flag active"}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: NcstColors.slate800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          if (_statusReason != null && !isFlagged) ...[
-            const SizedBox(height: 10),
-            Text(
-              _statusReason!,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: NcstColors.slate700,
-              ),
-            ),
-          ],
-          const Divider(height: 24),
-
-          // Registered Vehicle Details
-          if (_verifiedVehicleRecord != null) ...[
-            _buildVehicleDossier(_verifiedVehicleRecord!),
-          ],
-          const SizedBox(height: 16),
-          // Action Buttons: Scan Another & Confirm Exit
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _resetScanner,
-                  child: const Text('SCAN ANOTHER'),
-                ),
-              ),
-              if (_resultStatus == ExitVerificationStatus.valid) ...[
-                const SizedBox(width: 10),
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton.icon(
-                    onPressed: _handleConfirmExit,
-                    icon: const Icon(Icons.check, size: 18),
-                    label: const Text('CONFIRM EXIT'),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVehicleDossier(VehicleRecord v) {
-    final driver = _selectedExitDriver(v);
-
-    return Column(
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            DriverPhotoView(
-              photoUrl: driver?.photoUrl ?? v.ownerPhotoUrl ?? '',
-              size: 72,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    v.categoryDisplay.toUpperCase(),
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: NcstColors.navy,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                  Text(
-                    driver?.fullName ?? v.ownerName,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: NcstColors.slate900,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    v.makeModelColor,
-                    style: const TextStyle(fontSize: 11, color: NcstColors.slate600),
-                  ),
-                  const SizedBox(height: 4),
-                  PlateBadge(plateNumber: v.plateNumber),
-                ],
-              ),
-            ),
-          ],
-        ),
-        if (v.authorizedDrivers.length > 1) ...[
-          const SizedBox(height: 10),
-          const Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'WHO IS DRIVING OUT?',
-              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: NcstColors.navy, letterSpacing: 0.8),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                for (var i = 0; i < v.authorizedDrivers.length; i++)
-                  ChoiceChip(
-                    key: ValueKey('exit-driver-$i'),
-                    label: Text(v.authorizedDrivers[i].fullName),
-                    selected: v.authorizedDrivers[i].fullName == driver?.fullName,
-                    onSelected: (_) => setState(() => _exitDriverName = v.authorizedDrivers[i].fullName),
-                  ),
-              ],
-            ),
-          ),
-        ],
-        const SizedBox(height: 12),
-
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: NcstColors.slate50,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            children: [
-              _buildRow('Owner ID:', v.ownerIdNumber),
-              _buildRow('Sticker Year:', '2026 Active'),
-              _buildRow('User Role:', v.ownerRole),
-              if (v.hasActiveFlag)
-                _buildRow('Flag Status:', 'FLAGGED ON CAMPUS', textColor: NcstColors.crimson),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRow(String label, String value, {Color? textColor}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: NcstColors.slate600)),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: textColor ?? NcstColors.slate900,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildScannerHelperCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: NcstColors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: NcstColors.slate200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: const [
-              Icon(Icons.qr_code_scanner, size: 18, color: NcstColors.navy),
-              SizedBox(width: 8),
-              Text(
-                'Vehicle Exit Clearance Instructions',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: NcstColors.navyDark,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Present registered vehicle QR pass decal to the camera. The system verifies student/faculty registration, active status, driver credentials, and logs campus exit.',
-            style: TextStyle(fontSize: 11.5, color: NcstColors.slate600, height: 1.4),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => ManualQrDialog.show(context, _verifyPass),
-              icon: const Icon(Icons.keyboard_outlined, size: 18),
-              label: const Text('ENTER VEHICLE PLATE / QR MANUALLY'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: NcstColors.navy,
-                side: const BorderSide(color: NcstColors.navy),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

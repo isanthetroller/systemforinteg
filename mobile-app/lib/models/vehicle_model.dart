@@ -66,6 +66,7 @@ class VehicleRecord {
   final String? flagReason;
   final DateTime? flaggedAt;
   final bool isBanned;
+  final String? registrationStatus;
   final String? campusStatus;
   final bool isAntiPassback;
 
@@ -89,6 +90,7 @@ class VehicleRecord {
     this.flagReason,
     this.flaggedAt,
     this.isBanned = false,
+    this.registrationStatus = 'Active',
     this.campusStatus,
     this.isAntiPassback = false,
   });
@@ -111,13 +113,29 @@ class VehicleRecord {
   bool get canBeFlagged => category == CampusUserCategory.student || category == CampusUserCategory.employee;
   bool get hasActiveFlag => canBeFlagged && isFlagged;
 
-  /// Operational security rule: Banned, suspended, revoked, or forged vehicles/passes must be blocked at gate
+  /// Operational security rule: Banned, suspended, revoked, forged, or blocked vehicles/passes must be blocked at gate
   bool get isAccessDenied => isBanned ||
       (campusStatus != null && (
+          campusStatus!.toLowerCase().contains('block') ||
+          campusStatus!.toLowerCase().contains('alert') ||
           campusStatus!.toLowerCase().contains('ban') ||
           campusStatus!.toLowerCase().contains('suspend') ||
           campusStatus!.toLowerCase().contains('revok') ||
           campusStatus!.toLowerCase().contains('forg')));
+
+  /// True if vehicle is in blocked / held status
+  bool get isBlocked => isAccessDenied;
+
+  /// True if vehicle is currently recorded as inside campus
+  bool get isInsideCampus =>
+      isAntiPassback ||
+      (campusStatus != null && campusStatus!.toLowerCase().contains('inside'));
+
+  /// True if vehicle is eligible for entrance (not currently inside and not blocked)
+  bool get isEligibleForEntry => !isInsideCampus && !isBlocked;
+
+  /// True if vehicle is eligible for exit (currently inside and not blocked)
+  bool get isEligibleForExit => isInsideCampus && !isBlocked;
 
   /// Pass validity evaluation: Is this an unverified or unregistered visitor vehicle?
   bool get isUnregistered =>
@@ -222,16 +240,23 @@ class VehicleRecord {
       ));
     }
 
+    final statusStr = (json['status'] ?? json['campusStatus'] ?? json['campus_status'] ?? '').toString().toLowerCase();
+    final regStatusStr = (json['registrationStatus'] ?? json['registration_status'] ?? '').toString().toLowerCase();
+
     final isBanned = json['isBanned'] == true ||
         json['is_banned'] == 1 ||
         json['is_banned'] == '1' ||
         json['is_banned'] == true ||
-        (json['status'] ?? '').toString().toLowerCase().contains('suspend') ||
-        (json['status'] ?? '').toString().toLowerCase().contains('ban');
+        statusStr.contains('suspend') ||
+        statusStr.contains('ban') ||
+        statusStr.contains('block') ||
+        regStatusStr.contains('suspend') ||
+        regStatusStr.contains('block') ||
+        regStatusStr.contains('inactive');
 
     final campusStatus = (json['status'] ?? json['campusStatus'] ?? json['campus_status'])?.toString();
     final isAntiPassback = json['currentlyInside'] == true ||
-        (campusStatus != null && campusStatus.toLowerCase().contains('inside'));
+        statusStr.contains('inside');
 
     return VehicleRecord(
       plateNumber: plate,
@@ -253,6 +278,7 @@ class VehicleRecord {
       flagReason: flagReason,
       flaggedAt: flaggedAt,
       isBanned: isBanned,
+      registrationStatus: (json['registration_status'] ?? json['registrationStatus'])?.toString() ?? 'Active',
       campusStatus: campusStatus,
       isAntiPassback: isAntiPassback,
     );
@@ -278,6 +304,7 @@ class VehicleRecord {
     String? flagReason,
     DateTime? flaggedAt,
     bool? isBanned,
+    String? registrationStatus,
     String? campusStatus,
     bool? isAntiPassback,
   }) {
@@ -301,6 +328,7 @@ class VehicleRecord {
       flagReason: flagReason ?? this.flagReason,
       flaggedAt: flaggedAt ?? this.flaggedAt,
       isBanned: isBanned ?? this.isBanned,
+      registrationStatus: registrationStatus ?? this.registrationStatus,
       campusStatus: campusStatus ?? this.campusStatus,
       isAntiPassback: isAntiPassback ?? this.isAntiPassback,
     );

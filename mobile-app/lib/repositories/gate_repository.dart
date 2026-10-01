@@ -11,7 +11,10 @@ class GateRepository {
     if (cached.isNotEmpty) {
       return cached;
     }
-    return MockData.registeredVehicles;
+    if (MockData.isTestEnvironment) {
+      return MockData.registeredVehicles;
+    }
+    return const [];
   }
 
   List<AuditLogEntry> getInitialAuditLogs() {
@@ -19,7 +22,10 @@ class GateRepository {
     if (cached.isNotEmpty) {
       return cached;
     }
-    return MockData.getInitialAuditLogs();
+    if (MockData.isTestEnvironment) {
+      return MockData.getInitialAuditLogs();
+    }
+    return const [];
   }
 
   VehicleRecord resolveVehicle(String rawQr) {

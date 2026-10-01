@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../data/mock_data.dart';
 import '../models/vehicle_model.dart';
 import '../models/visitor_pass_model.dart';
 
@@ -18,6 +19,22 @@ class LocalCacheService {
   static const String keyRejectedSync = 'sp_rejected_sync_events_v1';
   static const String keyVisitorPassValidityHours = 'sp_visitor_pass_validity_hours';
   static const String keyServerBaseUrl = 'sp_server_base_url_v2';
+
+  static const Set<String> _legacyMockPlates = {
+    'ABC1234',
+    'NKM2024',
+    'NDK4821',
+    'WXY9012',
+    'DEF5678',
+    'TAA4432',
+  };
+
+  static const Set<String> _legacyMockLogIds = {
+    'LOG-101',
+    'LOG-102',
+    'LOG-103',
+    'LOG-104',
+  };
 
   /// Retrieve persistent backend API base URL
   static String getServerBaseUrl({String defaultUrl = 'http://ncstparking-test.rf.gd/api'}) {
@@ -90,6 +107,11 @@ class LocalCacheService {
         final list = jsonDecode(raw) as List;
         return list
             .map((item) => VehicleRecord.fromQrJson(item as Map<String, dynamic>))
+            .where((v) {
+              if (MockData.isTestEnvironment) return true;
+              final clean = v.plateNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase();
+              return !_legacyMockPlates.contains(clean);
+            })
             .toList();
       }
     } catch (e) {
@@ -140,6 +162,24 @@ class LocalCacheService {
     }
   }
 
+  /// Updates the cached vehicle's campus status immediately after an entry or exit passage
+  static Future<void> updateVehicleCampusStatus(String plateNumber, String newCampusStatus) async {
+    try {
+      final cleanPlate = plateNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+      final vehicles = getCachedVehicles();
+      final idx = vehicles.indexWhere((v) => v.plateNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase() == cleanPlate);
+      if (idx >= 0) {
+        final updated = vehicles[idx].copyWith(
+          campusStatus: newCampusStatus,
+          isAntiPassback: newCampusStatus.toLowerCase().contains('inside'),
+        );
+        await upsertVehicle(updated);
+      }
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error updating vehicle campus status: $e');
+    }
+  }
+
   // ---- 2. Gate Audit Logs Cache ----
   static Future<void> saveLogs(List<dynamic> jsonList) async {
     try {
@@ -157,6 +197,10 @@ class LocalCacheService {
         final list = jsonDecode(raw) as List;
         return list
             .map((item) => AuditLogEntry.fromJson(item as Map<String, dynamic>))
+            .where((l) {
+              if (MockData.isTestEnvironment) return true;
+              return !_legacyMockLogIds.contains(l.id);
+            })
             .toList();
       }
     } catch (e) {

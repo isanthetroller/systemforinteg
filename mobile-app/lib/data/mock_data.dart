@@ -17,72 +17,98 @@ class MockData {
   // Enabled by default on real devices and emulators; suppressed in test harness
   static bool useNetworkImages = !_isTestEnv;
 
-  /// Dynamic registered vehicles list: Uses prototype test dataset as fallback
-  static List<VehicleRecord> get registeredVehicles => _testVehicles;
+  /// Dynamic in-memory vehicle store for runtime (starts empty)
+  static final List<VehicleRecord> _runtimeVehicles = [];
+
+  /// Dynamic registered vehicles list: Uses live runtime storage by default;
+  /// test fixtures are isolated strictly to automated unit test environments.
+  static List<VehicleRecord> get registeredVehicles =>
+      _isTestEnv ? _testVehiclesFixture : _runtimeVehicles;
 
   /// Add or update vehicle record in the in-memory registered vehicles list
   static void upsertVehicle(VehicleRecord vehicle) {
+    final target = _isTestEnv ? _testVehiclesFixture : _runtimeVehicles;
     final norm = vehicle.plateNumber.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
-    final idx = _testVehicles.indexWhere(
+    final idx = target.indexWhere(
       (v) => v.plateNumber.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '') == norm,
     );
     if (idx >= 0) {
-      _testVehicles[idx] = vehicle;
+      target[idx] = vehicle;
     } else {
-      _testVehicles.insert(0, vehicle);
+      target.insert(0, vehicle);
     }
   }
 
-  /// Initial audit logs for the guard dashboard feed
-  static List<AuditLogEntry> getInitialAuditLogs() {
-    final now = DateTime.now();
-    return [
-      AuditLogEntry(
-        id: 'LOG-101',
-        plateNumber: 'NKM-2024',
-        vehicleType: 'Sedan',
-        ownerName: 'Monares, Kriz',
-        driverName: 'Monares, Kriz',
-        driverRelationship: 'Self (Owner)',
-        timeIn: now.subtract(const Duration(minutes: 18)),
-        status: GateStatus.inside,
-      ),
-      AuditLogEntry(
-        id: 'LOG-102',
-        plateNumber: 'ABC-1234',
-        vehicleType: 'Sedan',
-        ownerName: 'Prof. Roberto D. Reyes',
-        driverName: 'Prof. Roberto D. Reyes',
-        driverRelationship: 'Faculty Member',
-        timeIn: now.subtract(const Duration(minutes: 42)),
-        status: GateStatus.inside,
-      ),
-      AuditLogEntry(
-        id: 'LOG-103',
-        plateNumber: 'NDK-1234',
-        vehicleType: 'Sedan',
-        ownerName: 'Maria Elena Gomez (Visitor)',
-        driverName: 'Maria Elena Gomez',
-        driverRelationship: 'Visitor / Temporary Pass',
-        timeIn: now.subtract(const Duration(hours: 1, minutes: 20)),
-        status: GateStatus.inside,
-      ),
-      AuditLogEntry(
-        id: 'LOG-104',
-        plateNumber: 'WXY-9012',
-        vehicleType: 'Sedan',
-        ownerName: 'Christian Santos',
-        driverName: 'Christian Santos',
-        driverRelationship: 'Student',
-        timeIn: now.subtract(const Duration(hours: 2, minutes: 10)),
-        status: GateStatus.blocked,
-        blockReason: 'Flagged Student: 2nd Parking Strike / Fire Lane',
-      ),
-    ];
+  /// Update vehicle campus status in memory for offline environments
+  static void updateVehicleCampusStatus(String plateNumber, String newCampusStatus) {
+    final target = _isTestEnv ? _testVehiclesFixture : _runtimeVehicles;
+    final norm = plateNumber.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    final idx = target.indexWhere(
+      (v) => v.plateNumber.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '') == norm,
+    );
+    if (idx >= 0) {
+      target[idx] = target[idx].copyWith(
+        campusStatus: newCampusStatus,
+        isAntiPassback: newCampusStatus.toLowerCase().contains('inside'),
+      );
+    }
   }
 
-  // Internal test fixtures covering Students, Faculty, and Flagged Accounts
-  static final List<VehicleRecord> _testVehicles = [
+  /// Initial audit logs for the guard dashboard feed:
+  /// Empty by default in production runtime. Test fixtures are only returned in automated test runs.
+  static List<AuditLogEntry> getInitialAuditLogs() {
+    if (_isTestEnv) {
+      return _testAuditLogsFixture;
+    }
+    return const [];
+  }
+
+  static final List<AuditLogEntry> _testAuditLogsFixture = [
+    AuditLogEntry(
+      id: 'LOG-101',
+      plateNumber: 'NKM-2024',
+      vehicleType: 'Sedan',
+      ownerName: 'Monares, Kriz',
+      driverName: 'Monares, Kriz',
+      driverRelationship: 'Self (Owner)',
+      timeIn: DateTime.now().subtract(const Duration(minutes: 18)),
+      status: GateStatus.inside,
+    ),
+    AuditLogEntry(
+      id: 'LOG-102',
+      plateNumber: 'ABC-1234',
+      vehicleType: 'Sedan',
+      ownerName: 'Prof. Roberto D. Reyes',
+      driverName: 'Prof. Roberto D. Reyes',
+      driverRelationship: 'Faculty Member',
+      timeIn: DateTime.now().subtract(const Duration(minutes: 42)),
+      status: GateStatus.inside,
+    ),
+    AuditLogEntry(
+      id: 'LOG-103',
+      plateNumber: 'NDK-1234',
+      vehicleType: 'Sedan',
+      ownerName: 'Maria Elena Gomez (Visitor)',
+      driverName: 'Maria Elena Gomez',
+      driverRelationship: 'Visitor / Temporary Pass',
+      timeIn: DateTime.now().subtract(const Duration(hours: 1, minutes: 20)),
+      status: GateStatus.inside,
+    ),
+    AuditLogEntry(
+      id: 'LOG-104',
+      plateNumber: 'WXY-9012',
+      vehicleType: 'Sedan',
+      ownerName: 'Christian Santos',
+      driverName: 'Christian Santos',
+      driverRelationship: 'Student',
+      timeIn: DateTime.now().subtract(const Duration(hours: 2, minutes: 10)),
+      status: GateStatus.blocked,
+      blockReason: 'Flagged Student: 2nd Parking Strike / Fire Lane',
+    ),
+  ];
+
+  // Internal test fixtures covering Students, Faculty, and Flagged Accounts (Unit tests only)
+  static final List<VehicleRecord> _testVehiclesFixture = [
     // 1. Normal Registered Faculty Member
     VehicleRecord(
       plateNumber: 'ABC-1234',

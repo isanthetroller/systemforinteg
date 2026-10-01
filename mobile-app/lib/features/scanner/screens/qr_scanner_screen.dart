@@ -15,6 +15,7 @@ import '../dialogs/manual_qr_dialog.dart';
 import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
 import '../widgets/camera_viewfinder.dart';
+import '../widgets/scan_rejection_view.dart';
 import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
 
@@ -44,6 +45,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   MobileScannerController? _cameraController;
   bool _cameraHasError = false;
   bool _isTorchOn = false;
+
+  bool _isValidating = false;
+  bool _isSubmitting = false;
+  ScanRejectionDetails? _rejectionDetails;
 
   VehicleRecord? _scannedVehicle;
   // Set when the scanned plate / pass code belongs to a visitor day pass that already exists on the server
@@ -141,43 +146,64 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _scannedVehicle = null;
       _visitorPass = null;
       _checkedVisitorItems.clear();
+      _rejectionDetails = null;
+      _isValidating = false;
+      _isSubmitting = false;
     });
     _cameraController?.startSafely();
   }
 
-  void _processRawQrCode(String raw) async {
-    if (_scannedVehicle != null) return;
-    var vehicle = widget.repository.resolveVehicle(raw);
-    _onQrDetected(vehicle);
+  @visibleForTesting
+  void testProcessRawQrCode(String raw) => _processRawQrCode(raw);
 
-    // Fetch the updated information from the database
-    // Even if an old QR code was scanned, the app connects to the database to fetch
-    // the newest vehicle/owner/driver information and displays it while preserving the sticker year
-    await _syncVehicleWithDb(vehicle, raw);
+  void _processRawQrCode(String raw) async {
+    if (_isValidating || _isSubmitting || _scannedVehicle != null || _rejectionDetails != null) return;
+    final clean = raw.trim();
+    if (clean.isEmpty) return;
+
+    _cameraController?.stopSafely();
+    setState(() {
+      _isValidating = true;
+      _rejectionDetails = null;
+    });
+
+    await _syncVehicleWithDb(null, clean);
   }
 
-  Future<void> _syncVehicleWithDb(VehicleRecord vehicle, [String? raw]) async {
+  Future<void> _syncVehicleWithDb(VehicleRecord? initialVeh, [String? raw]) async {
+    final queryCode = (raw != null && raw.trim().isNotEmpty)
+        ? raw.trim()
+        : (initialVeh?.qrPassCode.isNotEmpty == true
+            ? initialVeh!.qrPassCode
+            : (initialVeh?.plateNumber ?? ''));
+
+    if (queryCode.isEmpty) {
+      if (mounted) setState(() => _isValidating = false);
+      return;
+    }
+
     try {
       final verifyFuture = ApiService.verifyPassWithServer(
-        qrCode: raw,
-        plate: vehicle.plateNumber,
+        qrCode: queryCode,
+        plate: initialVeh?.plateNumber ?? queryCode,
         gateType: 'Ingress',
       );
-      final lookupPlateFuture = ApiService.lookupVehicleByPlate(vehicle.plateNumber);
-      final lookupRawFuture = (raw != null && raw.isNotEmpty) ? ApiService.lookupVehicle(raw) : Future<VehicleRecord?>.value(null);
+      final lookupFuture = ApiService.lookupVehicle(queryCode);
 
       final verifyResult = await verifyFuture;
-      VehicleRecord? remoteVehicle = (await lookupPlateFuture) ?? (await lookupRawFuture);
+      VehicleRecord? remoteVehicle = await lookupFuture;
 
-      // If direct vehicle lookup didn't find the vehicle or timed out, but verifyPassWithServer
-      // returned the vehicle object, parse it directly from verifyResult
+      if (remoteVehicle == null && initialVeh != null && initialVeh.plateNumber.isNotEmpty) {
+        remoteVehicle = await ApiService.lookupVehicleByPlate(initialVeh.plateNumber);
+      }
+
       if (remoteVehicle == null && verifyResult != null) {
         final serverVeh = verifyResult['vehicle'] ?? verifyResult['data']?['vehicle'];
         if (serverVeh is Map<String, dynamic>) {
           try {
             remoteVehicle = VehicleRecord.fromQrJson(
               serverVeh,
-              rawPayload: raw ?? 'SERVER_VERIFY_RECORD',
+              rawPayload: queryCode,
               isSyncedWithDb: true,
             );
           } catch (e) {
@@ -186,118 +212,195 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         }
       }
 
-      if (mounted && (_scannedVehicle == null || _scannedVehicle?.plateNumber == vehicle.plateNumber)) {
-        final vData = (verifyResult != null && verifyResult['data'] is Map<String, dynamic>)
-            ? (verifyResult['data'] as Map<String, dynamic>)
-            : verifyResult;
+      // Check network / API failure
+      final isNetworkError = ApiService.lastVerifyError != null ||
+          (verifyResult != null && (verifyResult['error_type'] == 'network_error' || verifyResult['status'] == 'offline'));
+      if (isNetworkError) {
+        if (!mounted) return;
+        setState(() {
+          _isValidating = false;
+          _scannedVehicle = null;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.networkError,
+            title: 'Connection / API Error',
+            message: 'Unable to verify vehicle state in real-time with the database. Entry verification stopped for security.',
+            reason: ApiService.lastVerifyError ?? 'Network connection failure',
+          );
+        });
+        return;
+      }
 
-        final isServerBanned = vData != null &&
-            (vData['result'] == 'BANNED' ||
-             vData['result'] == 'SUSPENDED' ||
-             vData['result'] == 'FORGED' ||
-             vData['result'] == 'REVOKED' ||
-             (vData['accepted'] == false && (vData['message']?.toString().toUpperCase().contains('BAN') == true)));
+      // Local repository fallback if remote returned nothing
+      if (remoteVehicle == null) {
+        if (initialVeh != null && (initialVeh.isParsedFromQr || (initialVeh.ownerIdNumber != 'UNKNOWN' && !initialVeh.ownerIdNumber.startsWith('VISITOR-')))) {
+          remoteVehicle = initialVeh;
+        } else {
+          final local = widget.repository.resolveVehicle(queryCode);
+          if (local.isParsedFromQr || (local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-'))) {
+            remoteVehicle = local;
+          }
+        }
+      }
 
-        final serverReason = vData?['reason']?.toString() ?? vData?['message']?.toString();
-        final serverCampusStatus = vData?['result']?.toString() ?? remoteVehicle?.campusStatus;
-        final isAntiPassback = (vData != null && vData['currentlyInside'] == true) ||
-            (remoteVehicle != null && remoteVehicle.isAntiPassback);
+      final vData = (verifyResult != null && verifyResult['data'] is Map<String, dynamic>)
+          ? (verifyResult['data'] as Map<String, dynamic>)
+          : verifyResult;
 
-        // No registered vehicle, but the server knows a visitor day pass for this plate / pass code: show that pass
-        // (with the server's verdict and its declared items) instead of an "unregistered pass".
-        final visitorPass = remoteVehicle == null ? ScannedVisitorPass.fromVerify(vData) : null;
-        if (visitorPass != null) {
-          _applyVisitorPass(visitorPass);
+      // Check visitor pass
+      final visitorPass = remoteVehicle == null ? ScannedVisitorPass.fromVerify(vData) : null;
+      if (visitorPass != null) {
+        if (visitorPass.isBlocked || (!visitorPass.accepted && visitorPass.reason.toLowerCase().contains('block'))) {
+          setState(() {
+            _isValidating = false;
+            _scannedVehicle = null;
+            _rejectionDetails = ScanRejectionDetails(
+              type: ScanRejectionType.blocked,
+              title: 'Visitor Pass Blocked',
+              message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before entry can be granted.',
+              plateNumber: visitorPass.plateNumber,
+              ownerName: visitorPass.visitorName,
+              statusBadge: 'BLOCKED',
+              reason: visitorPass.reason.isNotEmpty ? visitorPass.reason : 'Security Hold on visitor pass.',
+            );
+          });
           return;
         }
 
-        if (remoteVehicle != null) {
-          final enriched = VehicleRecord(
-            plateNumber: remoteVehicle.plateNumber.isNotEmpty ? remoteVehicle.plateNumber : vehicle.plateNumber,
-            vehicleType: remoteVehicle.vehicleType.isNotEmpty ? remoteVehicle.vehicleType : vehicle.vehicleType,
-            makeModelColor: remoteVehicle.makeModelColor.isNotEmpty ? remoteVehicle.makeModelColor : vehicle.makeModelColor,
-            ownerName: remoteVehicle.ownerName.isNotEmpty ? remoteVehicle.ownerName : vehicle.ownerName,
-            ownerRole: remoteVehicle.ownerRole.isNotEmpty ? remoteVehicle.ownerRole : vehicle.ownerRole,
-            ownerIdNumber: remoteVehicle.ownerIdNumber.isNotEmpty && remoteVehicle.ownerIdNumber != 'UNKNOWN'
-                ? remoteVehicle.ownerIdNumber
-                : (vehicle.ownerIdNumber != 'UNKNOWN' ? vehicle.ownerIdNumber : 'CAMPUS-USER'),
-            ownerPhotoUrl: (remoteVehicle.ownerPhotoUrl != null && remoteVehicle.ownerPhotoUrl!.isNotEmpty)
-                ? remoteVehicle.ownerPhotoUrl
-                : vehicle.ownerPhotoUrl,
-            qrPassCode: vehicle.qrPassCode.isNotEmpty ? vehicle.qrPassCode : remoteVehicle.qrPassCode,
-            // Preserves the physical sticker year from the pass (e.g. 2026), or defaults to remote
-            stickerYear: vehicle.stickerYear.isNotEmpty ? vehicle.stickerYear : remoteVehicle.stickerYear,
-            vehiclePicture: remoteVehicle.vehiclePicture ?? vehicle.vehiclePicture,
-            authorizedDrivers: remoteVehicle.authorizedDrivers.isNotEmpty
-                ? remoteVehicle.authorizedDrivers
-                : vehicle.authorizedDrivers,
-            isParsedFromQr: true,
-            rawQrPayload: raw ?? vehicle.rawQrPayload,
-            isSyncedWithDb: true,
-            category: remoteVehicle.category,
-            isFlagged: remoteVehicle.isFlagged,
-            flagReason: remoteVehicle.flagReason ?? serverReason,
-            flaggedAt: remoteVehicle.flaggedAt,
-            isBanned: remoteVehicle.isBanned || isServerBanned,
-            campusStatus: serverCampusStatus,
-            isAntiPassback: isAntiPassback,
-          );
-
-          MockData.upsertVehicle(enriched);
-          LocalCacheService.upsertVehicle(enriched);
-
+        if (visitorPass.currentlyInside || (!visitorPass.accepted && (visitorPass.reason.contains('already inside') || visitorPass.reason.contains('already entered')))) {
           setState(() {
-            _scannedVehicle = enriched;
-
-            final wasOwnerSelected = _selectedDriverName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
-                _selectedRelationship.toLowerCase().contains('self') ||
-                _selectedRelationship.toLowerCase().contains('owner') ||
-                _selectedRelationship.toLowerCase().contains('visitor') ||
-                _selectedRelationship.toLowerCase().contains('driver');
-
-            if (wasOwnerSelected || enriched.authorizedDrivers.isEmpty) {
-              _selectedDriverName = enriched.ownerName;
-              _selectedRelationship = 'Self (Owner)';
-              _currentPhotoUrl = enriched.ownerPhotoUrl ?? '';
-            } else {
-              // Check if currently selected driver exists in the enriched driver roster
-              final matched = enriched.authorizedDrivers.cast<AuthorizedDriver?>().firstWhere(
-                (d) => d?.fullName.trim().toLowerCase() == _selectedDriverName.trim().toLowerCase(),
-                orElse: () => null,
-              );
-              if (matched != null) {
-                _selectedDriverName = matched.fullName;
-                _selectedRelationship = matched.relationship;
-                _currentPhotoUrl = (matched.photoUrl != null && matched.photoUrl!.isNotEmpty)
-                    ? matched.photoUrl!
-                    : (enriched.ownerPhotoUrl ?? '');
-              } else if (enriched.authorizedDrivers.isNotEmpty) {
-                final first = enriched.authorizedDrivers.first;
-                _selectedDriverName = first.fullName;
-                _selectedRelationship = first.relationship;
-                _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
-                    ? first.photoUrl!
-                    : (enriched.ownerPhotoUrl ?? '');
-              } else {
-                _selectedDriverName = enriched.ownerName;
-                _selectedRelationship = 'Registered Owner';
-                _currentPhotoUrl = enriched.ownerPhotoUrl ?? '';
-              }
-            }
-          });
-        } else if (verifyResult != null) {
-          setState(() {
-            _scannedVehicle = _scannedVehicle?.copyWith(
-              isBanned: isServerBanned,
-              campusStatus: serverCampusStatus,
-              isAntiPassback: isAntiPassback,
-              flagReason: serverReason,
+            _isValidating = false;
+            _scannedVehicle = null;
+            _rejectionDetails = ScanRejectionDetails(
+              type: ScanRejectionType.duplicateEntry,
+              title: 'Duplicate Entry Attempt',
+              message: 'This visitor pass is already recorded as inside campus. The same QR code cannot be used for entry while already inside.',
+              plateNumber: visitorPass.plateNumber,
+              ownerName: visitorPass.visitorName,
+              statusBadge: 'INSIDE CAMPUS',
+              reason: visitorPass.reason.isNotEmpty ? visitorPass.reason : 'Anti-passback: Vehicle must exit before entering again.',
             );
           });
+          return;
+        }
+
+        setState(() {
+          _isValidating = false;
+          _rejectionDetails = null;
+        });
+        _applyVisitorPass(visitorPass);
+        return;
+      }
+
+      // Check if completely unrecognized QR
+      if (remoteVehicle == null) {
+        setState(() {
+          _isValidating = false;
+          _scannedVehicle = null;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.notFound,
+            title: 'Invalid / Unrecognized QR Code',
+            message: 'Pass code "$queryCode" is not a recognized vehicle or visitor pass in the campus registry.',
+            statusBadge: 'NOT FOUND',
+          );
+        });
+        return;
+      }
+
+      // Enrich vehicle status with live database values
+      if (vData != null && vData['vehicle'] is Map<String, dynamic>) {
+        final vMap = vData['vehicle'] as Map<String, dynamic>;
+        remoteVehicle = remoteVehicle.copyWith(
+          campusStatus: (vMap['status'] ?? remoteVehicle.campusStatus)?.toString(),
+          registrationStatus: (vMap['registration_status'] ?? remoteVehicle.registrationStatus)?.toString(),
+          isBanned: vMap['is_banned'] != null ? (vMap['is_banned'] == 1 || vMap['is_banned'] == true || vMap['is_banned'] == '1') : remoteVehicle.isBanned,
+          isSyncedWithDb: true,
+        );
+      }
+
+      final isServerBanned = vData != null &&
+          (vData['result'] == 'BANNED' ||
+           vData['result'] == 'SUSPENDED' ||
+           vData['result'] == 'FORGED' ||
+           vData['result'] == 'REVOKED' ||
+           (vData['accepted'] == false && (vData['message']?.toString().toUpperCase().contains('BAN') == true)));
+
+      if (isServerBanned) {
+        remoteVehicle = remoteVehicle.copyWith(isBanned: true);
+      }
+
+      // Reconcile currentlyInside
+      if (vData != null && vData['currentlyInside'] != null) {
+        final currentlyInside = vData['currentlyInside'] == true;
+        if (currentlyInside && remoteVehicle.campusStatus != 'Inside Campus') {
+          remoteVehicle = remoteVehicle.copyWith(campusStatus: 'Inside Campus', isAntiPassback: true);
+        } else if (!currentlyInside && remoteVehicle.campusStatus == 'Inside Campus') {
+          remoteVehicle = remoteVehicle.copyWith(campusStatus: 'Outside', isAntiPassback: false);
         }
       }
+
+      // 1. Strict BLOCKED Vehicle Check: Guard cannot override
+      if (remoteVehicle.isBlocked) {
+        setState(() {
+          _isValidating = false;
+          _scannedVehicle = null;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.blocked,
+            title: 'Vehicle Blocked',
+            message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before the vehicle can enter.',
+            plateNumber: remoteVehicle!.plateNumber,
+            ownerName: remoteVehicle.ownerName,
+            statusBadge: remoteVehicle.campusStatus ?? 'BLOCKED',
+            reason: remoteVehicle.isBanned
+                ? 'Vehicle is marked as BANNED in the system database.'
+                : (remoteVehicle.registrationStatus?.toLowerCase() == 'suspended'
+                    ? 'Registration is SUSPENDED.'
+                    : (remoteVehicle.flagReason ?? 'Administrative hold on vehicle.')),
+          );
+        });
+        return;
+      }
+
+      // 2. Strict Duplicate Entry Check (Anti-passback): Vehicle is already inside campus
+      if (remoteVehicle.isInsideCampus) {
+        setState(() {
+          _isValidating = false;
+          _scannedVehicle = null;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.duplicateEntry,
+            title: 'Duplicate Entry Attempt',
+            message: 'This vehicle is already recorded as inside campus. The same QR code cannot be used for entry while already inside.',
+            plateNumber: remoteVehicle!.plateNumber,
+            ownerName: remoteVehicle.ownerName,
+            statusBadge: remoteVehicle.campusStatus ?? 'Inside Campus',
+            reason: 'Anti-passback protection: Vehicle must exit through Guard 2 before another entry can be recorded.',
+          );
+        });
+        return;
+      }
+
+      // 3. Vehicle is eligible for entry
+      final enriched = remoteVehicle;
+      MockData.upsertVehicle(enriched);
+      LocalCacheService.upsertVehicle(enriched);
+
+      setState(() {
+        _isValidating = false;
+        _rejectionDetails = null;
+      });
+      _onQrDetected(enriched);
     } catch (e) {
-      debugPrint('[QrScannerScreen] Database sync note: $e');
+      debugPrint('[QrScannerScreen] Validation error: $e');
+      if (mounted) {
+        setState(() {
+          _isValidating = false;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.networkError,
+            title: 'Validation Error',
+            message: 'An error occurred while validating the QR pass. Please try scanning again.',
+            reason: e.toString(),
+          );
+        });
+      }
     }
   }
 
@@ -439,7 +542,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   void _handleCleared() async {
-    if (_scannedVehicle == null) return;
+    if (_isSubmitting || _scannedVehicle == null) return;
     if (_visitorPass != null) {
       _admitVisitor();
       return;
@@ -447,19 +550,36 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     final vehicle = _scannedVehicle!;
 
     // 1. Guard against Banned / Suspended / Denied vehicles
-    if (vehicle.isAccessDenied) {
+    if (vehicle.isBlocked) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           backgroundColor: NcstColors.crimson,
           content: Text(
-            'ENTRY DENIED: ${vehicle.plateNumber} is banned or suspended. You must block this vehicle.',
-            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+            'ENTRY DENIED: This vehicle is currently blocked. Clearance cannot be granted.',
+            style: TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
           ),
           behavior: SnackBarBehavior.floating,
         ),
       );
       return;
     }
+
+    // 2. Guard against Duplicate Entry / Already inside
+    if (vehicle.isInsideCampus) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: NcstColors.crimson,
+          content: Text(
+            'ENTRY DENIED: Vehicle is already inside campus. Duplicate entry rejected.',
+            style: TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
 
     // 2. Unregistered pass -> route to visitor registration
     if (vehicle.isUnregistered) {
@@ -539,6 +659,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       );
 
       if (shouldProceed != true) {
+        setState(() => _isSubmitting = false);
         return;
       }
       if (!mounted) return;
@@ -591,6 +712,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     );
 
     if (mounted) {
+      setState(() => _isSubmitting = false);
       if (!widget.isEmbedded && Navigator.canPop(context)) {
         Navigator.of(context).pop();
       } else if (widget.onReturnToDashboard != null) {
@@ -660,9 +782,36 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
   @override
   Widget build(BuildContext context) {
-    final content = _scannedVehicle == null
-        ? _buildViewfinderSection()
-        : _buildScannedVerificationBody();
+    final Widget content;
+    if (_isValidating) {
+      content = const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: NcstColors.navy),
+            SizedBox(height: 14),
+            Text(
+              'Verifying Vehicle State with Database...',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                color: NcstColors.slate700,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_rejectionDetails != null) {
+      content = ScanRejectionView(
+        details: _rejectionDetails!,
+        onScanAnother: _resetScanner,
+        buttonLabel: 'SCAN ANOTHER VEHICLE',
+      );
+    } else if (_scannedVehicle == null) {
+      content = _buildViewfinderSection();
+    } else {
+      content = _buildScannedVerificationBody();
+    }
 
     final appBar = AppBar(
       leading: (widget.isEmbedded && widget.onReturnToDashboard != null)
@@ -672,9 +821,15 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
               onPressed: widget.onReturnToDashboard,
             )
           : null,
-      title: Text(_scannedVehicle == null ? 'Scan Driver QR Pass' : 'Scanned Verification'),
+      title: Text(_rejectionDetails != null
+          ? 'Scan Rejected'
+          : (_scannedVehicle == null ? 'Scan Driver QR Pass' : 'Scanned Verification')),
+      backgroundColor: _rejectionDetails != null && _rejectionDetails!.type == ScanRejectionType.blocked
+          ? NcstColors.crimson
+          : NcstColors.navy,
+      foregroundColor: NcstColors.white,
       actions: [
-        if (_scannedVehicle == null) ...[
+        if (_scannedVehicle == null && _rejectionDetails == null) ...[
           IconButton(
             tooltip: 'Enter QR Manually',
             icon: const Icon(Icons.keyboard_outlined, color: NcstColors.white),
@@ -870,12 +1025,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         BottomDecisionBar(
           onBlock: _showBlockDialog,
           onCleared: _handleCleared,
-          isClearedEnabled: !vehicle.isAccessDenied,
-          clearedLabel: vehicle.isAccessDenied
-              ? 'ACCESS DENIED (BANNED)'
-              : (vehicle.isUnregistered
-                  ? 'REGISTER VISITOR'
-                  : 'CLEARED (TO GO)'),
+          isClearedEnabled: (vehicle.isEligibleForEntry || vehicle.isUnregistered) && !_isSubmitting,
+          clearedLabel: vehicle.isBlocked
+              ? 'ACCESS DENIED (BLOCKED)'
+              : (vehicle.isInsideCampus
+                  ? 'ALREADY INSIDE'
+                  : (vehicle.isUnregistered
+                      ? 'REGISTER VISITOR'
+                      : 'CLEARED (TO GO)')),
+          disabledLabel: vehicle.isBlocked
+              ? 'VEHICLE BLOCKED'
+              : (vehicle.isInsideCampus ? 'ALREADY INSIDE CAMPUS' : null),
           clearedIcon: vehicle.isUnregistered
               ? Icons.how_to_reg_rounded
               : Icons.check_rounded,
