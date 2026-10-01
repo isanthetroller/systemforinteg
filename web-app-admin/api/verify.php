@@ -52,6 +52,7 @@ $visitor = null;       // visitor_passes row
 $claimedPlate = '';    // plate claimed by the scanned pass (for logging forged attempts)
 $reasonDetail = '';    // human explanation for the result
 $warnings = [];
+$incident = null;
 
 /* --------------------------------------------------------------------------
    1. Identify the pass / vehicle
@@ -176,16 +177,35 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
 }
 
 /* --------------------------------------------------------------------------
-   2. Visitor pass rules
+   2. Visitor pass rules & security incident holds
    -------------------------------------------------------------------------- */
-// A revoked pass whose visitor is still on campus must still be able to leave (with a hold alert)
 $revokedInside = $visitor && $visitor['status'] === 'Revoked'
     && !empty($visitor['entry_time']) && empty($visitor['exit_time']);
 
 if ($visitor && ($result === null || $result === 'MANUAL')) {
     $passType = $passType === 'manual' ? 'manual' : 'visitor_temp';
     $claimedPlate = $visitor['plate_number'];
-    if ($visitor['status'] === 'Revoked') {
+
+    // Check for active security incident hold on this visitor
+    $normPlate = normalizePlate($visitor['plate_number']);
+    $passCode = $visitor['pass_code'] ?? '';
+    $visIncStmt = $pdo->prepare("SELECT `id`, `case_number`, `reason`, `notes` FROM `security_incidents` 
+        WHERE (REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? OR `reason` LIKE ? OR `notes` LIKE ?)
+          AND `status` = 'Held' 
+        ORDER BY `id` DESC LIMIT 1");
+    $visIncStmt->execute([$normPlate, "%{$passCode}%", "%{$passCode}%"]);
+    $activeVisitorIncident = $visIncStmt->fetch();
+
+    if ($activeVisitorIncident) {
+        $result = 'REVOKED';
+        $reasonDetail = "Security Incident Hold [Case #{$activeVisitorIncident['case_number']}]: {$activeVisitorIncident['reason']}. The visitor cannot proceed until cleared by administration.";
+        $incident = [
+            'id' => (int)$activeVisitorIncident['id'],
+            'caseNumber' => $activeVisitorIncident['case_number'],
+            'reason' => $activeVisitorIncident['reason'],
+            'status' => 'Held',
+        ];
+    } elseif ($visitor['status'] === 'Revoked') {
         $result = 'REVOKED';
         $reasonDetail = $revokedInside
             ? 'This visitor pass was revoked while the visitor was on campus.'
@@ -212,11 +232,35 @@ if ($visitor && ($result === null || $result === 'MANUAL')) {
 }
 
 /* --------------------------------------------------------------------------
-   3. Vehicle standing (bans / suspensions) for otherwise acceptable passes
+   3. Vehicle standing (bans / suspensions / security holds)
    -------------------------------------------------------------------------- */
+$activeVehIncident = null;
+if ($vehicle) {
+    $normPlate = normalizePlate($vehicle['plate_number']);
+    $vehIncStmt = $pdo->prepare("SELECT `id`, `case_number`, `reason`, `notes` FROM `security_incidents` 
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
+          AND `status` = 'Held' 
+        ORDER BY `id` DESC LIMIT 1");
+    $vehIncStmt->execute([$normPlate]);
+    $activeVehIncident = $vehIncStmt->fetch();
+}
+
 if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
     $prior = $result ?? 'VALID';
-    if ((int)$vehicle['is_banned'] === 1) {
+    if ($activeVehIncident || $vehicle['status'] === 'Blocked / Alert') {
+        $caseNum = $activeVehIncident ? $activeVehIncident['case_number'] : 'HOLD';
+        $holdReason = $activeVehIncident ? $activeVehIncident['reason'] : 'Security hold on vehicle';
+        $result = 'BANNED';
+        $reasonDetail = "Security Incident Hold [Case #{$caseNum}]: {$holdReason}. The vehicle cannot proceed until cleared by administration.";
+        if ($activeVehIncident) {
+            $incident = [
+                'id' => (int)$activeVehIncident['id'],
+                'caseNumber' => $activeVehIncident['case_number'],
+                'reason' => $activeVehIncident['reason'],
+                'status' => 'Held',
+            ];
+        }
+    } elseif ((int)$vehicle['is_banned'] === 1) {
         $result = 'BANNED';
         $reasonDetail = 'Vehicle is banned under the 3-strike / violation policy until an administrator resolves it.';
     } elseif ($vehicle['registration_status'] === 'Suspended') {
@@ -234,14 +278,23 @@ if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
    4. Decision: which results allow passage for this gate direction
    -------------------------------------------------------------------------- */
 $alwaysAccepted = ['VALID', 'LEGACY', 'MANUAL'];
-// A vehicle already inside is allowed to leave (with an alert) so it is never trapped on campus
-$egressAlsoAccepted = ['BANNED', 'SUSPENDED', 'EXPIRED', 'EXPIRED_TEMP'];
-$egressHold = $gateType === 'Egress'
-    && (in_array($result, $egressAlsoAccepted, true) || ($result === 'REVOKED' && $revokedInside));
-$accepted = in_array($result, $alwaysAccepted, true) || $egressHold;
+$accepted = in_array($result, $alwaysAccepted, true);
 
-if ($accepted && $egressHold) {
-    $warnings[] = 'HOLD ALERT: exit allowed so the vehicle is not trapped, but ' . lcfirst($reasonDetail ?: 'this pass is not valid') . ' Notify an administrator.';
+$hasSecurityHold = ($incident !== null && !empty($incident))
+    || (!empty($activeVisitorIncident))
+    || (!empty($activeVehIncident))
+    || ($vehicle && $vehicle['status'] === 'Blocked / Alert')
+    || ($vehicle && (int)$vehicle['is_banned'] === 1)
+    || ($vehicle && $vehicle['registration_status'] === 'Suspended')
+    || ($visitor && $visitor['status'] === 'Revoked');
+
+// Security holds, bans, suspensions, and revoked passes strictly PREVENT passage at both Ingress and Egress
+if ($hasSecurityHold) {
+    $accepted = false;
+} elseif ($gateType === 'Egress' && $result === 'EXPIRED_TEMP' && !empty($visitor['entry_time'])) {
+    // A visitor whose pass expired while on campus with no security holds can leave with an alert
+    $accepted = true;
+    $warnings[] = "Visitor stayed past pass date ({$visitor['valid_date']}).";
 }
 
 if ($result === 'MANUAL') {
@@ -269,13 +322,12 @@ if ($vehicle) {
    5. Side effects: log every rejection; open incidents for forged / revoked passes
    -------------------------------------------------------------------------- */
 $autoLogged = false;
-$incident = null;
 if (!$accepted && $result !== 'NOT_FOUND') {
     $plateForLog = $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $claimedPlate);
     $ownerName = $vehicle['owner_name'] ?? ($visitor['visitor_name'] ?? null);
     $vehicleType = $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : null);
 
-    if (in_array($result, ['FORGED', 'REVOKED'], true)) {
+    if (in_array($result, ['FORGED', 'REVOKED'], true) && $incident === null) {
         $incident = openSecurityIncident($pdo, $actor, [
             'plate' => $plateForLog,
             'vehicleType' => $vehicleType,
