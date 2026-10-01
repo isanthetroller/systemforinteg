@@ -1913,51 +1913,47 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCounts();
   }
 
-  function resolveIncident(inc) {
-    const resolutionNotes = prompt(`Enter resolution statement for ${inc.plateNumber} (${inc.caseNumber}):`, "Identity and authorization confirmed with registered owner.");
-    if (resolutionNotes === null) return;
+  async function resolveIncident(inc) {
+    const notes = await SPAlert.prompt({
+      title: 'Clear & Unblock Vehicle?',
+      html: `<div style="text-align:left"><div><strong>${escapeHtml(inc.plateNumber)}</strong> &middot; <span style="font-family:'JetBrains Mono',monospace">${escapeHtml(inc.caseNumber)}</span></div>
+        <div>Reason: ${escapeHtml(inc.reason)}</div></div>
+        <div style="margin-top:0.5rem">Releasing the hold lets this vehicle through the gate again. Your statement is saved in the audit trail.</div>`,
+      label: 'Resolution statement',
+      value: 'Identity and authorization confirmed with registered owner.',
+      confirmText: 'Clear & Unblock',
+      requiredMessage: 'A resolution statement is required.'
+    });
+    if (notes === null) return;
 
-    inc.status = 'Resolved';
-    const resolverLabel = (window.SPAuth && SPAuth.label()) || 'Security Administrator';
-    inc.notes += ` [Resolved by ${resolverLabel}: ${resolutionNotes}]`;
-
-    // Unblock vehicle
-    const vehicle = state.vehicles.find(v => v.plateNumber === inc.plateNumber);
-    if (vehicle) {
-      vehicle.status = 'Inside Campus';
-      if (vehicle.registrationStatus === 'Suspended') {
-        vehicle.registrationStatus = 'Active';
+    // The server decides first: a ban tied to a pending violation can only be lifted in Violations & Penalties
+    if (window.ApiClient && inc.id) {
+      try {
+        await ApiClient.resolveIncident(inc.id, notes);
+      } catch (err) {
+        if (err.code === 'VIOLATION_PENDING') {
+          await SPAlert.warning({ title: 'Resolve the violation first', text: err.message, confirmText: 'Understood' });
+        } else {
+          await SPAlert.error({ title: 'Could not clear the hold', text: err.message || 'The server did not accept the resolution. Please try again.' });
+        }
+        return;
       }
     }
 
-    // Add audit entry
-    state.auditLogs.unshift({
-      id: `log-${Date.now()}`,
-      timestamp: `Today, ${formatCurrentTime()}`,
-      plateNumber: inc.plateNumber,
-      vehicleType: inc.vehicleType,
-      ownerName: inc.ownerName,
-      driverName: inc.driverName,
-      driverRelationship: "Cleared by Security Admin",
-      gatePoint: inc.gatePoint,
-      action: "Security Stop Cleared",
-      status: "Inside Campus",
-      guardName: resolverLabel,
-      notes: `Incident ${inc.caseNumber} resolved: ${resolutionNotes}`
-    });
-
-    showToast(`Vehicle ${inc.plateNumber} unblocked and gate hold cleared.`);
+    const resolverLabel = (window.SPAuth && SPAuth.label()) || 'Security Administrator';
+    inc.status = 'Resolved';
+    inc.notes = (inc.notes || '') + ` [Resolved by ${resolverLabel}: ${notes}]`;
+    closeDrawer();
     renderIncidentsTable();
     renderDashboard();
-    renderVehiclesTable();
-    renderFullAuditTable();
-    closeDrawer();
+    // Vehicles, logs and cases exactly as the server now has them (no guessed local state)
+    loadInitialDataFromApi(true, true);
 
-    if (window.ApiClient && inc.id) {
-      ApiClient.resolveIncident(inc.id, resolutionNotes).catch(err => {
-        console.warn('[App] API incident resolution notice:', err.message);
-      });
-    }
+    SPAlert.success({
+      title: 'Vehicle Unblocked',
+      text: `${inc.plateNumber} was cleared and the gate hold was released.`,
+      timer: 2600
+    });
   }
 
   /* ==========================================================================
@@ -2704,6 +2700,12 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
 
+        ${window.SPClip ? `<div>
+          <h4 class="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2">Gate Camera &middot; ${SPClip.seconds} s clip at the ${/exit|egress|gate 2/i.test(inc.gatePoint || '') ? 'exit' : 'entrance'}</h4>
+          <div id="incidentClipHost"></div>
+          <p class="mt-1 text-[10px] text-slate-500">Simulated clip. Footage is supplied by the school; a placeholder shows until the video is added.</p>
+        </div>` : ''}
+
         <div>
           <h4 class="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2">Officer Incident Narrative</h4>
           <div class="bg-slate-50 p-3 rounded border border-slate-200 text-xs text-slate-800 leading-relaxed">
@@ -2732,6 +2734,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     openDrawer(`Security Stop — ${inc.caseNumber}`, inc.plateNumber, html, footerHtml);
+    if (window.SPClip) {
+      SPClip.mount(document.getElementById('incidentClipHost'), { logId: inc.logId, plate: inc.plateNumber, action: '', loggedAt: inc.reportedAt, gatePoint: inc.gatePoint });
+    }
 
     if (isHeld) {
       const resolveBtn = drawerFooter.querySelector('#drawerResolveBtn');

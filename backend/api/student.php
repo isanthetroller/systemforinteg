@@ -20,6 +20,7 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
+require_once __DIR__ . '/../lib/records.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendResponse(405, null, 'Method not allowed');
@@ -50,22 +51,6 @@ function ownerSafeNote($notes) {
     $n = preg_replace('/\s*\[Mobile operator:[^\]]*\]/i', '', (string)$notes);
     $n = trim($n, " |");
     return $n === '' ? null : $n;
-}
-
-/**
- * The refused passage (Entry / Exit Denied) that raised an incident, so the owner can play its gate clip.
- * Matched by plate within 10 minutes of the case being opened; null when the case was not raised at a gate.
- */
-function incidentLogId($pdo, $r) {
-    $at = strtotime($r['reported_at']);
-    if (!$at) return null;
-    $stmt = $pdo->prepare("SELECT `id` FROM `gate_logs`
-        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?
-          AND `action` IN ('Entry Denied', 'Exit Denied') AND `logged_at` BETWEEN ? AND ?
-        ORDER BY `id` DESC LIMIT 1");
-    $stmt->execute([normalizePlate($r['plate_number']), date('Y-m-d H:i:s', $at - 600), date('Y-m-d H:i:s', $at + 600)]);
-    $id = $stmt->fetchColumn();
-    return $id === false ? null : (int)$id;
 }
 
 function incidentView($pdo, $r) {

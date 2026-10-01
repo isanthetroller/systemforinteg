@@ -90,6 +90,34 @@
       background-color: #F1F5F9 !important;
       color: #1E293B !important;
     }
+    /* Written-statement popup (SPAlert.prompt) */
+    .swal2-popup.sp-swal-popup .swal2-input-label {
+      font-size: 0.75rem !important;
+      font-weight: 700 !important;
+      color: #334155 !important;
+      justify-content: flex-start !important;
+      margin: 0.9rem 0 0.35rem !important;
+    }
+    .swal2-popup.sp-swal-popup .swal2-textarea.sp-swal-input {
+      font-family: inherit !important;
+      font-size: 0.8125rem !important;
+      color: #0F172A !important;
+      border: 1px solid #CBD5E1 !important;
+      border-radius: 8px !important;
+      margin: 0 !important;
+      min-height: 5.5rem !important;
+      box-shadow: none !important;
+    }
+    .swal2-popup.sp-swal-popup .swal2-textarea.sp-swal-input:focus {
+      border-color: #1B3676 !important;
+      box-shadow: 0 0 0 2px rgba(27, 54, 118, 0.18) !important;
+    }
+    .swal2-popup.sp-swal-popup .swal2-validation-message {
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      background: #FEF2F2 !important;
+      color: #B31B1B !important;
+    }
     /* Toast Styles */
     .swal2-popup.sp-swal-toast {
       font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
@@ -293,6 +321,54 @@
           confirmButton: 'sp-swal-btn-navy'
         }
       });
+    },
+
+    /**
+     * Ask for a short written statement (for example the resolution note of a security case).
+     * @returns {Promise<string|null>} the trimmed text, or null when the dialog was cancelled
+     */
+    async prompt({
+      title,
+      text = '',
+      html = '',
+      label = '',
+      value = '',
+      placeholder = '',
+      icon = 'question',
+      confirmText = 'Confirm',
+      cancelText = 'Cancel',
+      required = true,
+      requiredMessage = 'Please enter a statement.',
+      maxLength = 300
+    }) {
+      if (!hasSwal()) {
+        const typed = global.prompt([title, text].filter(Boolean).join('\n\n'), value);
+        return typed === null ? null : typed.trim();
+      }
+      const res = await global.Swal.fire({
+        title,
+        text: html ? undefined : text,
+        html: html || undefined,
+        icon,
+        input: 'textarea',
+        inputLabel: label || undefined,
+        inputValue: value,
+        inputPlaceholder: placeholder,
+        inputAttributes: { maxlength: String(maxLength), 'aria-label': label || title },
+        inputValidator: (v) => (required && !String(v || '').trim() ? requiredMessage : undefined),
+        showCancelButton: true,
+        confirmButtonText: confirmText,
+        cancelButtonText: cancelText,
+        reverseButtons: true,
+        buttonsStyling: false,
+        customClass: {
+          popup: 'sp-swal-popup',
+          input: 'sp-swal-input',
+          confirmButton: 'sp-swal-btn-navy',
+          cancelButton: 'sp-swal-btn-cancel'
+        }
+      });
+      return res.isConfirmed ? String(res.value || '').trim() : null;
     },
 
     /**

@@ -5,6 +5,7 @@
  */
 
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/qr.php';
 
 /**
  * Inserts a gate_logs row. $f keys: plate, vehicleType, ownerName, driverName,
@@ -89,6 +90,22 @@ function openSecurityIncident($pdo, $actor, array $f, $dedupeMinutes = 0) {
         $f['reportedAt'] ?? date('Y-m-d H:i:s'),
     ], !empty($f['clientRef']) ? [$f['clientRef']] : []));
     return ['id' => (int)$pdo->lastInsertId(), 'caseNumber' => $caseNumber, 'duplicate' => false];
+}
+
+/**
+ * The refused passage (Entry / Exit Denied) that raised an incident, so the owner can play its gate clip.
+ * Matched by plate within 10 minutes of the case being opened; null when the case was not raised at a gate.
+ */
+function incidentLogId($pdo, $r) {
+    $at = strtotime($r['reported_at']);
+    if (!$at) return null;
+    $stmt = $pdo->prepare("SELECT `id` FROM `gate_logs`
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?
+          AND `action` IN ('Entry Denied', 'Exit Denied') AND `logged_at` BETWEEN ? AND ?
+        ORDER BY `id` DESC LIMIT 1");
+    $stmt->execute([normalizePlate($r['plate_number']), date('Y-m-d H:i:s', $at - 600), date('Y-m-d H:i:s', $at + 600)]);
+    $id = $stmt->fetchColumn();
+    return $id === false ? null : (int)$id;
 }
 
 function newCaseNumber($pdo) {

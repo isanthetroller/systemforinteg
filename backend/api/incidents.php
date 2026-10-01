@@ -68,6 +68,12 @@ function handleGetIncidents($pdo) {
     $stmt->execute($params);
     $incidents = $stmt->fetchAll();
 
+    // The refused passage that raised each case, so the Investigate drawer can play its gate clip
+    foreach ($incidents as &$inc) {
+        $inc['logId'] = incidentLogId($pdo, ['plate_number' => $inc['plateNumber'], 'reported_at' => $inc['reportedAt']]);
+    }
+    unset($inc);
+
     sendResponse(200, $incidents);
 }
 
