@@ -8,7 +8,9 @@
  * GET /api/student.php?action=me           Profile + standing summary
  * GET /api/student.php?action=vehicles     Own vehicles with drivers, status, strikes and signed QR pass
  * GET /api/student.php?action=violations   Warnings / violations on own vehicles
- * GET /api/student.php?action=activity     Last 15 gate entries / exits of own vehicles
+ * GET /api/student.php?action=activity     Gate audit log (entries, exits, denied attempts) of own vehicles
+ *                                          optional: &plate=<own plate>  &limit=<1-200, default 50>
+ * GET /api/student.php?action=alerts       Own vehicles flagged at the gate: active (Held) cases and recent closed ones
  *
  * Sign in:          POST /api/auth.php?action=login&realm=student  { username: <student ID>, password }
  * Change password:  POST /api/auth.php?action=change_password
@@ -30,6 +32,46 @@ function ownVehicles($pdo, $ownerId) {
     $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `owner_id_number` = ? ORDER BY `id` ASC");
     $stmt->execute([$ownerId]);
     return $stmt->fetchAll();
+}
+
+function ownPlates($pdo, $ownerId) {
+    return array_map(fn($v) => normalizePlate($v['plate_number']), ownVehicles($pdo, $ownerId));
+}
+
+function plateInClause($plates) {
+    return "REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') IN (" . implode(',', array_fill(0, count($plates), '?')) . ')';
+}
+
+/**
+ * Free-text gate notes can carry guard names or device tags; the owner only sees the reason.
+ */
+function ownerSafeNote($notes) {
+    $n = preg_replace('/\s*\[Mobile operator:[^\]]*\]/i', '', (string)$notes);
+    $n = trim($n, " |");
+    return $n === '' ? null : $n;
+}
+
+function incidentView($r) {
+    return [
+        'id' => (int)$r['id'],
+        'caseNumber' => $r['case_number'],
+        'plateNumber' => $r['plate_number'],
+        'reason' => $r['reason'],
+        'status' => $r['status'],
+        'gatePoint' => $r['gate_point'],
+        // For a stop at the gate this is the person who was driving; a ban notice has no stranger at the wheel
+        'driverName' => $r['driver_name'],
+        'driverRelationship' => $r['driver_relationship'],
+        'reportedAt' => $r['reported_at'],
+        'resolvedAt' => $r['resolved_at'],
+    ];
+}
+
+function heldIncidentCount($pdo, array $plates) {
+    if (!$plates) return 0;
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `security_incidents` WHERE `status` = 'Held' AND " . plateInClause($plates));
+    $stmt->execute($plates);
+    return (int)$stmt->fetchColumn();
 }
 
 function studentVehicleView($pdo, $row) {
@@ -73,6 +115,7 @@ switch ($action) {
                 'banned' => count(array_filter($vehicles, fn($v) => (int)$v['is_banned'] === 1)),
                 'strikes' => array_sum(array_map(fn($v) => (int)$v['warning_count'], $vehicles)),
                 'strikeLimit' => 3,
+                'activeAlerts' => heldIncidentCount($pdo, array_map(fn($v) => normalizePlate($v['plate_number']), $vehicles)),
             ],
         ]);
 
@@ -102,25 +145,52 @@ switch ($action) {
         sendResponse(200, $rows);
 
     case 'activity':
-        $plates = array_map(fn($v) => normalizePlate($v['plate_number']), ownVehicles($pdo, $ownerId));
+        $plates = ownPlates($pdo, $ownerId);
         if (!$plates) sendResponse(200, []);
-        $placeholders = implode(',', array_fill(0, count($plates), '?'));
-        $stmt = $pdo->prepare("SELECT `plate_number`, `action`, `gate_type`, `gate_point`, `driver_name`, `logged_at`
+        $limit = max(1, min(200, (int)($_GET['limit'] ?? 50)));
+        if (!empty($_GET['plate'])) {
+            // Only one of the owner's own plates may be named; anything else is not found
+            $wanted = normalizePlate($_GET['plate']);
+            if (!in_array($wanted, $plates, true)) sendResponse(404, null, 'Vehicle not found.');
+            $plates = [$wanted];
+        }
+        $stmt = $pdo->prepare("SELECT `id`, `plate_number`, `action`, `gate_type`, `gate_point`, `driver_name`, `driver_relationship`,
+                `verified_driver_name`, `notes`, `logged_at`
             FROM `gate_logs`
-            WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') IN ({$placeholders})
-            ORDER BY `id` DESC LIMIT 15");
+            WHERE " . plateInClause($plates) . "
+            ORDER BY `logged_at` DESC, `id` DESC LIMIT {$limit}");
         $stmt->execute($plates);
         sendResponse(200, array_map(function ($r) {
+            $denied = strpos($r['action'], 'Denied') !== false;
             return [
+                'id' => (int)$r['id'],
                 'plateNumber' => $r['plate_number'],
                 'action' => $r['action'],
                 'gateType' => $r['gate_type'],
                 'gatePoint' => $r['gate_point'],
                 'driverName' => $r['driver_name'],
+                'driverRelationship' => $r['driver_relationship'],
+                'driverVerified' => !empty($r['verified_driver_name']),
+                // The reason is shown for refused passages; routine approvals carry no owner-facing note
+                'note' => $denied ? ownerSafeNote($r['notes']) : null,
                 'loggedAt' => $r['logged_at'],
             ];
         }, $stmt->fetchAll()));
 
+    case 'alerts':
+        $plates = ownPlates($pdo, $ownerId);
+        if (!$plates) sendResponse(200, ['active' => [], 'recent' => []]);
+        $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE `status` = 'Held' AND " . plateInClause($plates) . "
+            ORDER BY `reported_at` DESC, `id` DESC LIMIT 20");
+        $stmt->execute($plates);
+        $active = array_map('incidentView', $stmt->fetchAll());
+
+        $since = date('Y-m-d H:i:s', strtotime('-30 days'));
+        $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE `status` <> 'Held' AND `reported_at` >= ? AND " . plateInClause($plates) . "
+            ORDER BY `reported_at` DESC, `id` DESC LIMIT 10");
+        $stmt->execute(array_merge([$since], $plates));
+        sendResponse(200, ['active' => $active, 'recent' => array_map('incidentView', $stmt->fetchAll())]);
+
     default:
-        sendResponse(400, null, 'Unknown action. Use me, vehicles, violations or activity.');
+        sendResponse(400, null, 'Unknown action. Use me, vehicles, violations, activity or alerts.');
 }

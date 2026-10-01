@@ -1,17 +1,23 @@
 /**
  * SecurePark Student Portal
  *
- * Screens: sign in -> (first sign-in) set password -> app with three tabs:
+ * Screens: sign in -> (first sign-in) set password -> app with four tabs:
  *   My Pass   signed QR pass per vehicle, standing, authorized drivers, save as image
- *   Strikes   3-strike meter, warnings / violations history, recent gate activity
+ *   Activity  gate audit log (entries, exits, refused passages) and flag history of the owner's vehicles
+ *   Strikes   3-strike meter, warnings / violations history
  *   Account   profile, change password, how the pass works
+ * A red banner on every tab appears while one of the owner's vehicles is held at the gate; the app
+ * re-checks every 15 seconds while it is open.
  *
  * Everything shown comes from /api/student.php, which only returns the signed-in owner's data.
  */
 (function () {
   const $ = (id) => document.getElementById(id);
   const STRIKE_LIMIT = 3;
-  const data = { me: null, vehicles: [], violations: [], activity: [], selected: 0 };
+  const data = { me: null, vehicles: [], violations: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
+  const POLL_MS = 15000;
+  const DEFAULT_TITLE = document.title;
+  let pollTimer = null;
 
   /* ---------------- helpers ---------------- */
   function esc(v) {
@@ -26,6 +32,29 @@
     if (!value) return '';
     const d = new Date(String(value).replace(' ', 'T') + '+08:00');
     return isNaN(d) ? value : d.toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function fmtTime(value) {
+    if (!value) return '';
+    const d = new Date(String(value).replace(' ', 'T') + '+08:00');
+    return isNaN(d) ? value : d.toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function manilaDay(offsetDays = 0) {
+    const d = new Date(Date.now() + offsetDays * 86400000);
+    return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+  }
+
+  function dayLabel(dayKey) {
+    if (dayKey === manilaDay(0)) return 'Today';
+    if (dayKey === manilaDay(-1)) return 'Yesterday';
+    return fmtDate(dayKey);
+  }
+
+  function normPlate(p) { return String(p || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+
+  function activeAlertsFor(v) {
+    return data.alerts.active.filter(a => normPlate(a.plateNumber) === normPlate(v.plateNumber));
   }
 
   function fmtDate(value) {
@@ -57,6 +86,7 @@
   }
 
   function vehicleStanding(v) {
+    if (activeAlertsFor(v).length) return { cls: 'bad', label: 'FLAGGED · HELD AT GATE', blocked: false, flagged: true };
     if (v.isBanned) return { cls: 'bad', label: 'BANNED — ENTRY BLOCKED', blocked: true };
     if (v.registrationStatus === 'Suspended') return { cls: 'bad', label: 'REGISTRATION SUSPENDED', blocked: true };
     if (v.passExpired) return { cls: 'bad', label: 'PASS EXPIRED', blocked: true };
@@ -162,9 +192,13 @@
       });
       if (!confirmed) return;
     }
+    stopPolling();
     await StudentApi.logout();
     data.me = null;
     data.vehicles = [];
+    data.alerts = { active: [], recent: [] };
+    document.title = DEFAULT_TITLE;
+    $('alertBanner').hidden = true;
     showScreen('screenLogin');
     $('loginId').focus();
   }
@@ -173,18 +207,61 @@
   async function enterApp() {
     showScreen('screenApp');
     $('tabPass').innerHTML = '<div class="card empty">Loading your pass&hellip;</div>';
-    const [me, vehicles, violations, activity] = await Promise.all([
-      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity()
+    const [me, vehicles, violations, activity, alerts] = await Promise.all([
+      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts()
     ]);
-    Object.assign(data, { me, vehicles, violations, activity });
+    Object.assign(data, { me, vehicles, violations, activity, alerts });
     data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
     $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
-    const strikes = me.summary.strikes + me.summary.banned;
-    $('strikesBadge').textContent = me.summary.banned ? '!' : String(me.summary.strikes);
+    renderAll();
+    startPolling();
+  }
+
+  function renderAll() {
+    const strikes = data.me.summary.strikes + data.me.summary.banned;
+    $('strikesBadge').textContent = data.me.summary.banned ? '!' : String(data.me.summary.strikes);
     $('strikesBadge').hidden = strikes === 0;
+    renderAlerts();
     renderPass();
+    renderActivity();
     renderStrikes();
     renderAccount();
+  }
+
+  /* ---- Live refresh: a flag raised at the gate must reach the owner while it is happening ---- */
+  function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(refresh, POLL_MS);
+  }
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  async function refresh() {
+    if (!data.me || document.hidden || $('screenApp').hidden) return;
+    try {
+      const [me, alerts, activity] = await Promise.all([StudentApi.me(), StudentApi.alerts(), StudentApi.activity()]);
+      const before = JSON.stringify([data.me.summary, data.alerts, data.activity.slice(0, 20)]);
+      if (before === JSON.stringify([me.summary, alerts, activity.slice(0, 20)])) return;
+
+      const known = new Set(data.alerts.active.map(a => a.id));
+      const raised = alerts.active.filter(a => !known.has(a.id));
+      const standingChanged = JSON.stringify(me.summary) !== JSON.stringify(data.me.summary);
+      Object.assign(data, { me, alerts, activity });
+      if (standingChanged || raised.length || alerts.active.length !== known.size) {
+        const [vehicles, violations] = await Promise.all([StudentApi.vehicles(), StudentApi.violations()]);
+        Object.assign(data, { vehicles, violations });
+      }
+      renderAll();
+      if (raised.length) notifyFlag(raised[0]);
+    } catch (_) { /* a missed check is retried on the next tick; sign-out is handled by the API client */ }
+  }
+
+  function notifyFlag(a) {
+    toast(`Your vehicle ${a.plateNumber} was flagged at the gate.`, 'error');
+    try { if (navigator.vibrate) navigator.vibrate([250, 120, 250, 120, 500]); } catch (_) {}
   }
 
   function selectTab(tabId) {
@@ -208,6 +285,10 @@
     const chips = data.vehicles.length > 1
       ? `<div class="chips" role="group" aria-label="Choose vehicle">${data.vehicles.map((x, i) =>
           `<button type="button" class="chip" data-index="${i}" aria-pressed="${i === data.selected}">${esc(x.plateNumber)}</button>`).join('')}</div>`
+      : '';
+    const flags = activeAlertsFor(v);
+    const flagNotice = flags.length
+      ? `<div class="notice bad">This vehicle is being <strong>held at the gate</strong> (${esc(flags[0].gatePoint)}). If you did not authorize this, contact the guard or the Campus Security Office right away. See the <strong>Activity</strong> tab.</div>`
       : '';
     const blockNotice = v.isBanned
       ? `<div class="notice bad">Your vehicle reached ${STRIKE_LIMIT} strikes or received a violation and is banned from entering campus. Go to the Campus Security Office to settle it. See the <strong>Strikes</strong> tab for details.</div>`
@@ -240,7 +321,7 @@
           <button type="button" class="btn btn-outline" data-action="save">Save Image</button>
         </div>
       </article>
-      ${blockNotice}
+      ${flagNotice}${blockNotice}
       <div class="card">
         <h2 class="card-title">Authorized drivers</h2>
         <ul class="drivers">
@@ -308,6 +389,111 @@
     }, 'image/png');
   }
 
+  /* ---- Flag banner (all tabs) ---- */
+  function renderAlerts() {
+    const active = data.alerts.active;
+    const banner = $('alertBanner');
+    const badge = $('activityBadge');
+    badge.textContent = '!';
+    badge.hidden = active.length === 0;
+    document.title = active.length ? '⚠ Vehicle flagged · SecurePark' : DEFAULT_TITLE;
+    if (!active.length) { banner.hidden = true; banner.innerHTML = ''; return; }
+
+    banner.innerHTML = `
+      <div class="alert-head"><span class="alert-dot" aria-hidden="true"></span>
+        ${active.length > 1 ? `${active.length} VEHICLE FLAGS AT THE GATE` : 'YOUR VEHICLE WAS FLAGGED AT THE GATE'}</div>
+      ${active.slice(0, 3).map(a => {
+        const stranger = a.driverName && !/^(registered owner|unknown|unverified)$/i.test(a.driverName) && !/registered owner/i.test(a.driverRelationship || '');
+        return `<div class="alert-item">
+          <div class="alert-line"><span class="plate plate-sm">${esc(a.plateNumber)}</span>
+            <span>${esc(a.gatePoint)} · ${esc(fmtDateTime(a.reportedAt))}</span></div>
+          <div class="alert-reason">Reason: ${esc(a.reason)}</div>
+          ${stranger ? `<div class="alert-driver">Person at the gate: <strong>${esc(a.driverName)}</strong>${a.driverRelationship && a.driverRelationship !== 'Unverified' ? ' · ' + esc(a.driverRelationship) : ''}</div>` : ''}
+          <div class="alert-case">Case ${esc(a.caseNumber)}</div>
+        </div>`;
+      }).join('')}
+      <p class="alert-help">Security is holding this vehicle. <strong>If you did not give anyone permission to drive it, tell the guard or the Campus Security Office right away.</strong></p>
+      <button type="button" class="btn btn-light btn-sm" data-action="open-activity">See what happened</button>`;
+    banner.hidden = false;
+  }
+
+  /* ---- Activity (audit log) ---- */
+  const ACTIVITY = {
+    'Entry Recorded': { cls: 'in',     title: 'Entered campus' },
+    'Exit Approved':  { cls: 'out',    title: 'Left campus' },
+    'Entry Denied':   { cls: 'denied', title: 'Entry refused' },
+    'Exit Denied':    { cls: 'denied', title: 'Exit stopped at the gate' },
+  };
+  const ACTIVITY_ICON = {
+    in: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    out: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+    denied: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
+  };
+
+  function renderActivity() {
+    const tab = $('tabActivity');
+    if (!data.vehicles.length) {
+      tab.innerHTML = '<div class="card empty"><strong>No registered vehicle</strong>Gate activity appears here once your vehicle is registered.</div>';
+      return;
+    }
+    const plates = data.vehicles.map(v => v.plateNumber);
+    if (data.activityFilter !== 'all' && !plates.includes(data.activityFilter)) data.activityFilter = 'all';
+    const chips = plates.length > 1
+      ? `<div class="chips" role="group" aria-label="Filter by vehicle">
+          <button type="button" class="chip" data-filter="all" aria-pressed="${data.activityFilter === 'all'}">All</button>
+          ${plates.map(p => `<button type="button" class="chip" data-filter="${esc(p)}" aria-pressed="${data.activityFilter === p}">${esc(p)}</button>`).join('')}
+        </div>`
+      : '';
+
+    const flags = [...data.alerts.active, ...data.alerts.recent]
+      .filter(a => data.activityFilter === 'all' || normPlate(a.plateNumber) === normPlate(data.activityFilter));
+    const flagCard = flags.length
+      ? `<div class="card"><h2 class="card-title">Flags on your vehicle</h2><ul class="history">${flags.map(a => `
+          <li>
+            <div class="row1"><span class="type">${esc(a.reason)}</span><span class="date">${esc(fmtDateTime(a.reportedAt))}</span></div>
+            <div class="desc">${esc(a.plateNumber)} · ${esc(a.gatePoint)}</div>
+            <span class="badge ${a.status === 'Held' ? 'pending' : esc(a.status.toLowerCase())}">${a.status === 'Held' ? 'ACTIVE · HELD' : esc(a.status)}</span>
+            <span class="badge dismissed">${esc(a.caseNumber)}</span>
+            ${a.resolvedAt ? `<div class="desc" style="color:var(--muted)">Closed ${esc(fmtDateTime(a.resolvedAt))}</div>` : ''}
+          </li>`).join('')}</ul></div>`
+      : '';
+
+    const rows = data.activity.filter(a => data.activityFilter === 'all' || normPlate(a.plateNumber) === normPlate(data.activityFilter));
+    let log;
+    if (!rows.length) {
+      log = '<p class="empty" style="padding:12px 0">No gate activity yet.</p>';
+    } else {
+      const groups = [];
+      rows.forEach(a => {
+        const key = String(a.loggedAt || '').slice(0, 10);
+        let g = groups[groups.length - 1];
+        if (!g || g.key !== key) { g = { key, items: [] }; groups.push(g); }
+        g.items.push(a);
+      });
+      log = groups.map(g => `
+        <h3 class="day-label">${esc(dayLabel(g.key))}</h3>
+        <ul class="timeline">${g.items.map(a => {
+          const t = ACTIVITY[a.action] || { cls: 'in', title: a.action };
+          const driver = a.driverName && !/^unverified$/i.test(a.driverName)
+            ? `Driver: ${esc(a.driverName)}${a.driverRelationship && !/^unverified$/i.test(a.driverRelationship) ? ' · ' + esc(a.driverRelationship) : ''}`
+            : '';
+          return `<li class="tl ${t.cls}">
+            <span class="tl-icon" aria-hidden="true"><svg viewBox="0 0 24 24">${ACTIVITY_ICON[t.cls]}</svg></span>
+            <div class="tl-body">
+              <div class="tl-row"><span class="tl-title">${esc(t.title)}</span><span class="tl-time">${esc(fmtTime(a.loggedAt))}</span></div>
+              <div class="tl-sub">${esc(a.plateNumber)} · ${esc(a.gatePoint || '')}</div>
+              ${driver ? `<div class="tl-sub">${driver}</div>` : ''}
+              ${a.note ? `<div class="tl-note">${esc(a.note)}</div>` : ''}
+            </div></li>`;
+        }).join('')}</ul>`).join('');
+    }
+
+    tab.innerHTML = `${chips}${flagCard}
+      <div class="card"><h2 class="card-title">Gate activity</h2>${log}
+        <p class="hint">Every time your vehicle enters, leaves or is stopped at a gate, it is recorded here with the driver who was verified by the guard.</p></div>`;
+    tab.querySelectorAll('[data-filter]').forEach(c => c.addEventListener('click', () => { data.activityFilter = c.dataset.filter; renderActivity(); }));
+  }
+
   /* ---- Strikes ---- */
   function meter(count, banned) {
     const n = Math.min(Number(count || 0), STRIKE_LIMIT);
@@ -329,18 +515,13 @@
             ${r.resolutionNotes ? `<div class="desc" style="color:var(--muted)">${esc(r.resolutionNotes)}</div>` : ''}
           </li>`).join('')}</ul>`
       : '<p class="empty" style="padding:12px 0">No warnings or violations. Keep it up!</p>';
-    const activity = data.activity.length
-      ? `<ul class="activity">${data.activity.map(a => `
-          <li><span><span class="act ${/Denied/.test(a.action) ? 'denied' : ''}">${esc(a.action)}</span> · ${esc(a.plateNumber)}</span><span style="color:var(--muted)">${esc(fmtDateTime(a.loggedAt))}</span></li>`).join('')}</ul>`
-      : '<p class="empty" style="padding:12px 0">No gate activity yet.</p>';
     const anyBanned = data.vehicles.some(v => v.isBanned);
 
     $('tabStrikes').innerHTML = `
       ${anyBanned ? '<div class="notice bad">A vehicle is banned. Visit the Campus Security Office to resolve the violation; the ban and your strikes are cleared once it is resolved.</div>' : ''}
       <div class="card"><h2 class="card-title">Strike standing</h2>${standing || '<p class="hint">No vehicles.</p>'}
         <p class="hint">Warnings and overnight / after-curfew parking each add one strike. ${STRIKE_LIMIT} strikes = automatic ban.</p></div>
-      <div class="card"><h2 class="card-title">Warnings &amp; violations</h2>${history}</div>
-      <div class="card"><h2 class="card-title">Recent gate activity</h2>${activity}</div>`;
+      <div class="card"><h2 class="card-title">Warnings &amp; violations</h2>${history}</div>`;
   }
 
   /* ---- Account ---- */
@@ -360,6 +541,10 @@
     $('passwordForm').addEventListener('submit', onPassword);
     document.querySelectorAll('[data-action="logout"]').forEach(b => b.addEventListener('click', logout));
     document.querySelectorAll('.tabbar-btn').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+    $('alertBanner').addEventListener('click', (e) => {
+      if (e.target.closest('[data-action="open-activity"]')) selectTab('tabActivity');
+    });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
     $('qrZoom').addEventListener('click', () => { $('qrZoom').hidden = true; });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('qrZoom').hidden = true; });
     boot();

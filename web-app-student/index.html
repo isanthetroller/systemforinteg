@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20260930f">
+  <link rel="stylesheet" href="css/style.css?v=20261001a">
 </head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
@@ -128,7 +128,9 @@
     </header>
 
     <main class="content">
+      <div id="alertBanner" class="alert-banner" role="alert" aria-live="assertive" hidden></div>
       <section id="tabPass" class="tab" aria-labelledby="navPass"></section>
+      <section id="tabActivity" class="tab" aria-labelledby="navActivity" hidden></section>
       <section id="tabStrikes" class="tab" aria-labelledby="navStrikes" hidden></section>
       <section id="tabAccount" class="tab" aria-labelledby="navAccount" hidden>
         <div class="card">
@@ -167,6 +169,11 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM14 20h2M20 14v2"/></svg>
         <span>My Pass</span>
       </button>
+      <button type="button" id="navActivity" class="tabbar-btn" data-tab="tabActivity">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span>Activity</span>
+        <span id="activityBadge" class="tabbar-badge" hidden></span>
+      </button>
       <button type="button" id="navStrikes" class="tabbar-btn" data-tab="tabStrikes">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
         <span>Strikes</span>
@@ -190,10 +197,10 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="js/config.js?v=20260930c"></script>
-  <script src="js/aes.js?v=20260930c"></script>
-  <script src="js/qrcode.min.js?v=20260930c"></script>
-  <script src="js/api.js?v=20260930c"></script>
+  <script src="js/config.js?v=20261001a"></script>
+  <script src="js/aes.js?v=20261001a"></script>
+  <script src="js/qrcode.min.js?v=20261001a"></script>
+  <script src="js/api.js?v=20261001a"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -210,7 +217,7 @@
       tempPassword: async ({ title, password }) => window.prompt(title + '\nCopy this temporary password:', password)
     };
   </script>
-  <script src="js/alerts.js?v=20260930c"></script>
-  <script src="js/app.js?v=20260930c"></script>
+  <script src="js/alerts.js?v=20261001a"></script>
+  <script src="js/app.js?v=20261001a"></script>
 </body>
 </html>

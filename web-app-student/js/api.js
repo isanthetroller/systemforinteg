@@ -86,7 +86,8 @@ const StudentApi = (function () {
     async me() { return (await request('student.php?action=me')).data; },
     async vehicles() { return (await request('student.php?action=vehicles')).data; },
     async violations() { return (await request('student.php?action=violations')).data; },
-    async activity() { return (await request('student.php?action=activity')).data; },
+    async activity(limit = 60) { return (await request(`student.php?action=activity&limit=${limit}`)).data; },
+    async alerts() { return (await request('student.php?action=alerts')).data; },
 
     async changePassword(current, next) {
       return request('auth.php?action=change_password', { method: 'POST', body: { current_password: current, new_password: next } });
