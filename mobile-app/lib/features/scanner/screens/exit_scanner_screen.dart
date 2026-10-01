@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/scanner_controller_safe.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
+import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/gate_repository.dart';
+import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../dialogs/block_reason_dialog.dart';
@@ -117,6 +120,9 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   @visibleForTesting
   void testVerifyPass(String raw) => _verifyPass(raw);
 
+  @visibleForTesting
+  void testResetScanner() => _resetScanner();
+
   /// Evaluates scanned QR code against real-time database state for exit eligibility
   Future<void> _verifyPass(String raw) async {
     if (_isVerifying || _isSubmitting || _resultStatus != null || _rejectionDetails != null) return;
@@ -132,12 +138,47 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
     final clean = raw.trim();
 
+    Map<String, dynamic>? decodedJson;
+    if (clean.startsWith('{') && clean.endsWith('}')) {
+      try {
+        final dynamic d = jsonDecode(clean);
+        if (d is Map<String, dynamic>) {
+          decodedJson = d;
+        } else if (d is Map) {
+          decodedJson = Map<String, dynamic>.from(d);
+        }
+      } catch (_) {}
+    }
+
+    final isVisitorPayload = decodedJson != null && (
+      decodedJson['type'] == 'NCST_VISITOR_PASS' ||
+      decodedJson['type'] == 'visitor_temp' ||
+      (decodedJson['pid']?.toString().startsWith('VP-') ?? false) ||
+      (decodedJson['passId']?.toString().startsWith('VP-') ?? false) ||
+      (decodedJson['pass_code']?.toString().startsWith('VP-') ?? false) ||
+      decodedJson.containsKey('visitorName') ||
+      decodedJson.containsKey('visitor_name')
+    );
+    final isVisitorCode = clean.startsWith('VP-') || isVisitorPayload;
+
+    final extractedPlate = (decodedJson?['plateNumber'] ??
+        decodedJson?['plate_number'] ??
+        decodedJson?['plate'] ??
+        '').toString().trim();
+    final extractedPassCode = (decodedJson?['pid'] ??
+        decodedJson?['passId'] ??
+        decodedJson?['pass_code'] ??
+        (clean.startsWith('VP-') ? clean : '')).toString().trim();
+
     // Query live API for fresh status - live database is source of truth
-    VehicleRecord? registeredVehicle;
+    final verifyPlate = extractedPlate.isNotEmpty ? extractedPlate : (isVisitorCode ? '' : clean);
     Map<String, dynamic>? verifyResult;
     try {
-      registeredVehicle = await ApiService.lookupVehicle(clean);
-      verifyResult = await ApiService.verifyPassWithServer(qrCode: clean, plate: clean, gateType: 'Egress');
+      verifyResult = await ApiService.verifyPassWithServer(
+        qrCode: clean,
+        plate: verifyPlate.isNotEmpty ? verifyPlate : null,
+        gateType: 'Egress',
+      );
     } catch (_) {
       // Handled below
     }
@@ -159,14 +200,141 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       return;
     }
 
+    // 1. Visitor Pass check: prioritize visitor pass identification so visitor registrations from Guard 1
+    // are never mistakenly treated as generic registered vehicles
+    final serverVisitor = (verifyResult != null && verifyResult['visitor'] is Map)
+        ? (verifyResult['visitor'] as Map<String, dynamic>)
+        : null;
+
+    if (serverVisitor != null || isVisitorCode || (verifyResult != null && verifyResult['passType'] == 'visitor_temp')) {
+      // 1a. Parse from server verifyResult
+      ScannedVisitorPass? visitor = ScannedVisitorPass.fromVerify(verifyResult);
+
+      // 1b. If verifyResult did not return the visitor pass details, query live /api/visitors.php?q=...
+      if (visitor == null) {
+        final query = extractedPassCode.isNotEmpty
+            ? extractedPassCode
+            : (extractedPlate.isNotEmpty ? extractedPlate : clean);
+        final livePass = await ApiService.lookupVisitorPass(query);
+        if (livePass != null) {
+          final isBlocked = livePass.isBlocked ||
+              (verifyResult != null && (verifyResult['result'] == 'REVOKED' || verifyResult['result'] == 'BANNED'));
+          visitor = ScannedVisitorPass.fromVisitorPass(
+            livePass,
+            result: isBlocked ? 'REVOKED' : (verifyResult?['result']?.toString() ?? 'VALID'),
+            accepted: verifyResult != null ? verifyResult['accepted'] == true : livePass.isActive,
+            reason: (verifyResult?['reason'] ?? (isBlocked ? 'Blocked pass' : '')).toString(),
+            warnings: (verifyResult?['warnings'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+            currentlyInside: verifyResult?['currentlyInside'] == true || livePass.status == VisitorPassStatus.active,
+          );
+        }
+      }
+
+      // 1c. If still not found, check local visitor repository
+      if (visitor == null) {
+        final localPass = await VisitorRepository().lookupPass(clean);
+        if (localPass != null) {
+          visitor = ScannedVisitorPass.fromVisitorPass(
+            localPass,
+            result: localPass.isBlocked ? 'REVOKED' : 'VALID',
+            accepted: localPass.isActive,
+            reason: localPass.isBlocked ? 'Blocked pass' : '',
+            currentlyInside: localPass.status == VisitorPassStatus.active,
+          );
+        }
+      }
+
+      // 1d. Decoded payload fallback if created by Guard 1
+      if (visitor == null && decodedJson != null && (decodedJson['visitorName'] != null || decodedJson['visitor_name'] != null)) {
+        final vName = (decodedJson['visitorName'] ?? decodedJson['visitor_name'] ?? 'Visitor').toString();
+        final vPlate = (decodedJson['plateNumber'] ?? decodedJson['plate_number'] ?? 'UNKNOWN').toString();
+        final pId = (decodedJson['passId'] ?? decodedJson['pass_code'] ?? 'VP-LOCAL').toString();
+        final vModel = (decodedJson['vehicleModel'] ?? decodedJson['vehicle_model'] ?? '').toString();
+        visitor = ScannedVisitorPass(
+          id: int.tryParse(pId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1,
+          passCode: pId,
+          visitorName: vName,
+          plateNumber: vPlate,
+          vehicleModel: vModel,
+          validDate: DateTime.now().toIso8601String().substring(0, 10),
+          status: 'Active',
+          result: 'VALID',
+          accepted: true,
+          currentlyInside: true,
+        );
+      }
+
+      if (visitor != null) {
+        if (!mounted) return;
+
+        // Strict Blocked Check
+        if (visitor.isBlocked || (!visitor.accepted && visitor.reason.toLowerCase().contains('block'))) {
+          setState(() {
+            _isVerifying = false;
+            _rejectionDetails = ScanRejectionDetails(
+              type: ScanRejectionType.blocked,
+              title: 'Visitor Pass Blocked',
+              message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before the vehicle can exit.',
+              plateNumber: visitor!.plateNumber,
+              ownerName: visitor.visitorName,
+              statusBadge: 'BLOCKED',
+              reason: visitor.reason.isNotEmpty ? visitor.reason : 'Security Hold on visitor pass.',
+            );
+          });
+          return;
+        }
+
+        // Strict Duplicate Exit / Already Used Check
+        final alreadyExited = !visitor.accepted &&
+            (visitor.reason.contains('already been used') ||
+             visitor.reason.contains('already checked out') ||
+             visitor.reason.contains('outside') ||
+             visitor.status.toLowerCase().contains('used') ||
+             visitor.status.toLowerCase().contains('exit'));
+
+        if (alreadyExited) {
+          setState(() {
+            _isVerifying = false;
+            _rejectionDetails = ScanRejectionDetails(
+              type: ScanRejectionType.duplicateExit,
+              title: 'Vehicle Not Inside Campus',
+              message: 'This visitor pass has already completed exit or was not recorded as inside campus. Duplicate exit operations are rejected.',
+              plateNumber: visitor!.plateNumber,
+              ownerName: visitor.visitorName,
+              statusBadge: 'ALREADY EXITED',
+              reason: visitor.reason.isNotEmpty ? visitor.reason : 'Pass has already been checked out.',
+            );
+          });
+          return;
+        }
+
+        setState(() {
+          _isVerifying = false;
+          _exitVisitor = visitor;
+          _exitCheckedItems.clear();
+          _verifiedVehicleRecord = null;
+          _resultStatus = visitor!.accepted ? ExitVerificationStatus.valid : ExitVerificationStatus.blocked;
+          _statusReason = visitor.reason.isNotEmpty ? visitor.reason : null;
+        });
+        return;
+      }
+    }
+
+    // 2. Registered Vehicle lookup (strictly for genuine registered vehicles, NOT visitors)
+    VehicleRecord? registeredVehicle;
+    try {
+      registeredVehicle = await ApiService.lookupVehicle(clean);
+    } catch (_) {}
+
     if (registeredVehicle == null || (!registeredVehicle.isParsedFromQr && (registeredVehicle.ownerIdNumber == 'UNKNOWN' || registeredVehicle.ownerIdNumber.startsWith('VISITOR-')))) {
       final local = GateRepository().resolveVehicle(clean);
-      if (local.isParsedFromQr || (local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-'))) {
+      if (local.isParsedFromQr && local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-') && !local.ownerRole.contains('Guest') && !local.ownerRole.contains('Visitor')) {
         registeredVehicle = local;
       } else {
         registeredVehicle = null;
       }
     }
+
     if (verifyResult != null && verifyResult['vehicle'] is Map<String, dynamic>) {
       final vMap = verifyResult['vehicle'] as Map<String, dynamic>;
       if (registeredVehicle != null) {
@@ -195,60 +363,14 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       }
     }
 
-    // If registered vehicle found
-    if (registeredVehicle != null && registeredVehicle.isParsedFromQr && registeredVehicle.ownerIdNumber != 'UNKNOWN' && !registeredVehicle.ownerRole.contains('Guest')) {
+    // If genuine registered vehicle found
+    if (registeredVehicle != null && registeredVehicle.ownerIdNumber != 'UNKNOWN' && !registeredVehicle.ownerRole.contains('Guest') && !registeredVehicle.ownerRole.contains('Visitor')) {
       _evaluateRegisteredVehicle(registeredVehicle);
       return;
     }
 
-    // Visitor Day Pass check
-    final visitor = ScannedVisitorPass.fromVerify(verifyResult);
-    if (!mounted) return;
-    if (visitor != null) {
-      if (visitor.isBlocked || (!visitor.accepted && visitor.reason.toLowerCase().contains('block'))) {
-        setState(() {
-          _isVerifying = false;
-          _rejectionDetails = ScanRejectionDetails(
-            type: ScanRejectionType.blocked,
-            title: 'Visitor Pass Blocked',
-            message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before the vehicle can exit.',
-            plateNumber: visitor.plateNumber,
-            ownerName: visitor.visitorName,
-            statusBadge: 'BLOCKED',
-            reason: visitor.reason.isNotEmpty ? visitor.reason : 'Security Hold on visitor pass.',
-          );
-        });
-        return;
-      }
-
-      if (!visitor.accepted && (visitor.reason.contains('already been used') || visitor.reason.contains('already checked out') || visitor.reason.contains('outside'))) {
-        setState(() {
-          _isVerifying = false;
-          _rejectionDetails = ScanRejectionDetails(
-            type: ScanRejectionType.duplicateExit,
-            title: 'Vehicle Not Inside Campus',
-            message: 'This visitor pass has already completed exit or was not recorded as inside campus. Duplicate exit operations are rejected.',
-            plateNumber: visitor.plateNumber,
-            ownerName: visitor.visitorName,
-            statusBadge: 'ALREADY EXITED',
-            reason: visitor.reason,
-          );
-        });
-        return;
-      }
-
-      setState(() {
-        _isVerifying = false;
-        _exitVisitor = visitor;
-        _exitCheckedItems.clear();
-        _verifiedVehicleRecord = null;
-        _resultStatus = visitor.accepted ? ExitVerificationStatus.valid : ExitVerificationStatus.blocked;
-        _statusReason = visitor.reason.isNotEmpty ? visitor.reason : null;
-      });
-      return;
-    }
-
     // Invalid / Unrecognized QR State
+    if (!mounted) return;
     setState(() {
       _isVerifying = false;
       _rejectionDetails = ScanRejectionDetails(

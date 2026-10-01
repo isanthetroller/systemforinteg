@@ -974,6 +974,8 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       notes: 'Temporary pass ${registeredPass.passId} generated at gate (valid all day today)$itemsNote',
       vehicleType: registeredPass.vehicleModel ?? 'Visitor Vehicle',
       ownerName: registeredPass.visitorName,
+      visitorPassId: registeredPass.dbId,
+      itemsVerified: registeredPass.items.isNotEmpty,
     );
 
     if (mounted) {

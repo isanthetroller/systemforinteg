@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/scanner_controller_safe.dart';
@@ -5,7 +6,9 @@ import '../../../data/mock_data.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
+import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/gate_repository.dart';
+import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
 import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
@@ -182,16 +185,181 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       return;
     }
 
+    Map<String, dynamic>? decodedJson;
+    if (queryCode.startsWith('{') && queryCode.endsWith('}')) {
+      try {
+        final dynamic d = jsonDecode(queryCode);
+        if (d is Map<String, dynamic>) {
+          decodedJson = d;
+        } else if (d is Map) {
+          decodedJson = Map<String, dynamic>.from(d);
+        }
+      } catch (_) {}
+    }
+
+    final isVisitorPayload = decodedJson != null && (
+      decodedJson['type'] == 'NCST_VISITOR_PASS' ||
+      decodedJson['type'] == 'visitor_temp' ||
+      (decodedJson['pid']?.toString().startsWith('VP-') ?? false) ||
+      (decodedJson['passId']?.toString().startsWith('VP-') ?? false) ||
+      (decodedJson['pass_code']?.toString().startsWith('VP-') ?? false) ||
+      decodedJson.containsKey('visitorName') ||
+      decodedJson.containsKey('visitor_name')
+    );
+    final isVisitorCode = queryCode.startsWith('VP-') || isVisitorPayload;
+
+    final extractedPlate = (decodedJson?['plateNumber'] ??
+        decodedJson?['plate_number'] ??
+        decodedJson?['plate'] ??
+        '').toString().trim();
+    final extractedPassCode = (decodedJson?['pid'] ??
+        decodedJson?['passId'] ??
+        decodedJson?['pass_code'] ??
+        (queryCode.startsWith('VP-') ? queryCode : '')).toString().trim();
+
     try {
+      final verifyPlate = extractedPlate.isNotEmpty
+          ? extractedPlate
+          : (isVisitorCode ? '' : (initialVeh?.plateNumber ?? queryCode));
+
       final verifyFuture = ApiService.verifyPassWithServer(
         qrCode: queryCode,
-        plate: initialVeh?.plateNumber ?? queryCode,
+        plate: verifyPlate.isNotEmpty ? verifyPlate : null,
         gateType: 'Ingress',
       );
-      final lookupFuture = ApiService.lookupVehicle(queryCode);
-
       final verifyResult = await verifyFuture;
-      VehicleRecord? remoteVehicle = await lookupFuture;
+
+      // Check network / API failure
+      final isNetworkError = ApiService.lastVerifyError != null ||
+          (verifyResult != null && (verifyResult['error_type'] == 'network_error' || verifyResult['status'] == 'offline'));
+      if (isNetworkError) {
+        if (!mounted) return;
+        setState(() {
+          _isValidating = false;
+          _scannedVehicle = null;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.networkError,
+            title: 'Connection / API Error',
+            message: 'Unable to verify vehicle state in real-time with the database. Entry verification stopped for security.',
+            reason: ApiService.lastVerifyError ?? 'Network connection failure',
+          );
+        });
+        return;
+      }
+
+      final serverVisitor = (verifyResult != null && verifyResult['visitor'] is Map)
+          ? (verifyResult['visitor'] as Map<String, dynamic>)
+          : null;
+
+      // 1. Visitor Pass check: prioritize visitor pass identification so visitor registrations from Guard 1
+      // are never mistakenly treated as generic registered vehicles
+      if (serverVisitor != null || isVisitorCode || (verifyResult != null && verifyResult['passType'] == 'visitor_temp')) {
+        ScannedVisitorPass? visitor = ScannedVisitorPass.fromVerify(verifyResult);
+
+        if (visitor == null) {
+          final query = extractedPassCode.isNotEmpty
+              ? extractedPassCode
+              : (extractedPlate.isNotEmpty ? extractedPlate : queryCode);
+          final livePass = await ApiService.lookupVisitorPass(query);
+          if (livePass != null) {
+            final isBlocked = livePass.isBlocked ||
+                (verifyResult != null && (verifyResult['result'] == 'REVOKED' || verifyResult['result'] == 'BANNED'));
+            visitor = ScannedVisitorPass.fromVisitorPass(
+              livePass,
+              result: isBlocked ? 'REVOKED' : (verifyResult?['result']?.toString() ?? 'VALID'),
+              accepted: verifyResult != null ? verifyResult['accepted'] == true : livePass.isActive,
+              reason: (verifyResult?['reason'] ?? (isBlocked ? 'Blocked pass' : '')).toString(),
+              warnings: (verifyResult?['warnings'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+              currentlyInside: verifyResult?['currentlyInside'] == true || livePass.status == VisitorPassStatus.active,
+            );
+          }
+        }
+
+        if (visitor == null) {
+          final localPass = await VisitorRepository().lookupPass(queryCode);
+          if (localPass != null) {
+            visitor = ScannedVisitorPass.fromVisitorPass(
+              localPass,
+              result: localPass.isBlocked ? 'REVOKED' : 'VALID',
+              accepted: localPass.isActive,
+              reason: localPass.isBlocked ? 'Blocked pass' : '',
+              currentlyInside: localPass.status == VisitorPassStatus.active,
+            );
+          }
+        }
+
+        if (visitor == null && decodedJson != null && (decodedJson['visitorName'] != null || decodedJson['visitor_name'] != null)) {
+          final vName = (decodedJson['visitorName'] ?? decodedJson['visitor_name'] ?? 'Visitor').toString();
+          final vPlate = (decodedJson['plateNumber'] ?? decodedJson['plate_number'] ?? 'UNKNOWN').toString();
+          final pId = (decodedJson['passId'] ?? decodedJson['pass_code'] ?? 'VP-LOCAL').toString();
+          final vModel = (decodedJson['vehicleModel'] ?? decodedJson['vehicle_model'] ?? '').toString();
+          visitor = ScannedVisitorPass(
+            id: int.tryParse(pId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1,
+            passCode: pId,
+            visitorName: vName,
+            plateNumber: vPlate,
+            vehicleModel: vModel,
+            validDate: DateTime.now().toIso8601String().substring(0, 10),
+            status: 'Active',
+            result: 'VALID',
+            accepted: true,
+            currentlyInside: false,
+          );
+        }
+
+        if (visitor != null) {
+          if (!mounted) return;
+
+          // Strict Blocked Check
+          if (visitor.isBlocked || (!visitor.accepted && visitor.reason.toLowerCase().contains('block'))) {
+            setState(() {
+              _isValidating = false;
+              _scannedVehicle = null;
+              _rejectionDetails = ScanRejectionDetails(
+                type: ScanRejectionType.blocked,
+                title: 'Visitor Pass Blocked',
+                message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before entry can be granted.',
+                plateNumber: visitor!.plateNumber,
+                ownerName: visitor.visitorName,
+                statusBadge: 'BLOCKED',
+                reason: visitor.reason.isNotEmpty ? visitor.reason : 'Security Hold on visitor pass.',
+              );
+            });
+            return;
+          }
+
+          // Strict Duplicate Entry Attempt Check (Anti-passback: already recorded inside)
+          if (visitor.currentlyInside || (!visitor.accepted && (visitor.reason.contains('already inside') || visitor.reason.contains('already entered')))) {
+            setState(() {
+              _isValidating = false;
+              _scannedVehicle = null;
+              _rejectionDetails = ScanRejectionDetails(
+                type: ScanRejectionType.duplicateEntry,
+                title: 'Duplicate Entry Attempt',
+                message: 'This visitor pass is already recorded as inside campus. The same QR code cannot be used for entry while already inside.',
+                plateNumber: visitor!.plateNumber,
+                ownerName: visitor.visitorName,
+                statusBadge: 'INSIDE CAMPUS',
+                reason: visitor.reason.isNotEmpty ? visitor.reason : 'Anti-passback: Vehicle must exit before entering again.',
+              );
+            });
+            return;
+          }
+
+          setState(() {
+            _isValidating = false;
+            _rejectionDetails = null;
+          });
+          _applyVisitorPass(visitor);
+          return;
+        }
+      }
+
+      // 2. Registered Vehicle lookup (strictly for genuine registered vehicles, NOT visitors)
+      VehicleRecord? remoteVehicle;
+      try {
+        remoteVehicle = await ApiService.lookupVehicle(queryCode);
+      } catch (_) {}
 
       if (remoteVehicle == null && initialVeh != null && initialVeh.plateNumber.isNotEmpty) {
         remoteVehicle = await ApiService.lookupVehicleByPlate(initialVeh.plateNumber);
@@ -212,32 +380,15 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         }
       }
 
-      // Check network / API failure
-      final isNetworkError = ApiService.lastVerifyError != null ||
-          (verifyResult != null && (verifyResult['error_type'] == 'network_error' || verifyResult['status'] == 'offline'));
-      if (isNetworkError) {
-        if (!mounted) return;
-        setState(() {
-          _isValidating = false;
-          _scannedVehicle = null;
-          _rejectionDetails = ScanRejectionDetails(
-            type: ScanRejectionType.networkError,
-            title: 'Connection / API Error',
-            message: 'Unable to verify vehicle state in real-time with the database. Entry verification stopped for security.',
-            reason: ApiService.lastVerifyError ?? 'Network connection failure',
-          );
-        });
-        return;
-      }
-
-      // Local repository fallback if remote returned nothing
-      if (remoteVehicle == null) {
+      if (remoteVehicle == null || (!remoteVehicle.isParsedFromQr && (remoteVehicle.ownerIdNumber == 'UNKNOWN' || remoteVehicle.ownerIdNumber.startsWith('VISITOR-')))) {
         if (initialVeh != null && (initialVeh.isParsedFromQr || (initialVeh.ownerIdNumber != 'UNKNOWN' && !initialVeh.ownerIdNumber.startsWith('VISITOR-')))) {
           remoteVehicle = initialVeh;
         } else {
           final local = widget.repository.resolveVehicle(queryCode);
-          if (local.isParsedFromQr || (local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-'))) {
+          if (local.isParsedFromQr && local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-') && !local.ownerRole.contains('Guest') && !local.ownerRole.contains('Visitor')) {
             remoteVehicle = local;
+          } else {
+            remoteVehicle = null;
           }
         }
       }
@@ -245,51 +396,6 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       final vData = (verifyResult != null && verifyResult['data'] is Map<String, dynamic>)
           ? (verifyResult['data'] as Map<String, dynamic>)
           : verifyResult;
-
-      // Check visitor pass
-      final visitorPass = remoteVehicle == null ? ScannedVisitorPass.fromVerify(vData) : null;
-      if (visitorPass != null) {
-        if (visitorPass.isBlocked || (!visitorPass.accepted && visitorPass.reason.toLowerCase().contains('block'))) {
-          setState(() {
-            _isValidating = false;
-            _scannedVehicle = null;
-            _rejectionDetails = ScanRejectionDetails(
-              type: ScanRejectionType.blocked,
-              title: 'Visitor Pass Blocked',
-              message: 'This vehicle cannot proceed because it is currently blocked. The vehicle owner must resolve the issue before entry can be granted.',
-              plateNumber: visitorPass.plateNumber,
-              ownerName: visitorPass.visitorName,
-              statusBadge: 'BLOCKED',
-              reason: visitorPass.reason.isNotEmpty ? visitorPass.reason : 'Security Hold on visitor pass.',
-            );
-          });
-          return;
-        }
-
-        if (visitorPass.currentlyInside || (!visitorPass.accepted && (visitorPass.reason.contains('already inside') || visitorPass.reason.contains('already entered')))) {
-          setState(() {
-            _isValidating = false;
-            _scannedVehicle = null;
-            _rejectionDetails = ScanRejectionDetails(
-              type: ScanRejectionType.duplicateEntry,
-              title: 'Duplicate Entry Attempt',
-              message: 'This visitor pass is already recorded as inside campus. The same QR code cannot be used for entry while already inside.',
-              plateNumber: visitorPass.plateNumber,
-              ownerName: visitorPass.visitorName,
-              statusBadge: 'INSIDE CAMPUS',
-              reason: visitorPass.reason.isNotEmpty ? visitorPass.reason : 'Anti-passback: Vehicle must exit before entering again.',
-            );
-          });
-          return;
-        }
-
-        setState(() {
-          _isValidating = false;
-          _rejectionDetails = null;
-        });
-        _applyVisitorPass(visitorPass);
-        return;
-      }
 
       // Check if completely unrecognized QR
       if (remoteVehicle == null) {
@@ -416,8 +522,24 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _selectedDriverName = pass.visitorName;
       _selectedRelationship = 'Visitor (Day Pass)';
       _currentPhotoUrl = '';
-      // Use the pass's real plate and details from here on (blocking, logging), not the text that was typed / scanned
-      _scannedVehicle = _scannedVehicle?.copyWith(
+      _scannedVehicle = (_scannedVehicle ?? VehicleRecord(
+        plateNumber: pass.plateNumber,
+        vehicleType: 'Visitor Vehicle',
+        makeModelColor: pass.vehicleModel.isNotEmpty ? pass.vehicleModel : 'Visitor Vehicle',
+        ownerName: pass.visitorName,
+        ownerRole: 'Visitor (Day Pass)',
+        ownerIdNumber: pass.passCode,
+        category: CampusUserCategory.visitor,
+        qrPassCode: pass.passCode,
+        authorizedDrivers: [
+          AuthorizedDriver(
+            id: 'drv-visitor',
+            fullName: pass.visitorName,
+            relationship: 'Visitor (Day Pass)',
+            licenseNo: 'N/A',
+          ),
+        ],
+      )).copyWith(
         plateNumber: pass.plateNumber,
         makeModelColor: pass.vehicleModel.isNotEmpty ? pass.vehicleModel : null,
         ownerName: pass.visitorName,

@@ -157,20 +157,26 @@ class VehicleRecord {
 
   factory VehicleRecord.fromQrJson(Map<String, dynamic> json, {String rawPayload = '', bool isSyncedWithDb = false}) {
     final plate = (json['plateNumber'] ?? json['plate_number'] ?? json['plate'] ?? 'UNKNOWN').toString();
-    final ownerName = (json['ownerFullName'] ?? json['owner_name'] ?? json['ownerName'] ?? 'Registered Owner').toString();
+    final ownerName = (json['ownerFullName'] ?? json['owner_name'] ?? json['ownerName'] ?? json['visitorName'] ?? json['visitor_name'] ?? 'Registered Owner').toString();
     final ownerId = (json['ownerStudentId'] ?? json['owner_id_number'] ?? json['ownerIdNumber'] ?? 'N/A').toString();
     final stickerYear = (json['stickerYear'] ?? json['sticker_year'] ?? '2026').toString();
     final vehicleType = (json['vehicleCategory'] ?? json['vehicle_type'] ?? json['vehicleType'] ?? '4-Wheel').toString();
-    final makeModel = (json['makeModelColor'] ?? json['make_model_color'] ?? json['makeModel'] ?? 'Registered Vehicle').toString();
+    final makeModel = (json['makeModelColor'] ?? json['make_model_color'] ?? json['makeModel'] ?? json['vehicleModel'] ?? json['vehicle_model'] ?? 'Registered Vehicle').toString();
     final vehiclePic = (json['vehiclePicture'] ?? json['vehiclePhoto'] ?? json['vehicle_photo'] ?? json['vehicle_picture'] ?? json['vehicle_photo_url'])?.toString();
     final ownerPhoto = (json['ownerPhoto'] ?? json['owner_photo'] ?? json['owner_photo_url'] ?? json['ownerPhotoUrl'])?.toString();
 
-    final rawRole = (json['ownerRole'] ?? json['owner_role'] ?? '').toString().trim();
+    final isVisitor = json['type'] == 'NCST_VISITOR_PASS' ||
+        json['type'] == 'visitor_temp' ||
+        json.containsKey('visitorName') ||
+        json.containsKey('visitor_name') ||
+        ownerId.toUpperCase().contains('VIS');
+
+    final rawRole = (json['ownerRole'] ?? json['owner_role'] ?? (isVisitor ? 'Campus Visitor' : '')).toString().trim();
     final computedRole = rawRole.isNotEmpty
         ? rawRole
         : (ownerId.toUpperCase().contains('FAC')
             ? 'Faculty Member'
-            : (ownerId.toUpperCase().contains('VIS') ? 'Campus Visitor' : 'Student (Campus Registered)'));
+            : (ownerId.toUpperCase().contains('VIS') || isVisitor ? 'Campus Visitor' : 'Student (Campus Registered)'));
 
     // Categorization logic
     CampusUserCategory category = CampusUserCategory.student;
@@ -178,7 +184,7 @@ class VehicleRecord {
     final upperId = ownerId.toUpperCase();
     if (upperId.contains('FAC') || lowerRole.contains('facult') || lowerRole.contains('employee') || lowerRole.contains('staff') || lowerRole.contains('prof')) {
       category = CampusUserCategory.employee;
-    } else if (upperId.contains('VIS') || lowerRole.contains('visitor') || lowerRole.contains('guest')) {
+    } else if (upperId.contains('VIS') || lowerRole.contains('visitor') || lowerRole.contains('guest') || isVisitor) {
       category = CampusUserCategory.visitor;
     }
 

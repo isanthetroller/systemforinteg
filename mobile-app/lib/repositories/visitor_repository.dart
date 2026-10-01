@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import '../data/mock_data.dart';
 import '../models/visitor_pass_model.dart';
 import '../services/api_service.dart';
 import '../services/local_cache_service.dart';
@@ -29,15 +30,16 @@ class VisitorRepository {
       return;
     }
 
-    final now = DateTime.now();
+    if (MockData.isTestEnvironment) {
+      final now = DateTime.now();
 
-    _passes.addAll([
-      // 1. Valid Active Pass
-      VisitorPass(
-        passId: 'NCST-VIS-2026-1001',
-        visitorName: 'Maria Elena Gomez',
-        plateNumber: 'NDK-1234',
-        vehiclePhotoUrl: 'assets/images/kriz_monares.jpg',
+      _passes.addAll([
+        // 1. Valid Active Pass
+        VisitorPass(
+          passId: 'NCST-VIS-2026-1001',
+          visitorName: 'Maria Elena Gomez',
+          plateNumber: 'NDK-1234',
+          vehiclePhotoUrl: 'assets/images/kriz_monares.jpg',
         entryTime: now.subtract(const Duration(hours: 1, minutes: 20)),
         expiryTime: now.add(const Duration(hours: 6, minutes: 40)),
         status: VisitorPassStatus.active,
@@ -89,6 +91,7 @@ class VisitorRepository {
         notes: 'Regular Campus Visit - Completed',
       ),
     ]);
+    }
 
     passesNotifier.value = List.unmodifiable(_passes);
   }
@@ -108,11 +111,12 @@ class VisitorRepository {
       throw VisitorPassNotIssued(ApiService.lastWriteError ?? 'The server refused this pass.');
     }
 
-    _passes.insert(0, pass);
+    final actualPass = ApiService.lastCreatedVisitorPass ?? pass;
+    _passes.insert(0, actualPass);
     passesNotifier.value = List.unmodifiable(_passes);
     await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toJson()).toList());
 
-    return pass;
+    return actualPass;
   }
 
   /// Look up visitor pass by Pass ID, raw QR code string, or License Plate

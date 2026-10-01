@@ -20,6 +20,18 @@ class VehicleLookupService {
       try {
         final dynamic decoded = jsonDecode(clean);
         if (decoded is Map<String, dynamic>) {
+          // If the scanned JSON is a visitor day pass, do NOT decode as a registered vehicle!
+          final isVisitor = decoded['type'] == 'NCST_VISITOR_PASS' ||
+              decoded['type'] == 'visitor_temp' ||
+              (decoded['pid']?.toString().startsWith('VP-') ?? false) ||
+              (decoded['passId']?.toString().startsWith('VP-') ?? false) ||
+              (decoded['pass_code']?.toString().startsWith('VP-') ?? false) ||
+              decoded.containsKey('visitorName') ||
+              decoded.containsKey('visitor_name');
+          if (isVisitor) {
+            return _generateVisitorPass(clean, decoded: decoded);
+          }
+
           final qrVehicle = VehicleRecord.fromQrJson(decoded, rawPayload: clean);
 
           // Cross-reference with database to enrich with photos/assets if available
@@ -91,16 +103,18 @@ class VehicleLookupService {
     return _generateVisitorPass(clean);
   }
 
-  static VehicleRecord _generateVisitorPass(String rawCode) {
-    final plate = rawCode.length > 12 ? rawCode.substring(0, 12).toUpperCase() : rawCode.toUpperCase();
-    final visitorId = 'VISITOR-${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}';
+  static VehicleRecord _generateVisitorPass(String rawCode, {Map<String, dynamic>? decoded}) {
+    final plate = (decoded?['plateNumber'] ?? decoded?['plate_number'] ?? decoded?['plate'] ?? (rawCode.length > 12 ? rawCode.substring(0, 12) : rawCode)).toString().toUpperCase();
+    final visitorName = (decoded?['visitorName'] ?? decoded?['visitor_name'] ?? 'Visitor / Unregistered Pass').toString();
+    final vehicleModel = (decoded?['vehicleModel'] ?? decoded?['vehicle_model'] ?? 'Unregistered / Visitor Vehicle').toString();
+    final visitorId = (decoded?['passId'] ?? decoded?['pid'] ?? decoded?['pass_code'] ?? 'VISITOR-${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}').toString();
 
     return VehicleRecord(
       plateNumber: plate,
       vehicleType: 'Sedan',
-      makeModelColor: 'Unregistered / Visitor Vehicle',
-      ownerName: 'Visitor / Unregistered Pass',
-      ownerRole: 'Guest Driver (Unverified QR Pass)',
+      makeModelColor: vehicleModel,
+      ownerName: visitorName,
+      ownerRole: 'Guest Driver (Visitor Day Pass)',
       ownerIdNumber: visitorId,
       qrPassCode: rawCode,
       authorizedDrivers: const [],

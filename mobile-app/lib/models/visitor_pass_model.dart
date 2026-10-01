@@ -27,6 +27,7 @@ class VisitorPass {
   final String? personToVisit;
   final List<Map<String, dynamic>> items;
   final String? qrPayload;
+  final int? dbId;
 
   const VisitorPass({
     required this.passId,
@@ -46,6 +47,7 @@ class VisitorPass {
     this.personToVisit,
     this.items = const [],
     this.qrPayload,
+    this.dbId,
   });
 
   bool get isActive => status == VisitorPassStatus.active && !isExpired;
@@ -146,6 +148,8 @@ class VisitorPass {
     'gatePoint': gatePoint,
     'notes': notes,
     'items': items,
+    if (dbId != null) 'id': dbId,
+    if (qrPayload != null) 'qrPayload': qrPayload,
   };
 
   factory VisitorPass.fromJson(Map<String, dynamic> json) {
@@ -194,6 +198,8 @@ class VisitorPass {
       purposeOfVisit: json['purposeOfVisit']?.toString() ?? json['purpose_of_visit']?.toString(),
       personToVisit: json['personToVisit']?.toString() ?? json['person_to_visit']?.toString(),
       items: parsedItems,
+      qrPayload: json['qrPayload']?.toString() ?? json['qr_payload']?.toString(),
+      dbId: int.tryParse(json['id']?.toString() ?? ''),
     );
   }
 
@@ -215,6 +221,7 @@ class VisitorPass {
     String? personToVisit,
     List<Map<String, dynamic>>? items,
     String? qrPayload,
+    int? dbId,
   }) {
     return VisitorPass(
       passId: passId ?? this.passId,
@@ -234,6 +241,7 @@ class VisitorPass {
       personToVisit: personToVisit ?? this.personToVisit,
       items: items ?? this.items,
       qrPayload: qrPayload ?? this.qrPayload,
+      dbId: dbId ?? this.dbId,
     );
   }
 }

@@ -37,6 +37,12 @@ class ApiService {
   /// True when the last visitor pass could not reach the server and was saved on this phone to sync later.
   static bool lastWriteQueued = false;
 
+  /// The parsed response body data from the last accepted write request
+  static Map<String, dynamic>? lastResponseData;
+
+  /// The visitor pass record returned by the server upon successful creation
+  static VisitorPass? lastCreatedVisitorPass;
+
   @visibleForTesting
   static void setClientForTesting(http.Client client) {
     _client = client;
@@ -446,10 +452,18 @@ class ApiService {
 
   static Future<WriteOutcome> _postForOutcome(String endpoint, Map<String, dynamic> payload) async {
     try {
+      lastResponseData = null;
       final uri = Uri.parse('${ApiConstants.baseUrl}$endpoint');
       final res = await _post(uri, jsonEncode(payload));
       final outcome = _outcomeOf(res);
-      if (outcome == WriteOutcome.refused) {
+      if (outcome == WriteOutcome.accepted) {
+        try {
+          final body = jsonDecode(res.body);
+          if (body is Map && body['data'] is Map) {
+            lastResponseData = Map<String, dynamic>.from(body['data']);
+          }
+        } catch (_) {}
+      } else if (outcome == WriteOutcome.refused) {
         lastWriteError = _messageOf(res) ?? 'The server refused this request (${res.statusCode}).';
       } else if (outcome == WriteOutcome.unreachable) {
         lastWriteError = 'No connection to the server.';
@@ -654,12 +668,18 @@ class ApiService {
   /// already has a pass today): [lastWriteError] says why.
   static Future<bool> postVisitorPass(VisitorPass pass) async {
     lastWriteQueued = false;
+    lastCreatedVisitorPass = null;
     final clientRef = SyncQueueService.newClientRef();
     final occurredAt = DateTime.now();
     final Map<String, dynamic> payload = Map<String, dynamic>.from(pass.toJson());
 
     final outcome = await _postForOutcome(ApiConstants.visitorsEndpoint, payload);
     if (outcome == WriteOutcome.accepted) {
+      if (lastResponseData != null) {
+        try {
+          lastCreatedVisitorPass = VisitorPass.fromJson(lastResponseData!);
+        } catch (_) {}
+      }
       unawaited(SyncQueueService().processQueue());
       return true;
     }
@@ -721,13 +741,22 @@ class ApiService {
 
   /// Query server for a visitor pass by ID or Plate
   static Future<VisitorPass?> lookupVisitorPass(String query) async {
+    final clean = query.trim();
+    if (clean.isEmpty) return null;
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}/visitors.php?q=${Uri.encodeComponent(query)}');
+      final uri = Uri.parse('${ApiConstants.baseUrl}/visitors.php?q=${Uri.encodeComponent(clean)}');
       final res = await _get(uri);
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] != null) {
-          return VisitorPass.fromJson(body['data'] as Map<String, dynamic>);
+          final data = body['data'];
+          if (data is Map<String, dynamic>) {
+            return VisitorPass.fromJson(data);
+          } else if (data is Map) {
+            return VisitorPass.fromJson(Map<String, dynamic>.from(data));
+          } else if (data is List && data.isNotEmpty && data.first is Map) {
+            return VisitorPass.fromJson(Map<String, dynamic>.from(data.first));
+          }
         }
       }
     } catch (e) {

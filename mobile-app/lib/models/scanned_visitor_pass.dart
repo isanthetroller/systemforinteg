@@ -1,3 +1,5 @@
+import 'visitor_pass_model.dart';
+
 /// An item a visitor declared they are bringing in (for example "40x Monobloc chairs").
 class VisitorPassItem {
   final String name;
@@ -98,6 +100,41 @@ class ScannedVisitorPass {
           ? (data['warnings'] as List).map((w) => w.toString()).toList()
           : const [],
       currentlyInside: data['currentlyInside'] == true,
+    );
+  }
+
+  /// Constructs a ScannedVisitorPass from an existing VisitorPass record
+  factory ScannedVisitorPass.fromVisitorPass(
+    VisitorPass pass, {
+    String result = 'VALID',
+    bool accepted = true,
+    String reason = '',
+    List<String> warnings = const [],
+    bool currentlyInside = false,
+    int? id,
+  }) {
+    final validDateStr = '${pass.entryTime.year}-${pass.entryTime.month.toString().padLeft(2, '0')}-${pass.entryTime.day.toString().padLeft(2, '0')}';
+    return ScannedVisitorPass(
+      id: id ?? pass.dbId ?? (int.tryParse(pass.passId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1),
+      passCode: pass.passId,
+      visitorName: pass.visitorName,
+      contactNumber: pass.contactNumber ?? '',
+      plateNumber: pass.plateNumber,
+      vehicleModel: pass.vehicleModel ?? '',
+      purposeOfVisit: pass.purposeOfVisit ?? '',
+      personToVisit: pass.personToVisit ?? '',
+      validDate: validDateStr,
+      status: pass.statusDisplay,
+      items: pass.items.map((m) => VisitorPassItem(
+        name: (m['name'] ?? m['item_name'] ?? 'Item').toString(),
+        quantity: int.tryParse((m['quantity'] ?? 1).toString()) ?? 1,
+        description: (m['description'] ?? '').toString(),
+      )).toList(),
+      result: result,
+      accepted: accepted,
+      reason: reason,
+      warnings: warnings,
+      currentlyInside: currentlyInside,
     );
   }
 
