@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
       search: '',
       role: 'All',
       category: 'All',
+      location: 'All',
       status: 'All'
     },
     auditFilter: {
@@ -111,8 +112,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const vehicleSearchInput = document.getElementById('vehicleSearchInput');
   const vehicleRoleFilter = document.getElementById('vehicleRoleFilter');
   const vehicleCategoryFilter = document.getElementById('vehicleCategoryFilter');
+  const vehicleLocationFilter = document.getElementById('vehicleLocationFilter');
   const vehicleStatusFilter = document.getElementById('vehicleStatusFilter');
   const vehiclesTableBody = document.getElementById('vehiclesTableBody');
+  const directoryVehicleCountBadge = document.getElementById('directoryVehicleCountBadge');
 
   // Flagged & Blocked
   const incidentsTableBody = document.getElementById('incidentsTableBody');
@@ -282,9 +285,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Update navigation item styles for white sidebar
-    const activeClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-ncst-navy bg-ncst-navy/10 border-l-4 border-ncst-navy shadow-2xs transition-colors text-left cursor-pointer";
-    const inactiveClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer";
+    // Update navigation item styles for royal blue gradient sidebar
+    const activeClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-white bg-white/15 border-l-4 border-white shadow-xs transition-colors text-left cursor-pointer";
+    const inactiveClass = "nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer";
 
     Object.keys(navMap).forEach(key => {
       const btn = navMap[key];
@@ -294,16 +297,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (key === targetViewId) {
         btn.className = roleClass + activeClass;
-        if (svg) svg.className = "w-4 h-4 text-ncst-navy flex-shrink-0";
+        if (svg) svg.className = "w-4 h-4 text-white flex-shrink-0";
       } else {
         btn.className = roleClass + inactiveClass;
-        if (svg) {
-          if (key === 'flaggedView') {
-            svg.className = "w-4 h-4 text-ncst-crimson flex-shrink-0";
-          } else {
-            svg.className = "w-4 h-4 text-slate-400 flex-shrink-0";
-          }
-        }
+        if (svg) svg.className = "w-4 h-4 text-slate-200 flex-shrink-0";
       }
     });
 
@@ -421,9 +418,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (flaggedSidebarCount) {
       flaggedSidebarCount.textContent = activeIncidents;
       if (activeIncidents > 0) {
-        flaggedSidebarCount.className = "text-[10px] px-1.5 py-0.2 rounded font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
+        flaggedSidebarCount.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-500 text-white shadow-xs";
       } else {
-        flaggedSidebarCount.className = "text-[10px] px-1.5 py-0.2 rounded font-bold bg-slate-100 text-slate-400 border border-slate-200";
+        flaggedSidebarCount.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-white/15 text-white border border-white/20 shadow-2xs";
       }
     }
 
@@ -1074,31 +1071,32 @@ document.addEventListener('DOMContentLoaded', () => {
       const isStudent = (v.ownerRole || '').toLowerCase().includes('student');
 
       let statusBadge = `
-        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
           INSIDE
         </span>
       `;
 
       if (isExitBlocked) {
         statusBadge = `
-          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
-            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson animate-ping"></span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping"></span>
             EXIT BLOCKED (HELD)
           </span>
         `;
       } else if (isBlockedOrHeld) {
         const badgeText = hold ? hold.badge : 'BLOCKED (HELD)';
         statusBadge = `
-          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
-            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson"></span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
             ${escapeHtml(badgeText)}
           </span>
         `;
       }
 
       const holdAlertSnippet = isBlockedOrHeld ? `
-        <div class="text-[10px] font-bold text-ncst-crimson mt-0.5 flex items-center gap-1">
-          <svg class="w-3 h-3 text-ncst-crimson shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+        <div class="text-[10px] font-bold text-rose-700 mt-0.5 flex items-center gap-1">
+          <svg class="w-3 h-3 text-rose-600 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
           <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit attempt intercepted & blocked at gate' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
             ${escapeHtml(isExitBlocked ? 'Exit intercepted & blocked at gate' : (hold ? hold.reason : 'Security Hold'))}
           </span>
@@ -1112,20 +1110,20 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
       if (isBlockedOrHeld) {
         dwellBadge = `
-          <span class="font-mono font-bold text-ncst-crimson bg-ncst-crimsonLight px-1.5 py-0.5 rounded border border-ncst-crimson/30 text-xs">
+          <span class="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 text-xs">
             ${formatDwell(v.hoursInside)} <span class="text-[10px] font-extrabold">(HELD)</span>
           </span>
         `;
       }
 
       let actionBtn = `
-        <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors">
+        <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors">
           Inspect
         </button>
       `;
       if (isBlockedOrHeld) {
         actionBtn = `
-          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson text-ncst-crimson hover:text-white text-xs font-bold shadow-xs transition-colors" title="Inspect Security Hold">
+          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" title="Inspect Security Hold">
             ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'Inspect Hold'}
           </button>
         `;
@@ -1223,16 +1221,16 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (isBlockedOrHeld) {
         const badgeText = hold ? hold.badge : 'BLOCKED (HELD)';
         statusBadge = `
-          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
-            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson"></span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
             ${escapeHtml(badgeText)}
           </span>
         `;
       }
 
       const holdAlertSnippet = isBlockedOrHeld ? `
-        <div class="text-[10px] font-bold text-ncst-crimson mt-0.5 flex items-center gap-1">
-          <svg class="w-3 h-3 text-ncst-crimson shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+        <div class="text-[10px] font-bold text-rose-700 mt-0.5 flex items-center gap-1">
+          <svg class="w-3 h-3 text-rose-600 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
           <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit attempt intercepted & blocked' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
             ${escapeHtml(isExitBlocked ? 'Exit intercepted & blocked' : (hold ? hold.reason : 'Security Hold'))}
           </span>
@@ -1246,20 +1244,20 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
       if (isBlockedOrHeld) {
         dwellBadge = `
-          <span class="font-mono font-bold text-ncst-crimson bg-ncst-crimsonLight px-1.5 py-0.5 rounded border border-ncst-crimson/30 text-xs">
+          <span class="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 text-xs">
             ${formatDwell(vp.hoursInside)} <span class="text-[10px] font-extrabold">(HELD)</span>
           </span>
         `;
       }
 
       let actionBtn = `
-        <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors">
+        <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors">
           View Pass
         </button>
       `;
       if (isBlockedOrHeld) {
         actionBtn = `
-          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson text-ncst-crimson hover:text-white text-xs font-bold shadow-xs transition-colors" title="Inspect Security Hold">
+          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" title="Inspect Security Hold">
             ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'Inspect Hold'}
           </button>
         `;
@@ -1351,15 +1349,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const studentId = fullVeh ? (fullVeh.ownerIdNumber || fullVeh.owner_id_number || '') : '';
       const passInfo = isDenied 
         ? `<span class="text-ncst-crimson font-semibold text-xs">${escapeHtml(log.notes ? log.notes.split('|')[0] : 'Entry Denied')}</span>`
-        : (fullVeh ? `Pass ${fullVeh.stickerYear || '2026'}` : (log.notes ? log.notes.split('|')[0] : 'Gate Clearance'));
+        : (fullVeh ? `Pass ${fullVeh.stickerYear || '2026'}` : (log.notes ? escapeHtml(log.notes.split('|')[0]) : 'Standard Pass'));
 
       const statusBadge = isDenied ? `
-        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
-          <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson"></span>
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+          <span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
           ENTRY DENIED
         </span>
       ` : `
-        <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
           INSIDE
         </span>
       `;
@@ -1393,7 +1392,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="text-slate-400">${escapeHtml(log.guardName || 'Officer')}</div>
         </td>
         <td class="py-2.5 px-3.5 text-right">
-          <button type="button" class="inspect-entrance-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
+          <button type="button" class="inspect-entrance-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors" data-id="${escapeHtml(log.id)}">
             Inspect
           </button>
         </td>
@@ -1420,7 +1419,7 @@ document.addEventListener('DOMContentLoaded', () => {
       exitTableBody.innerHTML = `
         <tr>
           <td colspan="9" class="py-10 text-center text-slate-400 text-xs">
-            No exit passages recorded today.
+            No exit gate passages recorded today.
           </td>
         </tr>
       `;
@@ -1436,7 +1435,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const isFlagged = !isExitDenied && (log.notes && (log.notes.toLowerCase().includes('anti-passback') || log.notes.toLowerCase().includes('attention') || log.notes.toLowerCase().includes('warning') || log.notes.toLowerCase().includes('flagged')));
 
       if (isExitDenied) {
-        tr.className = 'hover:bg-rose-50/60 bg-rose-50/25 border-l-4 border-l-ncst-crimson transition-colors';
+        tr.className = 'hover:bg-rose-50/60 bg-rose-50/25 border-l-4 border-l-rose-500 transition-colors';
       } else if (isFlagged) {
         tr.className = 'hover:bg-amber-50/40 bg-amber-50/10 transition-colors';
       } else {
@@ -1456,7 +1455,8 @@ document.addEventListener('DOMContentLoaded', () => {
         : '—';
 
       let statusBadge = `
-        <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+          <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
           OUTSIDE
         </span>
       `;
@@ -1468,19 +1468,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (isExitDenied) {
         statusBadge = `
-          <span class="px-2 py-0.5 rounded text-[11px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30 inline-flex items-center gap-1 shadow-xs">
-            <span class="w-1.5 h-1.5 rounded-full bg-ncst-crimson animate-ping"></span>
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping"></span>
             EXIT BLOCKED
           </span>
         `;
         durationBadge = `
-          <span class="font-mono font-bold text-ncst-crimson bg-ncst-crimsonLight px-1.5 py-0.5 rounded border border-ncst-crimson/30 text-xs inline-flex items-center gap-1">
+          <span class="font-mono font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 text-xs inline-flex items-center gap-1">
             ${durationInside} <span class="text-[10px] font-extrabold">(HELD ON CAMPUS)</span>
           </span>
         `;
       } else if (isFlagged) {
         statusBadge = `
-          <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
             FLAGGED EXIT
           </span>
         `;
@@ -1492,7 +1493,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const noteSnippet = isExitDenied ? `
-        <div class="text-[10px] font-semibold text-ncst-crimson mt-0.5 flex items-center gap-1 truncate max-w-[180px]" title="${escapeHtml(log.notes || 'Exit intercepted & blocked')}">
+        <div class="text-[10px] font-semibold text-rose-700 mt-0.5 flex items-center gap-1 truncate max-w-[180px]" title="${escapeHtml(log.notes || 'Exit intercepted & blocked')}">
           ⚠️ ${escapeHtml(log.notes || 'Exit Intercepted & Blocked')}
         </div>
       ` : (isFlagged ? `
@@ -1502,14 +1503,14 @@ document.addEventListener('DOMContentLoaded', () => {
       ` : '');
 
       let actionBtn = `
-        <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
+        <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors" data-id="${escapeHtml(log.id)}">
           Inspect
         </button>
       `;
 
       if (isExitDenied) {
         actionBtn = `
-          <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson text-ncst-crimson hover:text-white text-xs font-bold shadow-xs transition-colors" data-id="${escapeHtml(log.id)}">
+          <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" data-id="${escapeHtml(log.id)}">
             Inspect Hold
           </button>
         `;
@@ -1578,34 +1579,75 @@ document.addEventListener('DOMContentLoaded', () => {
     const filtered = state.vehicles.filter(v => {
       const q = state.vehicleFilter.search.toLowerCase().trim();
       const matchesSearch = !q ||
-        v.plateNumber.toLowerCase().includes(q) ||
-        v.ownerName.toLowerCase().includes(q) ||
-        v.ownerIdNumber.toLowerCase().includes(q) ||
-        v.makeModelColor.toLowerCase().includes(q) ||
+        (v.plateNumber && v.plateNumber.toLowerCase().includes(q)) ||
+        (v.ownerName && v.ownerName.toLowerCase().includes(q)) ||
+        (v.ownerIdNumber && v.ownerIdNumber.toLowerCase().includes(q)) ||
+        (v.makeModelColor && v.makeModelColor.toLowerCase().includes(q)) ||
+        (v.department && v.department.toLowerCase().includes(q)) ||
+        (v.ownerEmail && v.ownerEmail.toLowerCase().includes(q)) ||
+        (v.ownerPhone && v.ownerPhone.toLowerCase().includes(q)) ||
         formatPassId(v).toLowerCase().includes(q) ||
-        (v.qrPassCode && v.qrPassCode.toLowerCase().includes(q));
+        (v.qrPassCode && v.qrPassCode.toLowerCase().includes(q)) ||
+        (v.authorizedDrivers || []).some(d =>
+          (d.fullName && d.fullName.toLowerCase().includes(q)) ||
+          (d.licenseNo && d.licenseNo.toLowerCase().includes(q)) ||
+          (d.relationship && d.relationship.toLowerCase().includes(q))
+        );
 
       const matchesRole = state.vehicleFilter.role === 'All' || v.ownerRole === state.vehicleFilter.role;
 
       let matchesCategory = true;
       if (state.vehicleFilter.category !== 'All') {
-        matchesCategory = v.vehicleType.toLowerCase().includes(state.vehicleFilter.category.toLowerCase());
+        matchesCategory = (v.vehicleType || '').toLowerCase().includes(state.vehicleFilter.category.toLowerCase());
       }
 
-      const matchesStatus = state.vehicleFilter.status === 'All'
-        || (state.vehicleFilter.status === 'VIP' ? !!v.isVip : v.registrationStatus === state.vehicleFilter.status);
+      const matchesLocation = state.vehicleFilter.location === 'All'
+        || (state.vehicleFilter.location === 'Inside'
+          ? (v.status || '').toLowerCase().includes('inside')
+          : (v.status || '').toLowerCase().includes('outside'));
 
-      return matchesSearch && matchesRole && matchesCategory && matchesStatus;
+      let matchesStatus = true;
+      if (state.vehicleFilter.status === 'VIP') {
+        matchesStatus = !!v.isVip;
+      } else if (state.vehicleFilter.status === 'Banned') {
+        matchesStatus = !!v.isBanned;
+      } else if (state.vehicleFilter.status === 'Strikes') {
+        matchesStatus = (Number(v.warningCount) || 0) > 0;
+      } else if (state.vehicleFilter.status !== 'All') {
+        matchesStatus = v.registrationStatus === state.vehicleFilter.status;
+      }
+
+      return matchesSearch && matchesRole && matchesCategory && matchesLocation && matchesStatus;
     });
+
+    // Update Directory Header Count Badge
+    if (directoryVehicleCountBadge) {
+      const totalCount = state.vehicles.length;
+      if (filtered.length === totalCount) {
+        directoryVehicleCountBadge.textContent = `${totalCount} ${totalCount === 1 ? 'vehicle' : 'vehicles'}`;
+      } else {
+        directoryVehicleCountBadge.textContent = `${filtered.length} of ${totalCount} vehicles`;
+      }
+    }
 
     if (filtered.length === 0) {
       vehiclesTableBody.innerHTML = `
         <tr>
-          <td colspan="7" class="py-12 text-center text-slate-400 text-xs">
-            <div class="font-medium text-slate-600">No vehicles match current filters.</div>
-            <div class="text-[11px] text-slate-400 mt-1">Try clearing search terms or selecting 'All Roles'.</div>
-            <button type="button" id="emptyResetVehiclesBtn" class="mt-3 px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors inline-block">
-              Clear All Filters
+          <td colspan="7" class="py-16 text-center">
+            <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-3">
+              <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+            </div>
+            <div class="text-sm font-semibold text-slate-800">No vehicles match current filters</div>
+            <div class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">Try clearing search terms or resetting filters to display campus vehicle records.</div>
+            <button type="button" id="emptyResetVehiclesBtn" class="mt-4 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs hover:border-slate-300 transition-colors cursor-pointer">
+              <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+              </svg>
+              <span>Clear All Filters</span>
             </button>
           </td>
         </tr>
@@ -1616,10 +1658,12 @@ document.addEventListener('DOMContentLoaded', () => {
           state.vehicleFilter.search = '';
           state.vehicleFilter.role = 'All';
           state.vehicleFilter.category = 'All';
+          state.vehicleFilter.location = 'All';
           state.vehicleFilter.status = 'All';
           if (vehicleSearchInput) vehicleSearchInput.value = '';
           if (vehicleRoleFilter) vehicleRoleFilter.value = 'All';
           if (vehicleCategoryFilter) vehicleCategoryFilter.value = 'All';
+          if (vehicleLocationFilter) vehicleLocationFilter.value = 'All';
           if (vehicleStatusFilter) vehicleStatusFilter.value = 'All';
           renderVehiclesTable();
         });
@@ -1629,114 +1673,234 @@ document.addEventListener('DOMContentLoaded', () => {
 
     filtered.forEach(vehicle => {
       const tr = document.createElement('tr');
-      tr.className = 'hover:bg-slate-50 transition-colors';
+      tr.className = 'hover:bg-slate-50/80 transition-colors group';
 
-      // Campus custody indicator
-      let custodyDot = 'bg-slate-400';
-      let custodyLabel = 'Outside';
-      const vStatus = (vehicle.status || '').toLowerCase();
-      if (vStatus.includes('inside')) {
-        custodyDot = 'bg-ncst-green';
-        custodyLabel = 'Inside';
-      } else if (vStatus.includes('block') || vStatus.includes('alert') || vStatus.includes('hold')) {
-        custodyDot = 'bg-ncst-crimson';
-        custodyLabel = 'Blocked';
+      // Status indicator and badge - 100% matched to vehicle standing
+      let statusDot = 'bg-emerald-500';
+      let statusBadge = 'bg-emerald-50 text-emerald-700 border-emerald-200/80';
+      let statusLabel = vehicle.registrationStatus || 'Active';
+
+      if (vehicle.isBanned) {
+        statusDot = 'bg-rose-500';
+        statusBadge = 'bg-rose-50 text-rose-700 border-rose-200';
+        statusLabel = 'Banned';
+      } else if (vehicle.registrationStatus === 'Suspended') {
+        statusDot = 'bg-amber-500';
+        statusBadge = 'bg-amber-50 text-amber-800 border-amber-200';
+        statusLabel = 'Suspended';
+      } else if (vehicle.registrationStatus === 'Pending') {
+        statusDot = 'bg-blue-500';
+        statusBadge = 'bg-blue-50 text-blue-700 border-blue-200';
+        statusLabel = 'Pending';
       } else {
-        custodyDot = 'bg-slate-400';
-        custodyLabel = 'Outside';
+        // Active
+        statusDot = 'bg-emerald-500';
+        statusBadge = 'bg-emerald-50 text-emerald-700 border-emerald-200/80';
+        statusLabel = 'Active';
       }
 
-      // Registration pass status badge
-      const regStatusBadge = vehicle.registrationStatus === 'Active'
-        ? 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'
-        : 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
+      // Campus custody presence (secondary metadata)
+      const vStatus = (vehicle.status || '').toLowerCase();
+      const isInside = vStatus.includes('inside');
+      const custodyLabel = isInside ? 'On campus' : 'Off campus';
+      const custodyDot = isInside ? 'bg-emerald-500' : 'bg-slate-300';
 
       const driversCount = vehicle.authorizedDrivers ? vehicle.authorizedDrivers.length : 0;
 
       tr.innerHTML = `
-        <td class="py-2.5 px-4">
+        <td class="py-3 px-3.5 align-middle">
           <div class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full ${custodyDot}" title="${custodyLabel}"></span>
-            <span class="px-2 py-0.5 rounded text-[11px] font-medium border ${regStatusBadge}">
-              ${escapeHtml(vehicle.registrationStatus || 'Active')}
+            <span class="w-2 h-2 rounded-full ${statusDot} ring-2 ring-white flex-shrink-0" title="${statusLabel}"></span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${statusBadge}">
+              ${escapeHtml(statusLabel)}
             </span>
           </div>
+          <div class="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-medium pl-0.5" title="Gate custody: ${custodyLabel}">
+            <span class="w-1.5 h-1.5 rounded-full ${custodyDot} flex-shrink-0"></span>
+            <span>${custodyLabel}</span>
+          </div>
         </td>
-        <td class="py-2.5 px-4">
-          <div class="font-mono font-bold text-slate-900 flex items-center gap-1.5">${escapeHtml(vehicle.plateNumber)}${strikeChip(vehicle)}</div>
+        <td class="py-3 px-3.5 align-middle">
+          <div class="font-mono font-bold text-slate-900 text-xs flex items-center gap-1.5 flex-wrap">
+            <span>${escapeHtml(vehicle.plateNumber)}</span>
+            ${strikeChip(vehicle)}
+          </div>
           <div class="inline-flex items-center gap-1.5 text-[11px] text-slate-500 font-mono mt-0.5">
-            <span class="px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-semibold">PASS</span>
-            <span>${escapeHtml(formatPassId(vehicle))}</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200/80 text-slate-500 text-[10px] font-semibold">PASS</span>
+            <span class="text-slate-600 truncate max-w-[150px]">${escapeHtml(formatPassId(vehicle))}</span>
           </div>
         </td>
-        <td class="py-2.5 px-4">
-          <div class="text-slate-800 font-medium">${escapeHtml(vehicle.makeModelColor)}</div>
-          <div class="text-[11px] text-slate-500">${escapeHtml(vehicle.vehicleType)} • Sticker ${escapeHtml(vehicle.stickerYear || '2026')}</div>
+        <td class="py-3 px-3.5 align-middle">
+          <div class="text-slate-900 font-semibold text-xs leading-snug truncate" title="${escapeHtml(vehicle.makeModelColor)}">${escapeHtml(vehicle.makeModelColor)}</div>
+          <div class="text-[11px] text-slate-500 mt-0.5 leading-tight truncate">
+            <span>${escapeHtml(vehicle.vehicleType)}</span>
+            <span class="text-slate-300 mx-1">&middot;</span>
+            <span>Sticker ${escapeHtml(vehicle.stickerYear || '2026')}</span>
+          </div>
         </td>
-        <td class="py-2.5 px-4">
-          <div class="text-slate-800 font-medium">${escapeHtml(vehicle.ownerName)}</div>
-          <div class="text-[11px] text-slate-400 font-mono">${escapeHtml(vehicle.ownerIdNumber)}</div>
+        <td class="py-3 px-3.5 align-middle">
+          <div class="text-slate-900 font-semibold text-xs leading-snug truncate" title="${escapeHtml(vehicle.ownerName)}">${escapeHtml(vehicle.ownerName)}</div>
+          <div class="text-[11px] text-slate-400 font-mono mt-0.5 truncate">${escapeHtml(vehicle.ownerIdNumber || 'N/A')}</div>
         </td>
-        <td class="py-2.5 px-4">
-          <span class="inline-block px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700">
-            ${escapeHtml(vehicle.ownerRole)}
+        <td class="py-3 px-3.5 align-middle">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+            ${escapeHtml(vehicle.ownerRole || 'General')}
           </span>
-          <div class="text-[11px] text-slate-500 truncate max-w-[140px]" title="${escapeHtml(vehicle.department)}">
-            ${escapeHtml(vehicle.department)}
+          <div class="text-[11px] text-slate-500 mt-0.5 truncate max-w-[190px]" title="${escapeHtml(vehicle.department || '')}">
+            ${escapeHtml(vehicle.department || 'NCST Campus')}
           </div>
         </td>
-        <td class="py-2.5 px-4">
-          <span class="text-xs font-semibold text-slate-700">${driversCount}</span>
-          <span class="text-[11px] text-slate-500">${driversCount === 1 ? 'driver' : 'drivers'}</span>
+        <td class="py-3 px-3.5 align-middle">
+          <div class="inline-flex items-center gap-1.5 text-slate-700 text-xs font-medium">
+            <svg class="w-3.5 h-3.5 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+            <span>${driversCount} ${driversCount === 1 ? 'driver' : 'drivers'}</span>
+          </div>
         </td>
-        <td class="py-2.5 px-4 text-right">
+        <td class="py-3 px-3.5 align-middle text-right pr-4">
           <div class="flex items-center justify-end gap-1.5">
-            <button type="button" class="print-row-btn px-2 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors flex items-center gap-1 cursor-pointer" title="Print Gate Pass Permit">
-              <svg class="w-3.5 h-3.5 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 6 2 18 2 18 9"></polyline>
-                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-                <rect x="6" y="14" width="12" height="8"></rect>
+            <!-- Inspect Primary Action -->
+            <button type="button" class="inspect-btn px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center gap-1 cursor-pointer" title="Inspect vehicle dossier">
+              <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
               </svg>
-              <span>Print</span>
+              <span>Inspect</span>
             </button>
-            <button type="button" class="zoom-qr-row-btn px-2 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors flex items-center gap-1 cursor-pointer" title="Zoom QR Code for mobile scanning">
-              <svg class="w-3.5 h-3.5 text-ncst-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="7" height="7"></rect>
-                <rect x="14" y="3" width="7" height="7"></rect>
-                <rect x="14" y="14" width="7" height="7"></rect>
-                <rect x="3" y="14" width="7" height="7"></rect>
+
+            <!-- Edit Secondary Action (Admin Only) -->
+            <button type="button" class="edit-btn admin-only px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center gap-1 cursor-pointer" title="Edit vehicle record">
+              <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
               </svg>
-              <span>QR</span>
+              <span>Edit</span>
             </button>
-            <button type="button" class="inspect-btn px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-ncst-navy shadow-xs transition-colors cursor-pointer" title="Inspect vehicle dossier">
-              Inspect
-            </button>
-            <button type="button" class="edit-btn admin-only px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs transition-colors cursor-pointer" title="Edit vehicle record">
-              Edit
-            </button>
-            <button type="button" class="toggle-status-btn admin-only px-2.5 py-1 rounded border text-xs font-semibold shadow-xs transition-colors cursor-pointer ${vehicle.registrationStatus === 'Active' ? 'border-ncst-gold/40 bg-ncst-goldLight/60 hover:bg-ncst-goldLight text-amber-950' : 'border-ncst-green/30 bg-ncst-greenLight/60 hover:bg-ncst-greenLight text-ncst-greenDark'}" title="Toggle registration status">
-              ${vehicle.registrationStatus === 'Active' ? 'Suspend' : 'Activate'}
-            </button>
+
+            <!-- Overflow Actions Menu Container -->
+            <div class="relative inline-block text-left overflow-menu-container">
+              <button type="button" class="overflow-menu-btn p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 shadow-2xs hover:border-slate-300 transition-colors cursor-pointer flex items-center justify-center" title="More options" aria-haspopup="true" aria-expanded="false">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="1.25"></circle>
+                  <circle cx="19" cy="12" r="1.25"></circle>
+                  <circle cx="5" cy="12" r="1.25"></circle>
+                </svg>
+              </button>
+
+              <div class="overflow-menu-dropdown hidden absolute right-0 mt-1 w-44 rounded-lg bg-white border border-slate-200 shadow-lg py-1 z-30 divide-y divide-slate-100">
+                <div class="py-1">
+                  <button type="button" class="print-row-btn w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 text-left text-xs font-medium cursor-pointer transition-colors" title="Print Gate Pass Permit">
+                    <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                      <rect x="6" y="14" width="12" height="8"></rect>
+                    </svg>
+                    <span>Print Pass</span>
+                  </button>
+                  <button type="button" class="zoom-qr-row-btn w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 text-left text-xs font-medium cursor-pointer transition-colors" title="Zoom QR Code for mobile scanning">
+                    <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="14" width="7" height="7"></rect>
+                      <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>View QR Pass</span>
+                  </button>
+                </div>
+                <div class="py-1 admin-only">
+                  <button type="button" class="toggle-status-btn w-full px-3 py-1.5 flex items-center gap-2 text-left text-xs font-medium cursor-pointer transition-colors ${vehicle.registrationStatus === 'Active' ? 'text-amber-700 hover:bg-amber-50' : 'text-emerald-700 hover:bg-emerald-50'}" title="Toggle registration status">
+                    ${vehicle.registrationStatus === 'Active' ? `
+                      <svg class="w-3.5 h-3.5 text-amber-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                      </svg>
+                      <span>Suspend Pass</span>
+                    ` : `
+                      <svg class="w-3.5 h-3.5 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                      </svg>
+                      <span>Activate Pass</span>
+                    `}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </td>
       `;
 
       // Event Listeners for Row Actions
-      tr.querySelector('.print-row-btn').addEventListener('click', () => printVehiclePass(vehicle));
-      tr.querySelector('.zoom-qr-row-btn').addEventListener('click', () => {
-        const qrData = passPayloadFor(vehicle);
-        if (!qrData) return showToast(PASS_UNAVAILABLE_MSG);
-        openZoomQrModal({
-          payload: qrData,
-          plate: vehicle.plateNumber,
-          owner: vehicle.ownerName,
-          year: vehicle.stickerYear || '2026',
-          category: vehicle.vehicleType || 'Vehicle'
+      const menuBtn = tr.querySelector('.overflow-menu-btn');
+      const dropdown = tr.querySelector('.overflow-menu-dropdown');
+
+      if (menuBtn && dropdown) {
+        menuBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const isCurrentlyOpen = !dropdown.classList.contains('hidden');
+          // Close all open dropdowns in the table first
+          document.querySelectorAll('#vehiclesTableBody .overflow-menu-dropdown').forEach(d => {
+            d.classList.add('hidden');
+          });
+          document.querySelectorAll('#vehiclesTableBody .overflow-menu-btn').forEach(b => {
+            b.setAttribute('aria-expanded', 'false');
+          });
+          if (!isCurrentlyOpen) {
+            dropdown.classList.remove('hidden');
+            menuBtn.setAttribute('aria-expanded', 'true');
+          }
         });
-      });
-      tr.querySelector('.inspect-btn').addEventListener('click', () => openVehicleDrawer(vehicle));
-      tr.querySelector('.edit-btn').addEventListener('click', () => openEditModal(vehicle));
-      tr.querySelector('.toggle-status-btn').addEventListener('click', () => toggleVehicleRegistrationStatus(vehicle));
+      }
+
+      const printBtn = tr.querySelector('.print-row-btn');
+      if (printBtn) {
+        printBtn.addEventListener('click', () => {
+          if (dropdown) dropdown.classList.add('hidden');
+          if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+          printVehiclePass(vehicle);
+        });
+      }
+
+      const zoomQrBtn = tr.querySelector('.zoom-qr-row-btn');
+      if (zoomQrBtn) {
+        zoomQrBtn.addEventListener('click', () => {
+          if (dropdown) dropdown.classList.add('hidden');
+          if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+          const qrData = passPayloadFor(vehicle);
+          if (!qrData) return showToast(PASS_UNAVAILABLE_MSG);
+          openZoomQrModal({
+            payload: qrData,
+            plate: vehicle.plateNumber,
+            owner: vehicle.ownerName,
+            year: vehicle.stickerYear || '2026',
+            category: vehicle.vehicleType || 'Vehicle'
+          });
+        });
+      }
+
+      const inspectBtn = tr.querySelector('.inspect-btn');
+      if (inspectBtn) {
+        inspectBtn.addEventListener('click', () => openVehicleDrawer(vehicle));
+      }
+
+      const editBtn = tr.querySelector('.edit-btn');
+      if (editBtn) {
+        editBtn.addEventListener('click', () => openEditModal(vehicle));
+      }
+
+      const toggleStatusBtn = tr.querySelector('.toggle-status-btn');
+      if (toggleStatusBtn) {
+        toggleStatusBtn.addEventListener('click', () => {
+          if (dropdown) dropdown.classList.add('hidden');
+          if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+          toggleVehicleRegistrationStatus(vehicle);
+        });
+      }
 
       vehiclesTableBody.appendChild(tr);
     });
@@ -1804,6 +1968,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  if (vehicleLocationFilter) {
+    vehicleLocationFilter.addEventListener('change', (e) => {
+      state.vehicleFilter.location = e.target.value;
+      renderVehiclesTable();
+    });
+  }
+
   if (vehicleStatusFilter) {
     vehicleStatusFilter.addEventListener('change', (e) => {
       state.vehicleFilter.status = e.target.value;
@@ -1817,10 +1988,12 @@ document.addEventListener('DOMContentLoaded', () => {
       state.vehicleFilter.search = '';
       state.vehicleFilter.role = 'All';
       state.vehicleFilter.category = 'All';
+      state.vehicleFilter.location = 'All';
       state.vehicleFilter.status = 'All';
       if (vehicleSearchInput) vehicleSearchInput.value = '';
       if (vehicleRoleFilter) vehicleRoleFilter.value = 'All';
       if (vehicleCategoryFilter) vehicleCategoryFilter.value = 'All';
+      if (vehicleLocationFilter) vehicleLocationFilter.value = 'All';
       if (vehicleStatusFilter) vehicleStatusFilter.value = 'All';
       renderVehiclesTable();
       showToast('Filters cleared.');
@@ -2049,19 +2222,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     pagedLogs.forEach(log => {
       const tr = document.createElement('tr');
-      tr.className = 'odd:bg-white even:bg-slate-50/75 hover:bg-slate-100/70 transition-colors border-b border-slate-200 text-xs text-slate-800';
+      tr.className = 'hover:bg-slate-50/80 transition-colors border-b border-slate-100 text-xs text-slate-800';
 
-      let statusBadge = 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30 font-semibold';
-      let statusDot = 'bg-ncst-green';
+      let statusBadge = 'bg-emerald-50 text-emerald-700 border-emerald-200/80 font-semibold';
+      let statusDot = 'bg-emerald-500';
       let statusText = 'Inside';
 
       if (log.status === 'Exited') {
-        statusBadge = 'bg-slate-200 text-slate-800 border-slate-300 font-medium';
-        statusDot = 'bg-slate-500';
+        statusBadge = 'bg-slate-100 text-slate-700 border-slate-200 font-medium';
+        statusDot = 'bg-slate-400';
         statusText = 'Exited';
       } else if (log.status === 'Blocked / Alert') {
-        statusBadge = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30 font-bold';
-        statusDot = 'bg-ncst-crimson';
+        statusBadge = 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
+        statusDot = 'bg-rose-600';
         statusText = 'Hold / Blocked';
       }
 
@@ -2069,11 +2242,11 @@ document.addEventListener('DOMContentLoaded', () => {
       let actionColor = 'text-slate-800 font-medium';
       const actLower = (log.action || '').toLowerCase();
       if (actLower.includes('entry') || actLower.includes('ingress') || actLower.includes('approved')) {
-        actionColor = 'text-ncst-greenDark font-semibold';
+        actionColor = 'text-emerald-700 font-semibold';
       } else if (actLower.includes('exit') || actLower.includes('egress')) {
         actionColor = 'text-slate-700 font-medium';
       } else if (actLower.includes('flag') || actLower.includes('held') || actLower.includes('blocked') || actLower.includes('alert')) {
-        actionColor = 'text-ncst-crimson font-bold';
+        actionColor = 'text-rose-700 font-bold';
       }
 
       tr.innerHTML = `
@@ -2116,7 +2289,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${clipButtonFor(log)}
         </td>
         <td class="py-2.5 px-4 text-right whitespace-nowrap">
-          <button type="button" class="audit-details-btn px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 hover:text-ncst-navy text-xs font-semibold text-slate-800 shadow-2xs transition-all cursor-pointer">
+          <button type="button" class="audit-details-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">
             Inspect
           </button>
         </td>
@@ -4335,10 +4508,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function strikeChip(v) {
-    if (v.isVip) return '<span class="px-1.5 py-0.5 rounded bg-ncst-gold text-slate-900 text-[9px] font-extrabold tracking-wide">VIP</span>';
-    if (v.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[9px] font-extrabold tracking-wide">BANNED</span>';
+    if (v.isVip) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/80 text-[10px] font-semibold tracking-wide">VIP</span>';
+    if (v.isBanned) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold tracking-wide">BANNED</span>';
     const n = Number(v.warningCount || 0);
-    return n > 0 ? `<span class="px-1.5 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[9px] font-extrabold">STRIKE ${n}/3</span>` : '';
+    return n > 0 ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">STRIKE ${n}/3</span>` : '';
   }
 
   function passPayloadFor(v) {
@@ -4595,5 +4768,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // Instant refresh on gate passage events
   document.addEventListener('sp:gate-passage', () => {
     loadInitialDataFromApi(true, true);
+  });
+
+  // Global dismiss listener for Vehicle Directory row overflow menus
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.overflow-menu-container')) {
+      document.querySelectorAll('#vehiclesTableBody .overflow-menu-dropdown').forEach(d => {
+        d.classList.add('hidden');
+      });
+      document.querySelectorAll('#vehiclesTableBody .overflow-menu-btn').forEach(b => {
+        b.setAttribute('aria-expanded', 'false');
+      });
+    }
   });
 });

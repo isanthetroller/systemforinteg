@@ -43,15 +43,15 @@
 
   function severityBadge(sev) {
     return sev === 'Violation'
-      ? '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-bold">Violation</span>'
-      : '<span class="px-1.5 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[10px] font-bold">Warning</span>';
+      ? '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"><span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>Violation</span>'
+      : '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Warning</span>';
   }
 
   function statusBadge(st) {
-    const cls = st === 'Pending' ? 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30'
-      : st === 'Resolved' ? 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'
-      : 'bg-slate-100 text-slate-500 border-slate-200';
-    return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${cls}">${esc(st)}</span>`;
+    const cls = st === 'Pending' ? 'bg-amber-50 text-amber-800 border-amber-200'
+      : st === 'Resolved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80'
+      : 'bg-slate-100 text-slate-700 border-slate-200';
+    return `<span class="px-2 py-0.5 rounded border text-[11px] font-semibold ${cls}">${esc(st)}</span>`;
   }
 
   function showModal(id) { $(id).classList.remove('hidden'); $(id).classList.add('flex'); }
@@ -288,10 +288,13 @@
   async function updatePendingCount() {
     try {
       const pending = await ApiClient.getViolations({ status: 'Pending' });
-      $('violStatPending').textContent = pending.length;
+      const stat = $('violStatPending');
+      if (stat) stat.textContent = pending.length;
       const badge = $('violationsSidebarCount');
-      badge.textContent = pending.length;
-      badge.classList.toggle('hidden', pending.length === 0);
+      if (badge) {
+        badge.textContent = pending.length;
+        badge.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-amber-950 shadow-xs";
+      }
     } catch (_) { /* badge is optional */ }
   }
 

@@ -9,7 +9,14 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const state = { passes: [], current: null, upcoming: false };
+  const state = {
+    passes: [],
+    current: null,
+    upcoming: false,
+    timeframe: 'today',
+    search: '',
+    status: 'All'
+  };
   const MAX_ADVANCE_DAYS = 60;
 
   const esc = (v) => (window.SP ? SP.escapeHtml(v == null ? '' : String(v)) : String(v == null ? '' : v));
@@ -40,18 +47,18 @@
   }
 
   function statusBadge(p) {
-    let label = p.status, cls = 'bg-slate-100 text-slate-600 border-slate-200';
-    if (p.status === 'Active' && p.isInside) { label = 'Inside'; cls = 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30'; }
-    else if (p.status === 'Active' && p.validDate > manilaToday()) { label = 'Upcoming'; cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40'; }
-    else if (p.status === 'Revoked' && p.isInside) { label = 'Revoked (inside)'; cls = 'bg-ncst-crimson text-white border-ncst-crimson'; }
-    else if (p.status === 'Active') { label = 'Active'; cls = 'bg-ncst-navy/10 text-ncst-navy border-ncst-navy/20'; }
+    let label = p.status, cls = 'bg-slate-100 text-slate-700 border-slate-200';
+    if (p.status === 'Active' && p.isInside) { label = 'Inside'; cls = 'bg-emerald-50 text-emerald-700 border-emerald-200/80'; }
+    else if (p.status === 'Active' && p.validDate > manilaToday()) { label = 'Upcoming'; cls = 'bg-amber-50 text-amber-800 border-amber-200'; }
+    else if (p.status === 'Revoked' && p.isInside) { label = 'Revoked (inside)'; cls = 'bg-rose-50 text-rose-700 border-rose-200 font-bold'; }
+    else if (p.status === 'Active') { label = 'Active'; cls = 'bg-blue-50 text-ncst-navy border-blue-200'; }
     else if (p.status === 'Revoked') {
       // A pass is revoked automatically when the visitor exits (single use)
       if (p.exitTime) label = 'Revoked (checked out)';
-      cls = 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30';
+      cls = 'bg-slate-100 text-slate-600 border-slate-200';
     }
-    else if (p.status === 'Expired') cls = 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
-    return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-bold ${cls}">${esc(label)}</span>`;
+    else if (p.status === 'Expired') cls = 'bg-slate-100 text-slate-600 border-slate-200';
+    return `<span class="px-2 py-0.5 rounded border text-[11px] font-semibold ${cls}">${esc(label)}</span>`;
   }
 
   // A pass a guard issued on a phone without a connection: show when it reached the server
@@ -100,18 +107,101 @@
   function hideModal(id) { $(id).classList.add('hidden'); $(id).classList.remove('flex'); }
 
   /* ------------------------------------------------------------------------
-     List
+     List & Filtering
      ------------------------------------------------------------------------ */
+  function getFilteredPasses() {
+    const q = (state.search || '').toLowerCase().trim();
+    const stat = state.status || 'All';
+
+    return state.passes.filter(p => {
+      const matchesSearch = !q ||
+        (p.visitorName && p.visitorName.toLowerCase().includes(q)) ||
+        (p.passCode && p.passCode.toLowerCase().includes(q)) ||
+        (p.plateNumber && p.plateNumber.toLowerCase().includes(q)) ||
+        (p.vehicleModel && p.vehicleModel.toLowerCase().includes(q)) ||
+        (p.personToVisit && p.personToVisit.toLowerCase().includes(q)) ||
+        (p.purposeOfVisit && p.purposeOfVisit.toLowerCase().includes(q)) ||
+        (p.contactNumber && p.contactNumber.toLowerCase().includes(q)) ||
+        (p.items && p.items.some(i =>
+          (i.name && i.name.toLowerCase().includes(q)) ||
+          (i.description && i.description.toLowerCase().includes(q))
+        ));
+
+      let matchesStatus = true;
+      if (stat === 'Inside') {
+        matchesStatus = !!p.isInside;
+      } else if (stat === 'Active') {
+        matchesStatus = p.status === 'Active';
+      } else if (stat === 'CheckedOut') {
+        matchesStatus = !!p.exitTime;
+      } else if (stat === 'Upcoming') {
+        matchesStatus = p.status === 'Active' && p.validDate > manilaToday();
+      } else if (stat === 'Expired') {
+        matchesStatus = p.status === 'Expired';
+      } else if (stat === 'Revoked') {
+        matchesStatus = p.status === 'Revoked';
+      } else if (stat !== 'All') {
+        matchesStatus = p.status === stat;
+      }
+
+      return matchesSearch && matchesStatus;
+    });
+  }
+
+  function resetFilters() {
+    state.search = '';
+    state.status = 'All';
+    state.timeframe = 'today';
+    const sInput = $('visitorSearchInput');
+    if (sInput) sInput.value = '';
+    const stFilter = $('visitorStatusFilter');
+    if (stFilter) stFilter.value = 'All';
+    const tfFilter = $('visitorTimeframeFilter');
+    if (tfFilter) tfFilter.value = 'today';
+    const vDate = $('visitorsDate');
+    if (vDate) vDate.value = manilaToday();
+    const pickerWrap = $('visitorDatePickerWrapper');
+    if (pickerWrap) pickerWrap.classList.add('hidden');
+    load();
+    if (window.SP && SP.showToast) SP.showToast('Visitor filters cleared.');
+  }
+
+  function onTimeframeChange() {
+    const tf = $('visitorTimeframeFilter') ? $('visitorTimeframeFilter').value : 'today';
+    state.timeframe = tf;
+    state.upcoming = (tf === 'upcoming');
+    const pickerWrap = $('visitorDatePickerWrapper');
+    if (pickerWrap) {
+      if (tf === 'custom') {
+        pickerWrap.classList.remove('hidden');
+      } else {
+        pickerWrap.classList.add('hidden');
+      }
+    }
+    load();
+  }
+
   async function load() {
     const body = $('visitorsTableBody');
-    if (!$('visitorsDate').value) $('visitorsDate').value = manilaToday();
+    const dInput = $('visitorsDate');
+    if (dInput && !dInput.value) dInput.value = manilaToday();
     const upBtn = $('visitorsUpcomingBtn');
-    upBtn.setAttribute('aria-pressed', String(state.upcoming));
-    upBtn.className = `px-3 py-1.5 rounded-md border text-xs font-semibold cursor-pointer ${state.upcoming ? 'border-ncst-navy bg-ncst-navy text-white' : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'}`;
+    if (upBtn) {
+      upBtn.setAttribute('aria-pressed', String(state.timeframe === 'upcoming'));
+      upBtn.className = `px-3 py-1.5 rounded-md border text-xs font-semibold cursor-pointer ${state.timeframe === 'upcoming' ? 'border-ncst-navy bg-ncst-navy text-white' : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'}`;
+    }
+
     try {
-      state.passes = state.upcoming
-        ? await ApiClient.getVisitorPasses('', true)
-        : await ApiClient.getVisitorPasses($('visitorsDate').value);
+      if (state.timeframe === 'upcoming') {
+        state.passes = await ApiClient.getVisitorPasses('', true);
+      } else if (state.timeframe === 'all') {
+        state.passes = await ApiClient.getVisitorPasses({ all: 1 });
+      } else if (state.timeframe === 'custom') {
+        const val = (dInput && dInput.value) ? dInput.value : manilaToday();
+        state.passes = await ApiClient.getVisitorPasses(val);
+      } else {
+        state.passes = await ApiClient.getVisitorPasses(manilaToday());
+      }
       render();
     } catch (err) {
       body.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
@@ -120,12 +210,57 @@
 
   function render() {
     const body = $('visitorsTableBody');
-    if (!state.passes.length) {
-      body.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">${state.upcoming ? 'No upcoming passes are scheduled.' : 'No visitor passes for this day.'}</td></tr>`;
+    if (!body) return;
+    const badge = $('visitorCountBadge');
+    const filtered = getFilteredPasses();
+
+    // Update Directory Header Count Badge
+    if (badge) {
+      const totalCount = state.passes.length;
+      if (filtered.length === totalCount) {
+        badge.textContent = `${totalCount} ${totalCount === 1 ? 'pass' : 'passes'}`;
+      } else {
+        badge.textContent = `${filtered.length} of ${totalCount} passes`;
+      }
+    }
+
+    if (!filtered.length) {
+      const isFiltered = !!((state.search && state.search.trim()) || (state.status && state.status !== 'All'));
+      if (isFiltered) {
+        body.innerHTML = `
+          <tr>
+            <td colspan="8" class="py-16 text-center">
+              <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-3">
+                <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </div>
+              <div class="text-sm font-semibold text-slate-800">No passes match current filters</div>
+              <div class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">Try clearing search terms or resetting filters to display visitor pass records.</div>
+              <button type="button" id="emptyResetVisitorsBtn" class="mt-4 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs hover:border-slate-300 transition-colors cursor-pointer">
+                <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+                <span>Clear All Filters</span>
+              </button>
+            </td>
+          </tr>
+        `;
+        const emptyBtn = body.querySelector('#emptyResetVisitorsBtn');
+        if (emptyBtn) emptyBtn.addEventListener('click', resetFilters);
+      } else {
+        let msg = 'No visitor passes for this day.';
+        if (state.timeframe === 'upcoming') msg = 'No upcoming passes are scheduled.';
+        else if (state.timeframe === 'all') msg = 'No visitor passes on record.';
+        body.innerHTML = `<tr><td colspan="8" class="px-4 py-12 text-center text-slate-400">${esc(msg)}</td></tr>`;
+      }
       return;
     }
+
     body.innerHTML = '';
-    state.passes.forEach(p => {
+    filtered.forEach(p => {
       const tr = document.createElement('tr');
       tr.className = 'align-top hover:bg-slate-50/60';
       const canRevoke = isAdmin() && p.status === 'Active';
@@ -438,8 +573,61 @@
   document.addEventListener('sp:app-ready', () => {
     SP.registerView('visitorsView', $('navVisitorsBtn'), load);
     $('visitorsNewBtn').addEventListener('click', () => openCreate());
-    $('visitorsDate').addEventListener('change', () => { state.upcoming = false; load(); });
-    $('visitorsUpcomingBtn').addEventListener('click', () => { state.upcoming = !state.upcoming; load(); });
+
+    // Legacy upcoming toggle button
+    const legacyUpBtn = $('visitorsUpcomingBtn');
+    if (legacyUpBtn) {
+      legacyUpBtn.addEventListener('click', () => {
+        state.timeframe = state.timeframe === 'upcoming' ? 'today' : 'upcoming';
+        const tf = $('visitorTimeframeFilter');
+        if (tf) tf.value = state.timeframe;
+        load();
+      });
+    }
+
+    // Search filter input
+    const sInput = $('visitorSearchInput');
+    if (sInput) {
+      sInput.addEventListener('input', (e) => {
+        state.search = e.target.value;
+        render();
+      });
+    }
+
+    // Status filter dropdown
+    const stFilter = $('visitorStatusFilter');
+    if (stFilter) {
+      stFilter.addEventListener('change', (e) => {
+        state.status = e.target.value;
+        render();
+      });
+    }
+
+    // Timeframe scope dropdown
+    const tfFilter = $('visitorTimeframeFilter');
+    if (tfFilter) {
+      tfFilter.addEventListener('change', onTimeframeChange);
+    }
+
+    // Custom date picker
+    const vDate = $('visitorsDate');
+    if (vDate) {
+      vDate.addEventListener('change', () => {
+        state.timeframe = 'custom';
+        const tf = $('visitorTimeframeFilter');
+        if (tf) tf.value = 'custom';
+        const pickerWrap = $('visitorDatePickerWrapper');
+        if (pickerWrap) pickerWrap.classList.remove('hidden');
+        load();
+      });
+    }
+
+    // Reset filters button
+    const resetBtn = $('resetVisitorFiltersBtn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', resetFilters);
+    }
+
     $('visitorForm').addEventListener('submit', submitCreate);
     $('vpAddItemBtn').addEventListener('click', () => addItemRow());
     $('visitorCancelBtn').addEventListener('click', () => hideModal('visitorModal'));

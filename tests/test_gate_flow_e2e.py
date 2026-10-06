@@ -21,7 +21,7 @@ import json
 import urllib.request
 import urllib.error
 
-BASE = "http://localhost:8000/web-app-admin/api"
+BASE = "http://127.0.0.1:8000/web-app-admin/api"
 
 def request(path, method="GET", body=None, token=None):
     url = f"{BASE}/{path.lstrip('/')}"
@@ -61,7 +61,7 @@ def is_ok(res, expected_code=200):
     return False
 
 def login_admin():
-    for pwd in ["Admin-Pass-2026", "Password123!"]:
+    for pwd in ["admin123", "Admin-Pass-2026", "Password123!"]:
         res = request("auth.php?action=login", "POST", {"username": "admin", "password": pwd})
         if is_ok(res):
             return res["data"]["token"]

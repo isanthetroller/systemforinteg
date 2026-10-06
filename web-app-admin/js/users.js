@@ -24,18 +24,18 @@
 
   function roleBadge(role) {
     return role === 'admin'
-      ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20">Administrator</span>'
-      : '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">Gate Guard</span>';
+      ? '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-ncst-navy border border-blue-200">Administrator</span>'
+      : '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">Gate Guard</span>';
   }
 
   function statusBadge(u) {
     if (u.status !== 'Active') {
-      return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>';
+      return '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">Inactive</span>';
     }
     if (u.mustChangePassword) {
-      return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-goldLight text-amber-950 border border-ncst-gold/40">Pending first sign-in</span>';
+      return '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">Pending first sign-in</span>';
     }
-    return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">Active</span>';
+    return '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">Active</span>';
   }
 
   /* ------------------------------------------------------------------------

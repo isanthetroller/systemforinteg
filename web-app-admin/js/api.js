@@ -300,11 +300,17 @@ const ApiClient = (function() {
       return { ...res.data, message: res.message };
     },
 
-    // Visitor day passes (valid only on the day issued; server sets the date)
-    getVisitorPasses: async (date = '', upcoming = false) => {
-      const res = await request(upcoming
-        ? 'visitors.php?upcoming=1'
-        : `visitors.php${date ? '?date=' + encodeURIComponent(date) : ''}`);
+    // Visitor day passes (supports date, upcoming, search, status, or params object)
+    getVisitorPasses: async (dateOrParams = '', upcoming = false) => {
+      let query = '';
+      if (typeof dateOrParams === 'object' && dateOrParams !== null) {
+        query = new URLSearchParams(dateOrParams).toString();
+      } else if (upcoming) {
+        query = 'upcoming=1';
+      } else if (dateOrParams) {
+        query = 'date=' + encodeURIComponent(dateOrParams);
+      }
+      const res = await request(`visitors.php${query ? '?' + query : ''}`);
       return res.data;
     },
 

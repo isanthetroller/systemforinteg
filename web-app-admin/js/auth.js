@@ -207,6 +207,7 @@
     if ($('passwordCancelBtn')) $('passwordCancelBtn').addEventListener('click', closePasswordModal);
     if ($('changePasswordBtn')) $('changePasswordBtn').addEventListener('click', () => openPasswordModal(false));
     if ($('logoutBtn')) $('logoutBtn').addEventListener('click', logout);
+    if ($('topHeaderLogoutBtn')) $('topHeaderLogoutBtn').addEventListener('click', logout);
 
     if (!window.ApiClient || !ApiClient.hasToken()) {
       showLogin();

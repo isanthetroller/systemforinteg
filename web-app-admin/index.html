@@ -26,9 +26,9 @@
         extend: {
           colors: {
             ncst: {
-              navy: '#1B3676',       /* Academic Navy from badge NCST text & quadrants */
-              navyDark: '#112552',   /* Deep Shadow Navy */
-              navyLight: '#264EA8',  /* Vivid Royal Blue */
+              navy: '#253475',       /* Academic Emblem Blue */
+              navyDark: '#1E2B64',   /* Deeper Navy Hover Shade */
+              navyLight: '#2B3D86',  /* Vivid Royal Blue Accent */
               gold: '#F5B800',       /* Academic Gold from badge header, gear & ribbon */
               goldDark: '#D49B00',   /* Rich Gold Border */
               goldLight: '#FEF08A',  /* Soft Gold Tint */
@@ -83,15 +83,43 @@
     
     /* Nothing behind the login screen is visible until a session is confirmed */
     body:not(.sp-authed) #appShell { visibility: hidden; }
+
+    /* ==========================================================================
+       SecurePark Admin Login Screen Styling
+       ========================================================================== */
+    .sp-login-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 1.25rem 1rem;
+      background-color: #1a2656;
+      background: radial-gradient(circle at 50% 35%, #22306c 0%, #1a2656 55%, #131d42 100%);
+    }
     
-    /* Smooth Sidebar Hide/Show Transition */
+    /* Smooth Sidebar Hide/Show Transition & Royal Blue Gradient */
     #appSidebar {
       transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+      background: linear-gradient(180deg, #182554 0%, #121c40 50%, #0a1028 100%);
     }
     #appSidebar.collapsed {
       margin-left: -16rem; /* Fully hides 64 width */
       opacity: 0;
       pointer-events: none;
+    }
+    #appSidebar nav::-webkit-scrollbar {
+      width: 4px;
+    }
+    #appSidebar nav::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+    }
+    #appSidebar nav::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
     }
 
     /* Print: Only output the official NCST QR Decal (Navy Top Banner + Centered QR Code) */
@@ -158,24 +186,24 @@
 
   <div id="appShell" class="flex h-full min-h-screen">
     
-    <!-- ==================== SIDEBAR (WHITE THEME, COLLAPSIBLE) ==================== -->
-    <aside id="appSidebar" class="w-64 flex-shrink-0 bg-white text-slate-800 flex flex-col border-r border-slate-200 select-none relative z-30 shadow-xs">
+    <!-- ==================== SIDEBAR (ROYAL BLUE GRADIENT THEME, COLLAPSIBLE) ==================== -->
+    <aside id="appSidebar" class="w-64 flex-shrink-0 text-white flex flex-col border-r border-white/10 select-none relative z-30 shadow-md">
       
       <!-- Institutional Branding Header with Collapse Button -->
-      <div class="p-3.5 border-b border-slate-200 flex items-center justify-between">
+      <div class="p-3.5 border-b border-white/10 flex items-center justify-between">
         <div class="flex items-center gap-2.5 min-w-0">
           <!-- Official NCST Crest SVG -->
-          <div class="w-9 h-9 rounded-lg bg-white p-1 shadow-2xs border border-ncst-gold/60 flex items-center justify-center flex-shrink-0">
+          <div class="w-9 h-9 rounded-lg bg-white p-1 shadow-xs border border-ncst-gold/40 flex items-center justify-center flex-shrink-0">
             <img src="assets/ncst-logo.svg" alt="NCST Crest" class="w-full h-full object-contain">
           </div>
           <div class="min-w-0">
-            <div class="text-xs font-bold text-ncst-navy leading-tight">SecurePark</div>
-            <div class="text-[10px] text-slate-500 font-medium">Campus Gate Admin</div>
+            <div class="text-xs font-bold text-white leading-tight">SecurePark</div>
+            <div class="text-[10px] text-blue-200/70 font-medium">Campus Gate Admin</div>
           </div>
         </div>
         
         <!-- Collapse Button to Hide Sidebar -->
-        <button type="button" id="sidebarCollapseBtn" class="p-1.5 rounded-md text-slate-400 hover:text-ncst-navy hover:bg-slate-100 transition-colors cursor-pointer flex items-center justify-center flex-shrink-0" title="Hide Sidebar">
+        <button type="button" id="sidebarCollapseBtn" class="p-1.5 rounded-md text-blue-200/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex items-center justify-center flex-shrink-0" title="Hide Sidebar">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="11 17 6 12 11 7"></polyline>
             <polyline points="18 17 13 12 18 7"></polyline>
@@ -183,71 +211,49 @@
         </button>
       </div>
 
-      <!-- User Officer Profile Card -->
-      <div class="p-3 bg-slate-50/80 border-b border-slate-200">
-        <div class="flex items-center gap-2.5">
-          <div id="sidebarUserInitials" class="w-8 h-8 rounded-full bg-ncst-navy text-ncst-gold font-bold text-xs flex items-center justify-center border border-ncst-gold/40 shadow-2xs flex-shrink-0">
-            --
-          </div>
-          <div class="min-w-0 flex-1">
-            <div id="sidebarUserName" class="text-xs font-bold text-slate-800 truncate">Signed out</div>
-            <div class="text-[10px] text-slate-500 truncate flex items-center gap-1.5 font-medium">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span id="sidebarUserRole">&mdash;</span>
-            </div>
-          </div>
-        </div>
-        <div class="mt-2.5 flex items-center gap-1.5">
-          <button type="button" id="changePasswordBtn" class="flex-1 px-2 py-1 rounded border border-slate-200 bg-white hover:bg-slate-100 text-[10px] font-semibold text-slate-600 cursor-pointer transition-colors">
-            Change Password
-          </button>
-          <button type="button" id="logoutBtn" class="flex-1 px-2 py-1 rounded border border-rose-200 bg-rose-50/60 hover:bg-rose-100 text-[10px] font-semibold text-ncst-crimson cursor-pointer transition-colors">
-            Sign Out
-          </button>
-        </div>
-      </div>
-
-      <!-- Grouped Navigation Menu (White Sidebar Theme) -->
+      <!-- Grouped Navigation Menu (Collapsible Royal Blue Gradient Sidebar) -->
       <nav class="flex-1 p-3 space-y-4 overflow-y-auto">
         
         <!-- Group: Overview -->
         <div>
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
             Overview
           </div>
-          <button type="button" id="navGateBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer mb-1">
-            <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
-              <rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><path d="M13 7h4v4"/><path d="M7 17v-4h4"/>
-            </svg>
-            <span>Gate Monitor</span>
-          </button>
-          <button type="button" id="navOnCampusBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer mb-1">
-            <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>
-            </svg>
-            <span class="flex-1">On Campus Now</span>
-            <span id="onCampusSidebarCount" class="text-[10px] px-1.5 py-0.2 rounded font-bold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">0</span>
-          </button>
-          <button type="button" id="navDashboardBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-ncst-navy bg-ncst-navy/10 border-l-4 border-ncst-navy shadow-2xs transition-colors text-left cursor-pointer">
-            <svg class="w-4 h-4 text-ncst-navy flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="7" height="7" rx="1"/>
-              <rect x="14" y="3" width="7" height="7" rx="1"/>
-              <rect x="14" y="14" width="7" height="7" rx="1"/>
-              <rect x="3" y="14" width="7" height="7" rx="1"/>
-            </svg>
-            <span>Dashboard</span>
-          </button>
+          <div class="space-y-1">
+            <button type="button" id="navGateBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                <rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><path d="M13 7h4v4"/><path d="M7 17v-4h4"/>
+              </svg>
+              <span>Gate Monitor</span>
+            </button>
+            <button type="button" id="navOnCampusBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>
+              </svg>
+              <span class="flex-1">On Campus Now</span>
+              <span id="onCampusSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-white/15 text-white border border-white/20 shadow-2xs">0</span>
+            </button>
+            <button type="button" id="navDashboardBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-white bg-white/15 border-l-4 border-white shadow-xs transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-white flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7" rx="1"/>
+                <rect x="14" y="3" width="7" height="7" rx="1"/>
+                <rect x="14" y="14" width="7" height="7" rx="1"/>
+                <rect x="3" y="14" width="7" height="7" rx="1"/>
+              </svg>
+              <span>Dashboard</span>
+            </button>
+          </div>
         </div>
 
         <!-- Group: Vehicle Management -->
         <div>
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
             Vehicle Management
           </div>
           <div class="space-y-1">
-            <button type="button" id="navVehiclesBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" id="navVehiclesBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"/>
                 <circle cx="7" cy="17" r="2"/>
                 <circle cx="17" cy="17" r="2"/>
@@ -255,8 +261,8 @@
               <span>Vehicle Directory</span>
             </button>
 
-            <button type="button" id="navAccountBtn" class="admin-only nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" id="navAccountBtn" class="admin-only nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
                 <circle cx="9" cy="7" r="4"/>
                 <line x1="19" y1="8" x2="19" y2="14"/>
@@ -265,9 +271,9 @@
               <span>Register Vehicle</span>
             </button>
 
-            <button type="button" id="navVisitorsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="17" x2="11" y2="17"/>
+            <button type="button" id="navVisitorsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="17" x2="11" y2="17"/>
               </svg>
               <span>Visitor Day Passes</span>
             </button>
@@ -276,12 +282,12 @@
 
         <!-- Group: Security Operations -->
         <div>
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
             Security Operations
           </div>
           <div class="space-y-1">
-            <button type="button" id="navAuditBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" id="navAuditBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                 <polyline points="14 2 14 8 20 8"/>
                 <line x1="16" y1="13" x2="8" y2="13"/>
@@ -291,53 +297,66 @@
               <span>Audit Logs</span>
             </button>
 
-            <button type="button" id="navFlaggedBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-ncst-crimson flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" id="navFlaggedBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
                 <line x1="12" y1="8" x2="12" y2="12"/>
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
               <span class="flex-1">Flagged & Blocked</span>
-              <span id="flaggedSidebarCount" class="text-[10px] px-1.5 py-0.2 rounded font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30">
+              <span id="flaggedSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-500 text-white shadow-xs">
                 1
               </span>
             </button>
 
-            <button type="button" id="navViolationsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" id="navViolationsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                 <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
               </svg>
               <span class="flex-1">Violations &amp; Penalties</span>
-              <span id="violationsSidebarCount" class="hidden text-[10px] px-1.5 py-0.2 rounded font-bold bg-ncst-goldLight/70 text-ncst-goldDark border border-ncst-gold/40">0</span>
+              <span id="violationsSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-amber-950 shadow-xs">0</span>
             </button>
           </div>
         </div>
 
         <!-- Group: Administration (admin only) -->
         <div class="admin-only">
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
             Administration
           </div>
           <div class="space-y-1">
-            <button type="button" id="navStaffBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-600 hover:text-ncst-navy hover:bg-slate-50 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" id="navStaffBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                 <circle cx="12" cy="10" r="2.5"/>
                 <path d="M8.5 16c.8-1.6 2-2.4 3.5-2.4s2.7.8 3.5 2.4"/>
               </svg>
               <span>Staff Accounts</span>
             </button>
-
           </div>
         </div>
 
       </nav>
 
+      <!-- User Officer Profile Card (Bottom Pinned) -->
+      <div class="p-3 bg-black/20 border-t border-white/10">
+        <div class="flex items-center gap-2.5">
+          <div id="sidebarUserInitials" class="w-8 h-8 rounded-full bg-white/20 text-white font-bold text-xs flex items-center justify-center border-2 border-white shadow-xs flex-shrink-0">
+            --
+          </div>
+          <div class="min-w-0 flex-1">
+            <div id="sidebarUserName" class="text-xs font-bold text-white truncate">Signed out</div>
+          </div>
+        </div>
+        <!-- Hidden stubs for JS compatibility -->
+        <button type="button" id="changePasswordBtn" class="hidden" aria-hidden="true"></button>
+        <button type="button" id="logoutBtn" class="hidden" aria-hidden="true"></button>
+      </div>
+
       <!-- Sidebar Bottom Brand -->
-      <div class="p-3 border-t border-slate-200 text-xs font-bold text-slate-500 flex items-center justify-between bg-slate-50/50">
-        <span class="text-slate-600 font-bold">SecurePark</span>
-        <span class="text-[10px] text-ncst-navy font-extrabold px-1.5 py-0.5 rounded bg-ncst-goldLight/60 border border-ncst-gold/50">NCST</span>
+      <div class="px-3.5 py-2.5 border-t border-white/10 text-xs flex items-center justify-between bg-black/25">
+        <span class="text-blue-100 font-bold tracking-wide text-[11px]">SecurePark</span>
       </div>
     </aside>
 
@@ -360,6 +379,18 @@
             <span class="text-slate-400 hidden md:inline">•</span>
             <span class="text-slate-500 hidden md:inline text-[11px] font-medium">Campus Gate Administration</span>
           </div>
+        </div>
+
+        <!-- Top Header Action Controls -->
+        <div class="flex items-center gap-2.5">
+          <button type="button" id="topHeaderLogoutBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 text-slate-600 text-xs font-semibold shadow-2xs transition-colors cursor-pointer" title="Sign out of administration session">
+            <svg class="w-3.5 h-3.5 text-slate-400 group-hover:text-rose-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+            <span>Sign Out</span>
+          </button>
         </div>
       </header>
 
@@ -628,22 +659,22 @@
 
           <!-- TABLE 1: CURRENTLY INSIDE / PERMITTED ON CAMPUS (Active physical custody state) -->
           <div id="paneCurrentlyInside" class="gate-flow-pane overflow-x-auto">
-            <div class="px-3.5 py-2 bg-emerald-50/50 border-b border-emerald-100 text-[11px] text-emerald-900 flex items-center justify-between">
+            <div class="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
               <span class="font-medium">Active campus custody: Registered vehicles and visitors approved at entrance that have not yet exited.</span>
-              <span class="font-mono text-[10px] text-emerald-700">Source: oncampus.php</span>
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Source: oncampus.php</span>
             </div>
             <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-3.5">Status</th>
-                  <th class="py-2.5 px-3.5">Plate Number</th>
-                  <th class="py-2.5 px-3.5">Name / Owner</th>
-                  <th class="py-2.5 px-3.5">Classification / ID</th>
-                  <th class="py-2.5 px-3.5">Vehicle Type</th>
-                  <th class="py-2.5 px-3.5">Admitted At</th>
-                  <th class="py-2.5 px-3.5">Duration Inside</th>
-                  <th class="py-2.5 px-3.5">Gate / Guard</th>
-                  <th class="py-2.5 px-3.5 text-right">Action</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Classification / ID</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Admitted At</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Duration Inside</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Gate / Guard</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Action</th>
                 </tr>
               </thead>
               <tbody id="currentlyInsideTableBody" class="divide-y divide-slate-100">
@@ -654,22 +685,22 @@
 
           <!-- TABLE 2: ENTRANCE / INGRESS TABLE (Recent Entrance gate passages) -->
           <div id="paneEntrance" class="gate-flow-pane overflow-x-auto hidden">
-            <div class="px-3.5 py-2 bg-blue-50/50 border-b border-blue-100 text-[11px] text-blue-900 flex items-center justify-between">
+            <div class="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
               <span class="font-medium">Recent entrance passages: Vehicles and day passes processed and approved through campus entrance gates.</span>
-              <span class="font-mono text-[10px] text-blue-700">Filter: Ingress</span>
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Filter: Ingress</span>
             </div>
             <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-3.5">Status</th>
-                  <th class="py-2.5 px-3.5">Plate Number</th>
-                  <th class="py-2.5 px-3.5">Name / Owner</th>
-                  <th class="py-2.5 px-3.5">Driver / Relationship</th>
-                  <th class="py-2.5 px-3.5">Vehicle Type</th>
-                  <th class="py-2.5 px-3.5">Pass / QR Info</th>
-                  <th class="py-2.5 px-3.5">Entry Time</th>
-                  <th class="py-2.5 px-3.5">Gate & Guard</th>
-                  <th class="py-2.5 px-3.5 text-right">Inspect</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Driver / Relationship</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Pass / QR Info</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Entry Time</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Gate & Guard</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Inspect</th>
                 </tr>
               </thead>
               <tbody id="entranceTableBody" class="divide-y divide-slate-100">
@@ -680,22 +711,22 @@
 
           <!-- TABLE 3: EXIT / EGRESS TABLE (Recent Exit gate passages with dwell duration) -->
           <div id="paneExit" class="gate-flow-pane overflow-x-auto hidden">
-            <div class="px-3.5 py-2 bg-slate-100/70 border-b border-slate-200 text-[11px] text-slate-700 flex items-center justify-between">
+            <div class="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
               <span class="font-medium">Recent exit passages: Vehicles and visitors verified and departed through campus exit gates.</span>
-              <span class="font-mono text-[10px] text-slate-500">Filter: Egress</span>
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Filter: Egress</span>
             </div>
             <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-3.5">Status</th>
-                  <th class="py-2.5 px-3.5">Plate Number</th>
-                  <th class="py-2.5 px-3.5">Name / Owner</th>
-                  <th class="py-2.5 px-3.5">Vehicle Type</th>
-                  <th class="py-2.5 px-3.5">Entry Time</th>
-                  <th class="py-2.5 px-3.5">Exit Time</th>
-                  <th class="py-2.5 px-3.5">Duration Inside</th>
-                  <th class="py-2.5 px-3.5">Gate & Guard</th>
-                  <th class="py-2.5 px-3.5 text-right">Inspect</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Entry Time</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Exit Time</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Duration Inside</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Gate & Guard</th>
+                  <th class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Inspect</th>
                 </tr>
               </thead>
               <tbody id="exitTableBody" class="divide-y divide-slate-100">
@@ -710,92 +741,162 @@
       </section>
 
       <!-- ==================== VIEW 2: VEHICLE DIRECTORY ==================== -->
-      <section id="vehiclesView" class="view-panel space-y-6">
+      <section id="vehiclesView" class="view-panel space-y-5">
         
         <!-- Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
           <div>
-            <h1 class="text-xl font-bold text-slate-900">Vehicle Directory</h1>
-            <p class="text-xs text-slate-500 mt-0.5">Manage registered vehicles, custody status, and authorized drivers</p>
+            <div class="flex items-center gap-2.5">
+              <h1 class="text-2xl font-semibold text-slate-900 tracking-tight">Vehicle Directory</h1>
+              <span id="directoryVehicleCountBadge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/80">
+                0 vehicles
+              </span>
+            </div>
+            <p class="text-[13px] text-slate-500 mt-1">Manage registered campus fleet, credentialed passes, and driver authorizations</p>
           </div>
-          <button id="directoryNewAccBtn" class="admin-only px-3 py-1.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold transition-colors self-start sm:self-auto">
-            + Register Vehicle
+          <button id="directoryNewAccBtn" class="admin-only inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs hover:shadow-sm transition-all self-start sm:self-auto cursor-pointer">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>Register Vehicle</span>
           </button>
         </div>
 
         <!-- Vehicle Controls (Search & Filters) -->
-        <div class="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
-          
-          <div class="grid grid-cols-1 sm:grid-cols-5 gap-3">
+        <div class="bg-white rounded-xl border border-slate-200/90 p-3 sm:p-3.5 shadow-2xs">
+          <div class="flex flex-col lg:flex-row items-stretch lg:items-end gap-3">
             
-            <!-- Search -->
-            <div class="sm:col-span-1">
-              <label class="block text-[11px] font-medium text-slate-500 mb-1">Search Fleet</label>
-              <input type="text" id="vehicleSearchInput" placeholder="Plate, owner, or ID..." class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
+            <!-- Search (Largest Field - flex-1) -->
+            <div class="flex-1 min-w-[260px]">
+              <label for="vehicleSearchInput" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Search Fleet
+              </label>
+              <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                </div>
+                <input type="text" id="vehicleSearchInput" placeholder="Search by plate, owner, make, or pass ID..." class="w-full pl-9 pr-3.5 h-10 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors">
+              </div>
             </div>
 
-            <!-- Role Filter -->
-            <div>
-              <label class="block text-[11px] font-medium text-slate-500 mb-1">Affiliation</label>
-              <select id="vehicleRoleFilter" class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
-                <option value="All">All Roles</option>
-                <option value="Faculty">Faculty</option>
-                <option value="Staff">Staff</option>
-                <option value="Student">Student</option>
-                <option value="Visitor">Visitor</option>
-              </select>
+            <!-- Role / Affiliation Filter -->
+            <div class="w-full sm:w-40 lg:w-36 xl:w-40 flex-shrink-0">
+              <label for="vehicleRoleFilter" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Affiliation
+              </label>
+              <div class="relative">
+                <select id="vehicleRoleFilter" class="w-full h-10 px-3 pr-8 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors appearance-none cursor-pointer">
+                  <option value="All">All Affiliations</option>
+                  <option value="Faculty">Faculty</option>
+                  <option value="Staff">Staff</option>
+                  <option value="Student">Student</option>
+                  <option value="Visitor">Visitor</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </div>
+              </div>
             </div>
 
             <!-- Category Filter -->
-            <div>
-              <label class="block text-[11px] font-medium text-slate-500 mb-1">Category</label>
-              <select id="vehicleCategoryFilter" class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
-                <option value="All">All Categories</option>
-                <option value="4-Wheel">4-Wheel</option>
-                <option value="Motorcycle">Motorcycle</option>
-                <option value="Bicycle">Bicycle / Non-Plated</option>
-                <option value="Campus Fleet">Campus Fleet</option>
-              </select>
+            <div class="w-full sm:w-40 lg:w-36 xl:w-40 flex-shrink-0">
+              <label for="vehicleCategoryFilter" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Category
+              </label>
+              <div class="relative">
+                <select id="vehicleCategoryFilter" class="w-full h-10 px-3 pr-8 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors appearance-none cursor-pointer">
+                  <option value="All">All Categories</option>
+                  <option value="4-Wheel">4-Wheel</option>
+                  <option value="Motorcycle">Motorcycle</option>
+                  <option value="Bicycle">Bicycle / Non-Plated</option>
+                  <option value="Campus Fleet">Campus Fleet</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </div>
+              </div>
             </div>
 
-            <!-- Registration Status Filter -->
-            <div>
-              <label class="block text-[11px] font-medium text-slate-500 mb-1">Pass Status</label>
-              <select id="vehicleStatusFilter" class="w-full px-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
-                <option value="All">All Statuses</option>
-                <option value="Active">Active</option>
-                <option value="Suspended">Suspended</option>
-                <option value="VIP">VIP passes</option>
-              </select>
+            <!-- Campus Custody / Gate Location Filter -->
+            <div class="w-full sm:w-40 lg:w-36 xl:w-40 flex-shrink-0">
+              <label for="vehicleLocationFilter" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Gate Location
+              </label>
+              <div class="relative">
+                <select id="vehicleLocationFilter" class="w-full h-10 px-3 pr-8 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors appearance-none cursor-pointer">
+                  <option value="All">All Locations</option>
+                  <option value="Inside">Inside Campus (On-site)</option>
+                  <option value="Outside">Outside Campus (Off-site)</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pass Status Filter -->
+            <div class="w-full sm:w-44 lg:w-40 xl:w-44 flex-shrink-0">
+              <label for="vehicleStatusFilter" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Security & Pass
+              </label>
+              <div class="relative">
+                <select id="vehicleStatusFilter" class="w-full h-10 px-3 pr-8 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors appearance-none cursor-pointer">
+                  <option value="All">All Statuses</option>
+                  <option value="Active">Active Pass</option>
+                  <option value="Suspended">Suspended Pass</option>
+                  <option value="VIP">VIP Passes</option>
+                  <option value="Banned">Banned / Blocked</option>
+                  <option value="Strikes">With Strikes / Violations</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </div>
+              </div>
             </div>
 
             <!-- Reset Filters -->
-            <div class="flex items-end">
-              <button type="button" id="resetVehicleFiltersBtn" class="w-full px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-xs transition-colors">
-                Reset Filters
+            <div class="flex-shrink-0">
+              <button type="button" id="resetVehicleFiltersBtn" class="w-full lg:w-auto h-10 px-3.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
+                <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+                <span>Reset Filters</span>
               </button>
             </div>
 
           </div>
-
         </div>
 
         <!-- Vehicles Table -->
-        <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+        <div class="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+          <div class="overflow-x-auto min-h-[300px]">
+            <table class="w-full text-left border-collapse table-fixed min-w-[1080px]">
+              <colgroup>
+                <col style="width: 110px;"> <!-- STATUS -->
+                <col style="width: 225px;"> <!-- PLATE / PASS ID -->
+                <col style="width: 225px;"> <!-- VEHICLE DETAILS -->
+                <col style="width: 190px;"> <!-- OWNER -->
+                <col style="width: 215px;"> <!-- AFFILIATION -->
+                <col style="width: 95px;">  <!-- DRIVERS -->
+                <col style="width: 220px;"> <!-- ACTIONS -->
+              </colgroup>
+              <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-xs text-slate-700 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider select-none shadow-2xs">
                 <tr>
-                  <th class="py-2.5 px-4">Status</th>
-                  <th class="py-2.5 px-4">Plate / Pass ID</th>
-                  <th class="py-2.5 px-4">Vehicle Details</th>
-                  <th class="py-2.5 px-4">Owner</th>
-                  <th class="py-2.5 px-4">Affiliation</th>
-                  <th class="py-2.5 px-4">Drivers</th>
-                  <th class="py-2.5 px-4 text-right">Actions</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Status</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Plate / Pass ID</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Vehicle Details</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Owner</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Affiliation</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Drivers</th>
+                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700 text-right pr-4">Actions</th>
                 </tr>
               </thead>
-              <tbody id="vehiclesTableBody" class="divide-y divide-slate-100">
+              <tbody id="vehiclesTableBody" class="divide-y divide-slate-100 bg-white text-xs">
                 <!-- Rendered by JS -->
               </tbody>
             </table>
@@ -826,16 +927,16 @@
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 font-medium">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-4">Status</th>
-                  <th class="py-2.5 px-4">Plate</th>
-                  <th class="py-2.5 px-4">Vehicle</th>
-                  <th class="py-2.5 px-4">Driver Involved</th>
-                  <th class="py-2.5 px-4">Reason for Stop</th>
-                  <th class="py-2.5 px-4">Gate & Officer</th>
-                  <th class="py-2.5 px-4">Timestamp</th>
-                  <th class="py-2.5 px-4 text-right">Investigation</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Status</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Plate</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Vehicle</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Driver Involved</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Reason for Stop</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Gate & Officer</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Timestamp</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700 text-right">Investigation</th>
                 </tr>
               </thead>
               <tbody id="incidentsTableBody" class="divide-y divide-slate-100">
@@ -910,21 +1011,21 @@
 
         </div>
 
-        <!-- Full Audit Table with Dark High-Contrast Header -->
-        <div class="bg-white rounded-lg border border-slate-300 overflow-hidden shadow-xs">
+        <!-- Full Audit Table with Institutional Header -->
+        <div class="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-xs">
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs">
-              <thead class="bg-slate-900 text-slate-200 border-b border-slate-800 font-semibold uppercase tracking-wider text-[11px]">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-3 px-4">Status</th>
-                  <th class="py-3 px-4">Plate</th>
-                  <th class="py-3 px-4">Event / Action</th>
-                  <th class="py-3 px-4">Driver</th>
-                  <th class="py-3 px-4">Owner</th>
-                  <th class="py-3 px-4">Gate</th>
-                  <th class="py-3 px-4">Officer</th>
-                  <th class="py-3 px-4 text-right">Time</th>
-                  <th class="py-3 px-4 text-right">Details</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Status</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Plate</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Event / Action</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Driver</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Owner</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Gate</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700">Officer</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700 text-right">Time</th>
+                  <th class="py-2.5 px-4 font-bold text-slate-700 text-right">Details</th>
                 </tr>
               </thead>
               <tbody id="fullAuditTableBody" class="divide-y divide-slate-200">
@@ -1346,7 +1447,7 @@
         <div class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
           <div class="overflow-x-auto">
             <table class="w-full text-xs">
-              <thead class="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
                   <th class="text-left font-bold px-4 py-2.5">Name</th>
                   <th class="text-left font-bold px-4 py-2.5">Username</th>
@@ -1416,7 +1517,7 @@
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-xs">
-              <thead class="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
                   <th class="text-left font-bold px-4 py-2.5">Date</th>
                   <th class="text-left font-bold px-4 py-2.5">Vehicle</th>
@@ -1434,24 +1535,116 @@
       </section>
 
       <!-- ==================== VIEW 8: VISITOR DAY PASSES ==================== -->
-      <section id="visitorsView" class="view-panel space-y-4">
-        <div class="flex flex-wrap items-end justify-between gap-3">
+      <section id="visitorsView" class="view-panel space-y-5">
+        
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
           <div>
-            <h1 class="text-lg font-extrabold text-slate-900 tracking-tight">Visitor Day Passes</h1>
-            <p class="text-xs text-slate-500">Single-day passes for unregistered vehicles. Each pass is valid all day on its chosen date.</p>
+            <div class="flex items-center gap-2.5">
+              <h1 class="text-2xl font-semibold text-slate-900 tracking-tight">Visitor Day Passes</h1>
+              <span id="visitorCountBadge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/80">
+                0 passes
+              </span>
+            </div>
+            <p class="text-[13px] text-slate-500 mt-1">Single-day guest credentials, on-campus entry logs, and temporary vehicle access</p>
           </div>
-          <div class="flex items-center gap-2">
-            <label for="visitorsDate" class="text-[11px] font-bold text-slate-600">Day</label>
-            <input id="visitorsDate" type="date" class="px-2.5 py-1.5 rounded-md border border-slate-300 text-xs">
-            <button type="button" id="visitorsUpcomingBtn" aria-pressed="false" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer">Upcoming</button>
-            <button type="button" id="visitorsNewBtn" class="px-3 py-1.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs cursor-pointer">+ New Day Pass</button>
+          <button type="button" id="visitorsNewBtn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs hover:shadow-sm transition-all self-start sm:self-auto cursor-pointer">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>+ New Day Pass</span>
+          </button>
+        </div>
+
+        <!-- Visitor Controls (Search & Filters) -->
+        <div class="bg-white rounded-xl border border-slate-200/90 p-3 sm:p-3.5 shadow-2xs">
+          <div class="flex flex-col lg:flex-row items-stretch lg:items-end gap-3">
+            
+            <!-- Search Field -->
+            <div class="flex-1 min-w-[240px]">
+              <label for="visitorSearchInput" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Search Passes
+              </label>
+              <div class="relative">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                </div>
+                <input type="text" id="visitorSearchInput" placeholder="Search by visitor, pass code, plate, host, or purpose..." class="w-full pl-9 pr-3.5 h-10 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors">
+              </div>
+            </div>
+
+            <!-- Status Filter -->
+            <div class="w-full sm:w-48 lg:w-44 flex-shrink-0">
+              <label for="visitorStatusFilter" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Pass Status
+              </label>
+              <div class="relative">
+                <select id="visitorStatusFilter" class="w-full h-10 px-3 pr-8 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors appearance-none cursor-pointer">
+                  <option value="All">All Statuses</option>
+                  <option value="Inside">Inside Campus (On-site)</option>
+                  <option value="Active">Active (Awaiting / Valid)</option>
+                  <option value="CheckedOut">Checked Out</option>
+                  <option value="Upcoming">Upcoming</option>
+                  <option value="Expired">Expired</option>
+                  <option value="Revoked">Revoked</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </div>
+              </div>
+            </div>
+
+            <!-- Date Timeframe Filter -->
+            <div class="w-full sm:w-40 lg:w-36 flex-shrink-0">
+              <label for="visitorTimeframeFilter" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Date Scope
+              </label>
+              <div class="relative">
+                <select id="visitorTimeframeFilter" class="w-full h-10 px-3 pr-8 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors appearance-none cursor-pointer">
+                  <option value="today">Today</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="all">All Dates</option>
+                  <option value="custom">Custom Date</option>
+                </select>
+                <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </div>
+              </div>
+            </div>
+
+            <!-- Custom Date Picker (hidden by default unless Custom Date is selected) -->
+            <div id="visitorDatePickerWrapper" class="w-full sm:w-38 lg:w-36 flex-shrink-0 hidden">
+              <label for="visitorsDate" class="block text-[11px] font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">
+                Day
+              </label>
+              <input id="visitorsDate" type="date" class="w-full h-10 px-3 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs font-medium text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors">
+            </div>
+
+            <!-- Hidden legacy button so any external references or shortcuts do not break -->
+            <button type="button" id="visitorsUpcomingBtn" aria-pressed="false" class="hidden"></button>
+
+            <!-- Reset Filters -->
+            <div class="flex-shrink-0">
+              <button type="button" id="resetVisitorFiltersBtn" class="w-full lg:w-auto h-10 px-3.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
+                <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+                <span>Reset Filters</span>
+              </button>
+            </div>
+
           </div>
         </div>
 
         <div class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
           <div class="overflow-x-auto">
             <table class="w-full text-xs">
-              <thead class="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
                   <th class="text-left font-bold px-4 py-2.5">Pass</th>
                   <th class="text-left font-bold px-4 py-2.5">Visitor</th>
@@ -1905,60 +2098,152 @@
 
   <!-- Toast Notification Hub -->
   <!-- ==================== LOGIN SCREEN ==================== -->
-  <div id="loginOverlay" class="fixed inset-0 z-[60] flex overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-sm bg-white rounded-xl shadow-2xl p-6 sm:p-8">
-      <div class="text-center mb-6">
-        <img src="assets/ncst-emblem.png" alt="NCST Official Emblem" class="w-20 h-20 mx-auto mb-3 object-contain">
-        <h1 class="text-xl font-bold text-slate-800">Security Officer Sign In</h1>
-        <p class="text-xs text-slate-500 mt-1">Authorized gate personnel only</p>
+  <div id="loginOverlay" class="sp-login-canvas">
+    <!-- Subtle Ambient Background Accents -->
+    <div class="fixed inset-0 pointer-events-none select-none overflow-hidden" aria-hidden="true">
+      <svg class="absolute -top-32 -left-32 w-[520px] h-[520px] text-white/[0.035]" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 520 520">
+        <circle cx="260" cy="260" r="250" />
+        <circle cx="260" cy="260" r="175" />
+      </svg>
+      <svg class="absolute -bottom-40 -right-40 w-[620px] h-[620px] text-white/[0.035]" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 620 620">
+        <circle cx="310" cy="310" r="300" />
+        <circle cx="310" cy="310" r="210" />
+      </svg>
+    </div>
+
+    <!-- Login Card Container -->
+    <div class="w-full max-w-[420px] mx-auto bg-white rounded-2xl shadow-[0_25px_60px_-15px_rgba(10,20,50,0.5),0_0_0_1px_rgba(255,255,255,0.12)] border border-slate-100 p-6 sm:p-7 relative z-10">
+      <!-- Branding Header -->
+      <div class="text-center mb-4">
+        <img src="assets/ncst-emblem.png" alt="NCST Official Emblem" class="w-20 h-20 mx-auto mb-2.5 object-contain select-none pointer-events-none block border-0 outline-none">
+        <p class="text-xs sm:text-[13px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">National College of Science and Technology</p>
+        <h1 class="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">Gate Security Admin</h1>
       </div>
-      <form id="loginForm" class="space-y-4" autocomplete="on" novalidate>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="space-y-3.5" autocomplete="on" novalidate>
         <div>
-          <label for="loginUsername" class="block text-[11px] font-bold text-slate-600 mb-1">Username</label>
-          <input id="loginUsername" name="username" type="text" autocomplete="username" required class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30 focus:border-ncst-navy">
+          <label for="loginUsername" class="block text-xs font-semibold text-slate-700 mb-1.5">Username</label>
+          <div class="relative group">
+            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#253475] transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+              </svg>
+            </span>
+            <input id="loginUsername" name="username" type="text" autocomplete="username" placeholder="Enter username" required class="h-11 w-full pl-10 pr-3.5 rounded-xl bg-slate-50/70 hover:bg-slate-50 focus:bg-white border border-slate-200 focus:border-[#253475] text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#253475]/10 transition-all font-medium">
+          </div>
         </div>
+
         <div>
-          <label for="loginPassword" class="block text-[11px] font-bold text-slate-600 mb-1">Password</label>
-          <div class="relative">
-            <input id="loginPassword" name="password" type="password" autocomplete="current-password" required class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30 focus:border-ncst-navy pr-9">
-            <button type="button" onclick="const p=document.getElementById('loginPassword'); p.type = p.type==='password'?'text':'password'; this.classList.toggle('text-ncst-navy');" class="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer" title="Toggle password visibility">
+          <label for="loginPassword" class="block text-xs font-semibold text-slate-700 mb-1.5">Password</label>
+          <div class="relative group">
+            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#253475] transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+              </svg>
+            </span>
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required class="h-11 w-full pl-10 pr-11 rounded-xl bg-slate-50/70 hover:bg-slate-50 focus:bg-white border border-slate-200 focus:border-[#253475] text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#253475]/10 transition-all font-medium">
+            <button type="button" onclick="const p=document.getElementById('loginPassword'); p.type = p.type==='password'?'text':'password'; this.classList.toggle('text-[#253475]');" class="absolute inset-y-0 right-0 w-11 flex items-center justify-center text-slate-400 hover:text-slate-600 focus:outline-none transition-colors cursor-pointer" title="Toggle password visibility">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
             </button>
           </div>
+          <div class="mt-2.5 flex items-center justify-between text-xs">
+            <span class="text-[11.5px] text-slate-400 select-none">Forgot password?</span>
+            <button type="button" id="adminForgotBtn" onclick="openAdminForgotModal()" class="text-[11.5px] font-semibold text-[#253475] hover:text-[#1e2b64] hover:underline transition-colors cursor-pointer bg-transparent border-0 p-0 inline-flex items-center gap-1 group py-0.5">
+              <span>Contact Administrator</span>
+              <svg class="w-3 h-3 text-[#253475]/70 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </button>
+          </div>
         </div>
-        <p id="loginError" class="hidden text-[11px] font-semibold text-ncst-crimson bg-rose-50 border border-rose-200 rounded px-2.5 py-1.5" role="alert"></p>
-        <button id="loginSubmitBtn" type="submit" class="w-full py-2.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-sm font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-wait">
-          Sign In
-        </button>
-        <p class="text-[10px] text-slate-400 text-center">Authorized NCST security personnel only. All actions are logged.</p>
+
+        <p id="loginError" class="hidden text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2" role="alert"></p>
+
+        <div class="pt-1">
+          <button id="loginSubmitBtn" type="submit" class="h-11 w-full rounded-xl bg-gradient-to-r from-[#253475] via-[#1E2E6E] to-[#16245C] hover:from-[#2B3D86] hover:to-[#1A2860] active:scale-[0.99] text-white text-sm font-bold shadow-md shadow-[#253475]/25 hover:shadow-lg hover:shadow-[#253475]/35 transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-wait disabled:active:scale-100 focus:outline-none focus:ring-2 focus:ring-[#253475]/30 focus:ring-offset-2">
+            <span>Sign In</span>
+            <svg class="w-4 h-4 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+            </svg>
+          </button>
+        </div>
       </form>
     </div>
   </div>
 
-  <!-- ==================== CHANGE PASSWORD MODAL ==================== -->
-  <div id="passwordModal" class="fixed inset-0 z-[70] hidden overflow-y-auto p-4 bg-slate-900/70 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-sm bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 class="text-sm font-extrabold text-slate-900">Change Password</h2>
-        <p id="passwordModalHint" class="text-[11px] text-slate-500 mt-0.5">At least 8 characters with letters and numbers.</p>
+  <!-- ==================== ADMIN FORGOT PASSWORD MODAL ==================== -->
+  <div id="adminForgotModal" class="fixed inset-0 z-[75] hidden overflow-y-auto p-4 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center">
+    <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200/80 p-6 sm:p-7 relative m-auto" onclick="event.stopPropagation()">
+      <div class="flex items-start gap-3.5 mb-4">
+        <div class="w-10 h-10 rounded-xl bg-blue-50 text-ncst-navy flex items-center justify-center flex-shrink-0 border border-blue-100/80">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between">
+            <h2 class="text-base font-extrabold text-slate-900 leading-tight">Password Reset Instructions</h2>
+            <button type="button" onclick="closeAdminForgotModal()" class="text-slate-400 hover:text-slate-600 p-1 -mr-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer" aria-label="Close dialog">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <p class="text-xs text-slate-500 mt-0.5">Campus Gate &amp; Security Administration</p>
+        </div>
       </div>
-      <form id="passwordForm" class="px-5 py-4 space-y-3" novalidate>
+
+      <div class="space-y-3.5 text-xs text-slate-600 leading-relaxed mb-6">
+        <p>To preserve campus audit integrity and security credentials, officer passwords cannot be reset automatically online.</p>
+        
+        <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2">
+          <div class="font-bold text-slate-700 text-[11.5px] uppercase tracking-wider">How to request credential recovery:</div>
+          <ul class="space-y-2 text-slate-600">
+            <li class="flex items-start gap-2">
+              <span class="w-1.5 h-1.5 rounded-full bg-ncst-navy mt-1.5 flex-shrink-0"></span>
+              <span>Contact the <strong>Campus IT Office</strong> or your <strong>Gate Security Supervisor</strong>.</span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="w-1.5 h-1.5 rounded-full bg-ncst-navy mt-1.5 flex-shrink-0"></span>
+              <span>Provide your official username and <strong>Badge Number</strong> (e.g. <code class="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-800 font-semibold">NCST-SEC-01</code>).</span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="w-1.5 h-1.5 rounded-full bg-ncst-navy mt-1.5 flex-shrink-0"></span>
+              <span>A temporary access password will be granted for you to sign in and set a permanent credential.</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2.5 pt-1">
+        <button type="button" onclick="closeAdminForgotModal()" class="h-10 px-5 rounded-xl bg-ncst-navy hover:bg-[#234394] active:bg-[#14295c] text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
+          Understood, Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== CHANGE PASSWORD MODAL ==================== -->
+  <div id="passwordModal" class="fixed inset-0 z-[70] hidden overflow-y-auto p-4 bg-slate-950/75 backdrop-blur-sm">
+    <div class="m-auto w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-6 py-5 border-b border-slate-100">
+        <h2 class="text-base font-extrabold text-slate-900">Change Security Password</h2>
+        <p id="passwordModalHint" class="text-xs text-slate-500 mt-1 font-medium">At least 8 characters with letters and numbers.</p>
+      </div>
+      <form id="passwordForm" class="px-6 py-5 space-y-4" novalidate>
         <div>
-          <label for="pwCurrent" class="block text-[11px] font-bold text-slate-600 mb-1">Current password</label>
-          <input id="pwCurrent" type="password" autocomplete="current-password" required class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30">
+          <label for="pwCurrent" class="block text-xs font-bold text-slate-700 mb-1.5">Current temporary password</label>
+          <input id="pwCurrent" type="password" autocomplete="current-password" required placeholder="Enter current password" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy">
         </div>
         <div>
-          <label for="pwNew" class="block text-[11px] font-bold text-slate-600 mb-1">New password</label>
-          <input id="pwNew" type="password" autocomplete="new-password" required class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30">
+          <label for="pwNew" class="block text-xs font-bold text-slate-700 mb-1.5">New permanent password</label>
+          <input id="pwNew" type="password" autocomplete="new-password" required placeholder="Create strong password" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy">
         </div>
         <div>
-          <label for="pwConfirm" class="block text-[11px] font-bold text-slate-600 mb-1">Confirm new password</label>
-          <input id="pwConfirm" type="password" autocomplete="new-password" required class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30">
+          <label for="pwConfirm" class="block text-xs font-bold text-slate-700 mb-1.5">Confirm new password</label>
+          <input id="pwConfirm" type="password" autocomplete="new-password" required placeholder="Re-type new password" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy">
         </div>
-        <p id="passwordError" class="hidden text-[11px] font-semibold text-ncst-crimson bg-rose-50 border border-rose-200 rounded px-2.5 py-1.5" role="alert"></p>
-        <div class="flex items-center justify-end gap-2 pt-1">
-          <button type="button" id="passwordCancelBtn" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">Cancel</button>
-          <button type="submit" id="passwordSubmitBtn" class="px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold cursor-pointer disabled:opacity-60">Update Password</button>
+        <p id="passwordError" class="hidden text-xs font-semibold text-ncst-crimson bg-rose-50 border border-rose-200 rounded-xl px-3 py-2" role="alert"></p>
+        <div class="flex items-center justify-end gap-2.5 pt-2">
+          <button type="button" id="passwordCancelBtn" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 cursor-pointer transition-colors">Cancel</button>
+          <button type="submit" id="passwordSubmitBtn" class="px-5 py-2.5 rounded-xl bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold cursor-pointer disabled:opacity-60 transition-colors shadow-sm">Update Password</button>
         </div>
       </form>
     </div>
@@ -2228,8 +2513,8 @@
     };
   </script>
   <script src="js/alerts.js?v=20261001c"></script>
-  <script src="js/auth.js?v=20260930c"></script>
-  <script src="js/app.js?v=20261001c"></script>
+  <script src="js/auth.js?v=20261006a"></script>
+  <script src="js/app.js?v=20261006a"></script>
   <script src="js/users.js?v=20260930c"></script>
   <script src="js/cctv.js?v=20260930c"></script>
   <script src="js/cctvclip.js?v=20260930c"></script>
@@ -2238,5 +2523,24 @@
   <script src="js/overnight.js?v=20260930c"></script>
   <script src="js/visitors.js?v=20260930c"></script>
   <script src="js/oncampus.js?v=20260930c"></script>
+  <script>
+    window.openAdminForgotModal = function () {
+      const modal = document.getElementById('adminForgotModal');
+      if (modal) modal.classList.remove('hidden');
+    };
+    window.closeAdminForgotModal = function () {
+      const modal = document.getElementById('adminForgotModal');
+      if (modal) modal.classList.add('hidden');
+    };
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeAdminForgotModal();
+    });
+    const afm = document.getElementById('adminForgotModal');
+    if (afm) {
+      afm.addEventListener('click', function (e) {
+        if (e.target === afm) closeAdminForgotModal();
+      });
+    }
+  </script>
 </body>
 </html>
