@@ -41,6 +41,7 @@ function paymentView($p) {
         'ownerIdNumber' => $p['owner_id_number'],
         'ownerName' => $p['owner_name'],
         'stickerYear' => $p['sticker_year'],
+        'purpose' => $p['purpose'] ?? 'Registration',
         'amount' => $amount,
         'method' => $p['method'],
         'providerMethod' => $p['provider_method'],
@@ -54,10 +55,24 @@ function paymentView($p) {
     ];
 }
 
-/** Sum of everything actually paid (online or cash) for a vehicle. */
-function paidTotalForVehicle($pdo, $vehicleId) {
-    $stmt = $pdo->prepare("SELECT COALESCE(SUM(`amount`), 0) FROM `payments` WHERE `vehicle_id` = ? AND `status` = 'Paid'");
-    $stmt->execute([(int)$vehicleId]);
+/**
+ * Sum of everything actually paid (online, cash or transfer credit) for a vehicle's pass year. $year defaults to the
+ * vehicle's current sticker year, so last year's registration or renewal never counts toward this year's fee.
+ */
+function paidTotalForVehicle($pdo, $vehicleId, $year = null) {
+    if ($year === null) {
+        $stmt = $pdo->prepare("SELECT `sticker_year` FROM `vehicles` WHERE `id` = ?");
+        $stmt->execute([(int)$vehicleId]);
+        $year = $stmt->fetchColumn();
+    }
+    $sql = "SELECT COALESCE(SUM(`amount`), 0) FROM `payments` WHERE `vehicle_id` = ? AND `status` = 'Paid'";
+    $params = [(int)$vehicleId];
+    if ($year !== false && $year !== null && $year !== '') {
+        $sql .= " AND (`sticker_year` = ? OR `sticker_year` IS NULL)";
+        $params[] = (string)$year;
+    }
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     return (float)$stmt->fetchColumn();
 }
 
@@ -74,12 +89,14 @@ function findPaymentBySession($pdo, $sessionId) {
 }
 
 function createPendingPayment($pdo, $vehicle, $method, $extra = []) {
+    // Money already paid for this pass year means this payment is the balance of a fee change
+    $purpose = $extra['purpose'] ?? (paidTotalForVehicle($pdo, $vehicle['id']) > 0 ? 'Fee difference' : 'Registration');
     $stmt = $pdo->prepare("INSERT INTO `payments`
-        (`vehicle_id`, `plate_number`, `owner_id_number`, `owner_name`, `sticker_year`, `amount`, `method`, `status`, `recorded_by`, `recorded_by_user_id`, `created_at`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?)");
+        (`vehicle_id`, `plate_number`, `owner_id_number`, `owner_name`, `sticker_year`, `purpose`, `amount`, `method`, `status`, `recorded_by`, `recorded_by_user_id`, `created_at`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?)");
     $stmt->execute([
         (int)$vehicle['id'], $vehicle['plate_number'], $vehicle['owner_id_number'], $vehicle['owner_name'],
-        $vehicle['sticker_year'] ?? null, (float)$vehicle['fee_amount'], $method,
+        $extra['sticker_year'] ?? ($vehicle['sticker_year'] ?? null), $purpose, (float)($extra['amount'] ?? $vehicle['fee_amount']), $method,
         $extra['recorded_by'] ?? null, $extra['recorded_by_user_id'] ?? null, date('Y-m-d H:i:s'),
     ]);
     return findPayment($pdo, $pdo->lastInsertId());

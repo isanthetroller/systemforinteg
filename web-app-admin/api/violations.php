@@ -14,6 +14,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/violations.php';
+require_once __DIR__ . '/../lib/approvals.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -117,6 +118,8 @@ function handleCreateViolation($pdo, $actor) {
         sendResponse(500, null, 'Failed to record violation.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
     }
 
+    auditLog($pdo, $actor, 'violation.issue', ['entityType' => 'violation', 'entityId' => (int)$outcome['violationId'], 'plate' => $vehicle['plate_number'],
+        'detail' => $type . ($notes !== '' ? ": {$notes}" : ''), 'reason' => null]);
     sendResponse(201, [
         'violation' => formatViolation(fetchViolation($pdo, $outcome['violationId'])),
         'onHold' => true,
@@ -139,6 +142,16 @@ function handleUpdateViolation($pdo, $admin) {
     if (!$violation) sendResponse(404, null, 'Violation record not found.');
     if ($violation['status'] !== 'Pending') sendResponse(409, null, "This record is already {$violation['status']}.");
 
+    // Dismissing lifts a hold, so it needs a second administrator (when there is one); resolving is the normal path
+    if ($action === 'dismiss' && needsSecondAdmin($pdo)) {
+        if (pendingApproval($pdo, 'violation_dismiss', null, (int)$violation['id'])) {
+            sendResponse(409, ['code' => 'APPROVAL_PENDING'], 'A dismissal for this violation is already waiting for a second administrator.');
+        }
+        $approvalId = createApprovalRequest($pdo, $admin, 'violation_dismiss', null, $violation, $notes);
+        sendResponse(202, ['approvalPending' => true, 'approvalId' => $approvalId, 'violation' => formatViolation(fetchViolation($pdo, $violation['id']))],
+            "Dismissal sent for a second administrator's approval. {$violation['plate_number']} stays on hold until then.");
+    }
+
     $pdo->beginTransaction();
     try {
         $outcome = $action === 'resolve'
@@ -152,6 +165,8 @@ function handleUpdateViolation($pdo, $admin) {
 
     $plate = $violation['plate_number'];
     $verb = $action === 'resolve' ? 'resolved' : 'dismissed';
+    auditLog($pdo, $admin, $action === 'resolve' ? 'violation.resolve' : 'violation.dismiss', ['entityType' => 'violation', 'entityId' => (int)$violation['id'],
+        'plate' => $plate, 'detail' => $violation['violation_type'] . ($action === 'dismiss' ? ' (no second administrator was available to approve)' : ''), 'reason' => $notes]);
     $message = $outcome['holdLifted']
         ? "Violation {$verb}. {$plate} can enter and leave campus again."
         : "Violation {$verb}. {$plate} still has another pending violation.";

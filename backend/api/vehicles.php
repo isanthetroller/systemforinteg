@@ -6,7 +6,10 @@
  * GET    /api/vehicles.php?qr=CODE        - Lookup vehicle by QR code
  * POST   /api/vehicles.php                - Register new vehicle + drivers
  * PUT    /api/vehicles.php                - Update vehicle info or toggle status
- * DELETE /api/vehicles.php?id=123         - Remove vehicle
+ * DELETE /api/vehicles.php?id=123&reason=  - Remove a vehicle that has no history (reason required)
+ *
+ * POST also accepts { replacesVehicleId, replaceReason } (retire the old vehicle, carry its paid fee over) and
+ * { overrideReason } (admin allows an extra vehicle of the same class). PUT { id, action: 'retire', reason }.
  */
 
 require_once __DIR__ . '/../config/db.php';
@@ -14,6 +17,8 @@ require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/students.php';
 require_once __DIR__ . '/../lib/payments.php';
+require_once __DIR__ . '/../lib/vehicle_ops.php';
+require_once __DIR__ . '/../lib/approvals.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -34,8 +39,8 @@ switch ($method) {
         handleUpdateVehicle($pdo, $admin);
         break;
     case 'DELETE':
-        requireStaff($pdo, ['admin']);
-        handleDeleteVehicle($pdo);
+        $admin = requireStaff($pdo, ['admin']);
+        handleDeleteVehicle($pdo, $admin);
         break;
     default:
         sendResponse(405, null, "Method {$method} not allowed");
@@ -118,9 +123,28 @@ function handleRegisterVehicle($pdo, $admin) {
         sendResponse(400, null, "Missing required fields: plateNumber, ownerName, and ownerIdNumber are required.");
     }
 
-    // One vehicle per student / employee ID
-    if ($existingOwner = findVehicleByOwnerId($pdo, $ownerIdNumber)) {
-        ownerHasVehicleResponse($existingOwner);
+    // One ACTIVE vehicle per class (four-wheel / two-three-wheel / bicycle) per student / employee ID.
+    // Replacing a vehicle retires the old one; an administrator can allow an extra one with a written reason.
+    $vehicleClass = vehicleClassOf($data['vehicleType'] ?? '4-Wheel (Sedan)', $data['category'] ?? 'plated');
+    $replaceId = (int)($data['replacesVehicleId'] ?? 0);
+    $replaced = null;
+    $replaceReason = '';
+    if ($replaceId > 0) {
+        $replaced = findVehicleById($pdo, $replaceId);
+        if (!$replaced) sendResponse(404, null, 'The vehicle to replace was not found.');
+        if (strtoupper(trim($replaced['owner_id_number'])) !== strtoupper($ownerIdNumber)) {
+            sendResponse(400, null, 'The vehicle to replace belongs to a different ID number.');
+        }
+        if ((int)$replaced['is_retired'] === 1) sendResponse(409, null, "{$replaced['plate_number']} is already retired.");
+        if (pendingViolationCount($pdo, $replaceId) > 0) {
+            sendResponse(409, ['code' => 'VEHICLE_HAS_VIOLATION'], "{$replaced['plate_number']} has an unresolved violation. Resolve it before replacing the vehicle.");
+        }
+        $replaceReason = requireReason($data, 'replacing a vehicle', 'replaceReason');
+    }
+    $limitOverride = '';
+    if ($existingInClass = findOwnerVehicleInClass($pdo, $ownerIdNumber, $vehicleClass, $replaceId)) {
+        $limitOverride = trim((string)($data['overrideReason'] ?? ''));
+        if (mb_strlen($limitOverride) < 5) ownerClassLimitResponse($existingInClass, $vehicleClass);
     }
 
     // Check if plate already registered
@@ -144,6 +168,16 @@ function handleRegisterVehicle($pdo, $admin) {
     $passId = newPassId();
     $passValidUntil = isValidDate($data['passValidUntil'] ?? '') ? $data['passValidUntil'] : defaultPassValidUntil($stickerYear);
     $passClass = requestedPassClass($data) ?? 'Standard';
+    // VIP exempts a vehicle from violations, fees and curfew checks: it needs a reason and a second administrator
+    $vipReason = '';
+    $vipPending = false;
+    if ($passClass === 'VIP') {
+        $vipReason = requireReason($data, 'granting VIP');
+        if (needsSecondAdmin($pdo)) {
+            $vipPending = true;
+            $passClass = 'Standard'; // registered as Standard until another administrator approves
+        }
+    }
     // Registration fee: unpaid vehicles get no usable QR until the cashier or PayMongo settles it.
     // Free vehicles (bicycles) and VIP passes are waived.
     $fee = registrationFee($vehicleType, $category);
@@ -204,9 +238,37 @@ function handleRegisterVehicle($pdo, $admin) {
             $drvStmt->execute([$newVehicleId, $name, $rel, $lic, $ph, $pic]);
         }
 
+        // The old vehicle is retired and its paid fee is carried over to the new one
+        $credit = ['applied' => 0.0, 'balance' => null];
+        if ($replaced) {
+            $creditable = transferableCredit($pdo, $replaced);
+            retireVehicle($pdo, $admin, $replaced, $replaceReason, (int)$newVehicleId);
+            if ($creditable > 0 && $paymentStatus === 'Unpaid') {
+                $credit = applyTransferCredit($pdo, $admin, (int)$newVehicleId, $replaced, $creditable);
+            }
+        }
+
         $pdo->commit();
 
+        auditLog($pdo, $admin, 'vehicle.register', ['entityType' => 'vehicle', 'entityId' => (int)$newVehicleId, 'plate' => $plateNumber,
+            'detail' => "{$ownerName} ({$ownerIdNumber}), {$vehicleType}, fee " . ($paymentStatus === 'Waived' ? 'waived' : "PHP {$feeAmount}")]);
+        if ($limitOverride !== '') {
+            auditLog($pdo, $admin, 'vehicle.limit_override', ['entityType' => 'vehicle', 'entityId' => (int)$newVehicleId, 'plate' => $plateNumber,
+                'detail' => "Extra " . vehicleClassLabel($vehicleClass) . " vehicle for ID {$ownerIdNumber} (already has {$existingInClass['plate_number']})", 'reason' => $limitOverride]);
+        }
+        if ($passClass === 'VIP') {
+            auditLog($pdo, $admin, 'vehicle.vip_grant', ['entityType' => 'vehicle', 'entityId' => (int)$newVehicleId, 'plate' => $plateNumber,
+                'detail' => 'Registered as VIP (no second administrator was available to approve)', 'reason' => $vipReason]);
+        }
+        $vipRequestId = null;
+        if ($vipPending) {
+            $vipRequestId = createApprovalRequest($pdo, $admin, 'vip_grant', findVehicleById($pdo, $newVehicleId), null, $vipReason);
+        }
+
         $newVeh = vehicleForOutput($pdo, findVehicleById($pdo, $newVehicleId), true);
+        $newVeh['vipApprovalPending'] = $vipPending;
+        $newVeh['vipApprovalId'] = $vipRequestId;
+        $newVeh['replaced'] = $replaced ? ['plateNumber' => $replaced['plate_number'], 'creditApplied' => $credit['applied'], 'balanceDue' => $credit['balance']] : null;
 
         // Student portal login for the owner (created once per owner ID; the temporary
         // password is returned only in this response and shown to the admin once)
@@ -249,6 +311,10 @@ function handleUpdateVehicle($pdo, $admin) {
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if (!$row) sendResponse(404, null, "Vehicle not found");
+        $retiredCheck = findVehicleById($pdo, $id);
+        if ($retiredCheck && (int)$retiredCheck['is_retired'] === 1) {
+            sendResponse(409, ['code' => 'VEHICLE_RETIRED'], "{$retiredCheck['plate_number']} was retired and cannot be reactivated. Register it again if it is back in use.");
+        }
         if ((int)$row['is_banned'] === 1) {
             sendResponse(409, ['code' => 'VEHICLE_BANNED'], "This vehicle is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.");
         }
@@ -258,6 +324,21 @@ function handleUpdateVehicle($pdo, $admin) {
         $upd->execute([$nextStatus, $id]);
 
         sendResponse(200, ['id' => $id, 'registration_status' => $nextStatus, 'registrationStatus' => $nextStatus], "Vehicle registration status updated to {$nextStatus}");
+    }
+
+    // Retire a vehicle (sold / no longer used) without replacing it
+    if (isset($data['action']) && $data['action'] === 'retire') {
+        $vehicle = findVehicleById($pdo, $id);
+        if (!$vehicle) sendResponse(404, null, 'Vehicle not found');
+        if ((int)$vehicle['is_retired'] === 1) sendResponse(409, null, "{$vehicle['plate_number']} is already retired.");
+        if (pendingViolationCount($pdo, $id) > 0) {
+            sendResponse(409, ['code' => 'VEHICLE_HAS_VIOLATION'], "{$vehicle['plate_number']} has an unresolved violation. Resolve it before retiring the vehicle.");
+        }
+        $reason = requireReason($data, 'retiring a vehicle');
+        $pdo->beginTransaction();
+        retireVehicle($pdo, $admin, $vehicle, $reason, null);
+        $pdo->commit();
+        sendResponse(200, vehicleForOutput($pdo, findVehicleById($pdo, $id), true), "{$vehicle['plate_number']} was retired. It can no longer enter campus.");
     }
 
     // Full detail update
@@ -297,11 +378,17 @@ function handleUpdateVehicle($pdo, $admin) {
         sendResponse(404, null, "Vehicle not found");
     }
 
-    // Re-assigning a vehicle to an ID that already has another vehicle is refused
+    // Changing the owner ID or the vehicle class must not give an ID a second active vehicle of the same class
     $newOwnerId = $data['ownerIdNumber'] ?? $data['owner_id_number'] ?? null;
-    if ($newOwnerId !== null && strtoupper(trim((string)$newOwnerId)) !== strtoupper(trim((string)$current['owner_id_number']))) {
-        if ($existingOwner = findVehicleByOwnerId($pdo, $newOwnerId, $id)) {
-            ownerHasVehicleResponse($existingOwner);
+    $targetOwner = $newOwnerId !== null ? trim((string)$newOwnerId) : $current['owner_id_number'];
+    $targetClass = vehicleClassOf($data['vehicleType'] ?? $data['vehicle_type'] ?? $current['vehicle_type'], $data['category'] ?? $current['category']);
+    $ownerChanged = strtoupper($targetOwner) !== strtoupper(trim((string)$current['owner_id_number']));
+    $classChanged = $targetClass !== vehicleClassOf($current['vehicle_type'], $current['category']);
+    $limitOverride = '';
+    if ((int)$current['is_retired'] === 0 && ($ownerChanged || $classChanged)) {
+        if ($existingInClass = findOwnerVehicleInClass($pdo, $targetOwner, $targetClass, $id)) {
+            $limitOverride = trim((string)($data['overrideReason'] ?? ''));
+            if (mb_strlen($limitOverride) < 5) ownerClassLimitResponse($existingInClass, $targetClass);
         }
     }
 
@@ -315,8 +402,13 @@ function handleUpdateVehicle($pdo, $admin) {
         if (!isValidDate($data['passValidUntil'])) {
             sendResponse(400, null, "passValidUntil must be a date in YYYY-MM-DD format");
         }
-        $fields[] = "`pass_valid_until` = ?";
-        $params[] = $data['passValidUntil'];
+        if ($data['passValidUntil'] !== $current['pass_valid_until']) {
+            // Moving a pass date by hand is sensitive (it is how a pass could be extended without paying): reason + log
+            $dateReason = requireReason($data, 'changing a pass expiry date');
+            $dateChange = ['from' => $current['pass_valid_until'], 'to' => $data['passValidUntil'], 'reason' => $dateReason];
+            $fields[] = "`pass_valid_until` = ?";
+            $params[] = $data['passValidUntil'];
+        }
     }
 
     // The plate is part of the signature: a plate change reissues the pass and
@@ -328,18 +420,36 @@ function handleUpdateVehicle($pdo, $admin) {
         $fields[] = "`qr_pass_code` = NULL";
     }
 
-    // VIP status: admin-only (this whole endpoint is), recorded with who and when
+    // VIP status: granting needs a reason AND a second administrator (withdrawing needs a reason); both are logged
     $newClass = requestedPassClass($data);
+    $vipPendingNow = false;
+    $vipChange = null;
+    $vipReason = '';
     if ($newClass !== null && $newClass !== (isVipVehicle($current) ? 'VIP' : 'Standard')) {
-        if ($newClass === 'VIP' && (int)$current['is_banned'] === 1) {
-            sendResponse(409, ['code' => 'VEHICLE_BANNED'], 'This vehicle is banned by a violation. Resolve the ban in Violations & Penalties before marking it VIP.');
+        if ($newClass === 'VIP') {
+            if ((int)$current['is_banned'] === 1) {
+                sendResponse(409, ['code' => 'VEHICLE_BANNED'], 'This vehicle is on violation hold. Resolve the violation before marking it VIP.');
+            }
+            $vipReason = requireReason($data, 'granting VIP');
+            if (needsSecondAdmin($pdo)) {
+                if (pendingApproval($pdo, 'vip_grant', $id)) {
+                    sendResponse(409, ['code' => 'APPROVAL_PENDING'], "A VIP request for {$current['plate_number']} is already waiting for a second administrator.");
+                }
+                $vipPendingNow = true;
+                $newClass = null; // nothing changes until another administrator approves
+            }
+        } else {
+            $vipReason = requireReason($data, 'withdrawing VIP');
         }
-        $fields[] = "`pass_class` = ?";
-        $params[] = $newClass;
-        $fields[] = "`pass_class_by` = ?";
-        $params[] = $newClass === 'VIP' ? actorLabel($admin) : null;
-        $fields[] = "`pass_class_at` = ?";
-        $params[] = $newClass === 'VIP' ? date('Y-m-d H:i:s') : null;
+        if ($newClass !== null) {
+            $vipChange = $newClass === 'VIP' ? 'vehicle.vip_grant' : 'vehicle.vip_withdraw';
+            $fields[] = "`pass_class` = ?";
+            $params[] = $newClass;
+            $fields[] = "`pass_class_by` = ?";
+            $params[] = $newClass === 'VIP' ? actorLabel($admin) : null;
+            $fields[] = "`pass_class_at` = ?";
+            $params[] = $newClass === 'VIP' ? date('Y-m-d H:i:s') : null;
+        }
     }
 
     // The fee follows the vehicle: an edit that changes the fee class re-prices it.
@@ -380,7 +490,7 @@ function handleUpdateVehicle($pdo, $admin) {
         ? $data['authorizedDrivers']
         : (isset($data['authorized_drivers']) && is_array($data['authorized_drivers']) ? $data['authorized_drivers'] : null);
 
-    if (empty($fields) && $drivers === null) {
+    if (empty($fields) && $drivers === null && !$vipPendingNow) {
         sendResponse(400, null, "No fields provided to update");
     }
 
@@ -435,14 +545,42 @@ function handleUpdateVehicle($pdo, $admin) {
         $pdo->commit();
         if ($feeChanged) cancelPendingPayments($pdo, $id); // an open checkout still shows the old amount
 
-        sendResponse(200, vehicleForOutput($pdo, findVehicleById($pdo, $id), true), "Vehicle record updated successfully");
+        $plateNow = findVehicleById($pdo, $id)['plate_number'];
+        if (isset($dateChange)) {
+            auditLog($pdo, $admin, 'vehicle.pass_date', ['entityType' => 'vehicle', 'entityId' => $id, 'plate' => $plateNow,
+                'detail' => "Pass expiry {$dateChange['from']} -> {$dateChange['to']}", 'reason' => $dateChange['reason']]);
+        }
+        if ($vipChange) {
+            auditLog($pdo, $admin, $vipChange, ['entityType' => 'vehicle', 'entityId' => $id, 'plate' => $plateNow,
+                'detail' => $vipChange === 'vehicle.vip_grant' ? 'VIP granted (no second administrator was available to approve)' : 'VIP withdrawn', 'reason' => $vipReason]);
+        }
+        $vipRequestId = null;
+        if ($vipPendingNow) {
+            $vipRequestId = createApprovalRequest($pdo, $admin, 'vip_grant', findVehicleById($pdo, $id), null, $vipReason);
+        }
+        if ($feeChanged) {
+            $nowRow = findVehicleById($pdo, $id);
+            auditLog($pdo, $admin, 'vehicle.reprice', ['entityType' => 'vehicle', 'entityId' => $id, 'plate' => $plateNow,
+                'detail' => "Fee class changed: now {$nowRow['payment_status']}, PHP " . number_format((float)$nowRow['fee_amount'], 2) . ' due/paid']);
+        }
+        if ($limitOverride !== '') {
+            auditLog($pdo, $admin, 'vehicle.limit_override', ['entityType' => 'vehicle', 'entityId' => $id, 'plate' => $plateNow,
+                'detail' => 'Owner ID / class change allowed an extra vehicle of the same class', 'reason' => $limitOverride]);
+        }
+
+        $out = vehicleForOutput($pdo, findVehicleById($pdo, $id), true);
+        $out['vipApprovalPending'] = $vipPendingNow;
+        $out['vipApprovalId'] = $vipRequestId;
+        sendResponse($vipPendingNow ? 202 : 200, $out, $vipPendingNow
+            ? "Vehicle saved. The VIP request was sent for a second administrator's approval."
+            : "Vehicle record updated successfully");
     } catch (Exception $e) {
         $pdo->rollBack();
         sendResponse(500, null, "Failed to update vehicle: " . $e->getMessage());
     }
 }
 
-function handleDeleteVehicle($pdo) {
+function handleDeleteVehicle($pdo, $admin) {
     $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
     if ($id <= 0) {
         sendResponse(400, null, "Missing or invalid vehicle id");
@@ -472,9 +610,16 @@ function handleDeleteVehicle($pdo) {
             "{$vehicle['plate_number']} has " . implode(', ', $parts) . " on record and cannot be deleted, so its history is kept. Suspend the registration instead.");
     }
 
+    $body = getJsonInput();
+    $reason = trim((string)($_GET['reason'] ?? $body['reason'] ?? ''));
+    if (mb_strlen($reason) < 5) {
+        sendResponse(400, ['code' => 'REASON_REQUIRED'], 'A reason (at least 5 characters) is required for deleting a vehicle.');
+    }
     cancelPendingPayments($pdo, $id); // an open online checkout must not outlive the vehicle
     $stmt = $pdo->prepare("DELETE FROM `vehicles` WHERE `id` = ?");
     $stmt->execute([$id]);
+    auditLog($pdo, $admin, 'vehicle.delete', ['entityType' => 'vehicle', 'entityId' => $id, 'plate' => $vehicle['plate_number'],
+        'detail' => "{$vehicle['owner_name']} ({$vehicle['owner_id_number']}) removed (no history)", 'reason' => $reason]);
     sendResponse(200, ['id' => $id], "Vehicle deleted successfully");
 }
 

@@ -12,13 +12,14 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/payments.php';
+require_once __DIR__ . '/../lib/audit.php';
 
 $admin = requireStaff($pdo, ['admin']);
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET') {
     if (($_GET['view'] ?? '') === 'unpaid') {
-        $rows = $pdo->query("SELECT * FROM `vehicles` WHERE `payment_status` = 'Unpaid' ORDER BY `id` DESC")->fetchAll();
+        $rows = $pdo->query("SELECT * FROM `vehicles` WHERE `payment_status` = 'Unpaid' AND `is_retired` = 0 ORDER BY `id` DESC")->fetchAll();
         $open = $pdo->prepare("SELECT COUNT(*) FROM `payments` WHERE `vehicle_id` = ? AND `status` = 'Pending'");
         sendResponse(200, array_map(function ($v) use ($open) {
             $open->execute([$v['id']]);
@@ -69,7 +70,7 @@ if ($method === 'GET') {
     foreach ($today->fetchAll() as $r) {
         $byMethod[$r['method']] = ['count' => (int)$r['n'], 'total' => (float)$r['total']];
     }
-    $unpaid = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(`fee_amount`), 0) AS total FROM `vehicles` WHERE `payment_status` = 'Unpaid'")->fetch();
+    $unpaid = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(`fee_amount`), 0) AS total FROM `vehicles` WHERE `payment_status` = 'Unpaid' AND `is_retired` = 0")->fetch();
     $duplicates = (int)$pdo->query("SELECT COUNT(*) FROM `payments` WHERE `notes` LIKE 'DUPLICATE%'")->fetchColumn();
 
     sendResponse(200, [
@@ -112,6 +113,8 @@ if ($method === 'POST') {
     } catch (Exception $e) {
         sendResponse(500, null, 'Could not record the payment: ' . $e->getMessage());
     }
+    auditLog($pdo, $admin, 'payment.cash', ['entityType' => 'payment', 'entityId' => (int)$payment['id'], 'plate' => $vehicle['plate_number'],
+        'detail' => "{$payment['receipt_number']}: PHP " . number_format((float)$payment['amount'], 2) . ' received, change PHP ' . number_format(max(0, $tendered - (float)$payment['amount']), 2)]);
     sendResponse(201, [
         'payment' => paymentView($payment),
         'vehicle' => vehicleForOutput($pdo, findVehicleById($pdo, $vehicle['id']), true),

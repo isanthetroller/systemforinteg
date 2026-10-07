@@ -180,6 +180,9 @@ function handleCreateLog($pdo, $actor) {
         if ($vehicle && $vehicle['registration_status'] === 'Suspended') {
             sendResponse(403, ['code' => 'VEHICLE_SUSPENDED'], "Entry refused: registration of {$vehicle['plate_number']} is suspended.");
         }
+        if ($vehicle && (int)($vehicle['is_retired'] ?? 0) === 1) {
+            sendResponse(403, ['code' => 'VEHICLE_RETIRED'], "Entry refused: {$vehicle['plate_number']} was retired (replaced or sold).");
+        }
         if ($vehicle && ($vehicle['payment_status'] ?? 'Paid') === 'Unpaid') {
             sendResponse(403, ['code' => 'VEHICLE_UNPAID'], "Entry refused: the registration fee of PHP " . number_format((float)$vehicle['fee_amount'], 2) . " for {$vehicle['plate_number']} is unpaid. Pay at the cashier or online first.");
         }

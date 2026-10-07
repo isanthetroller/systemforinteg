@@ -11,6 +11,7 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/students.php';
+require_once __DIR__ . '/../lib/audit.php';
 
 $admin = requireStaff($pdo, ['admin']);
 $method = $_SERVER['REQUEST_METHOD'];
@@ -41,6 +42,7 @@ if (!$owner) {
 $action = $data['action'] ?? '';
 if ($action === 'issue') {
     $result = resetStudentPassword($pdo, $ownerId, $owner['owner_name'], $owner['owner_email']);
+    auditLog($pdo, $admin, 'student.login_issued', ['entityType' => 'student', 'detail' => "Portal login for {$ownerId}" . (!empty($result['created']) ? ' (new account)' : ' (password reset)')]);
     sendResponse(200, $result, "Student portal login for {$ownerId} is ready. Share the temporary password in person; it is shown only once.");
 }
 
@@ -51,6 +53,7 @@ if ($action === 'set_status') {
     if (!$account) sendResponse(404, null, 'No portal account yet.');
     $pdo->prepare("UPDATE `student_accounts` SET `status` = ? WHERE `id` = ?")->execute([$status, $account['id']]);
     if ($status === 'Inactive') revokeUserTokens($pdo, 'student', (int)$account['id']);
+    auditLog($pdo, $admin, 'student.status', ['entityType' => 'student', 'detail' => "Portal account {$ownerId} is now {$status}"]);
     sendResponse(200, publicStudent(findStudentAccount($pdo, $ownerId)), "Portal account {$ownerId} is now {$status}.");
 }
 

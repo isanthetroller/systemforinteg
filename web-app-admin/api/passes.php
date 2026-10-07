@@ -11,12 +11,13 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
+require_once __DIR__ . '/../lib/audit.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendResponse(405, null, 'Method not allowed');
 }
 
-requireStaff($pdo, ['admin']);
+$admin = requireStaff($pdo, ['admin']);
 $data = getJsonInput();
 $action = $data['action'] ?? '';
 $vehicle = findVehicleById($pdo, $data['vehicle_id'] ?? 0);
@@ -28,6 +29,7 @@ if ($action !== 'reissue') {
     sendResponse(400, null, 'Unknown action. Use reissue.');
 }
 
+$reissueReason = requireReason($data, 'reissuing a pass (e.g. lost phone, damaged sticker)');
 $validUntil = $data['valid_until'] ?? '';
 if ($validUntil !== '') {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $validUntil) || !checkdate((int)substr($validUntil, 5, 2), (int)substr($validUntil, 8, 2), (int)substr($validUntil, 0, 4))) {
@@ -40,5 +42,7 @@ if ($validUntil !== '') {
 $stmt = $pdo->prepare("UPDATE `vehicles` SET `pass_id` = ?, `pass_valid_until` = ?, `qr_pass_code` = NULL WHERE `id` = ?");
 $stmt->execute([newPassId(), $validUntil, $vehicle['id']]);
 
+auditLog($pdo, $admin, 'pass.reissue', ['entityType' => 'vehicle', 'entityId' => (int)$vehicle['id'], 'plate' => $vehicle['plate_number'],
+    'detail' => 'All earlier QR codes revoked' . (($data['valid_until'] ?? '') !== '' ? "; valid until {$validUntil}" : ''), 'reason' => $reissueReason]);
 sendResponse(200, vehicleForOutput($pdo, findVehicleById($pdo, $vehicle['id']), true),
     "New pass issued for {$vehicle['plate_number']}. All previous QR codes for this vehicle are now revoked.");

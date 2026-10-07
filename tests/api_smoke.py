@@ -48,7 +48,18 @@ failed = 0
 AUTO_PAY = True  # newly registered vehicles are Unpaid; most tests just need a working pass, so the cashier "pays" them
 
 
+AUTO_REASON = True  # sensitive admin actions need a written reason; older tests just supply a generic one
+
+
 def call(method, path, body=None, token=None, headers=None):
+    if AUTO_REASON:
+        if isinstance(body, dict):
+            if path == 'vehicles.php' and method in ('POST', 'PUT') and (str(body.get('passClass', '')).lower() in ('vip', 'standard') or 'passValidUntil' in body):
+                body.setdefault('reason', 'Test: automated reason')
+            if path == 'passes.php':
+                body.setdefault('reason', 'Test: automated reason')
+        if method == 'DELETE' and path.startswith('vehicles.php') and 'reason=' not in path:
+            path += '&reason=Test+cleanup'
     code, res = _call(method, path, body, token, headers)
     if (AUTO_PAY and method == 'POST' and path == 'vehicles.php' and code == 201
             and res.get('data', {}).get('paymentStatus') == 'Unpaid'):
@@ -1465,32 +1476,6 @@ def test_loophole_fixes(admin):
     AUTO_PAY = True
 
 
-def test_one_vehicle_per_id(admin):
-    section('One vehicle per ID number')
-    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
-    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0001', 'ownerName': 'Una Owner', 'ownerIdNumber': 'NCST-ONE-1'}, admin)
-    first = res['data']
-    check('first vehicle for an ID registers', code == 201, res)
-    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0002', 'ownerName': 'Una Owner', 'ownerIdNumber': 'NCST-ONE-1'}, admin)
-    check('second vehicle, same ID -> 409 OWNER_HAS_VEHICLE naming the existing plate', code == 409
-          and res['data']['code'] == 'OWNER_HAS_VEHICLE' and res['data']['plateNumber'] == 'ONE 0001' and 'ONE 0001' in res['message'], res)
-    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0003', 'ownerName': 'Una Owner', 'ownerIdNumber': '  ncst-one-1 '}, admin)
-    check('same ID with different case / spaces is still refused', code == 409, res)
-    code, res = call('GET', 'vehicles.php?plate=ONE0002', token=admin)
-    check('the refused vehicle was not saved', code == 404, code)
-    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0004', 'ownerName': 'Other Owner', 'ownerIdNumber': 'NCST-ONE-2'}, admin)
-    other = res['data']
-    check('a different ID registers fine', code == 201, res)
-    code, res = call('PUT', 'vehicles.php', {'id': other['id'], 'ownerIdNumber': 'NCST-ONE-1'}, admin)
-    check('re-assigning a vehicle to an ID that already has one -> 409', code == 409 and res['data']['code'] == 'OWNER_HAS_VEHICLE', res)
-    code, res = call('PUT', 'vehicles.php', {'id': first['id'], 'ownerIdNumber': 'ncst-one-1', 'makeModelColor': 'Blue Vios'}, admin)
-    check('editing a vehicle keeps its own ID (case change ok)', code == 200 and res['data']['makeModelColor'] == 'Blue Vios', res)
-    code, res = call('PUT', 'vehicles.php', {'id': other['id'], 'ownerIdNumber': 'NCST-ONE-3'}, admin)
-    check('moving a vehicle to a free ID works', code == 200 and res['data']['ownerIdNumber'] == 'NCST-ONE-3', res)
-    code, _ = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0005', 'ownerName': 'X', 'ownerIdNumber': 'NCST-ONE-9'}, guard)
-    check('guards still cannot register vehicles -> 403', code == 403, code)
-
-
 class FakeSmtp:
     """A tiny SMTP server that records every message, so the real mail code runs end to end without sending anything."""
 
@@ -1582,6 +1567,7 @@ class FakeSmtp:
             if part.get_content_type() == 'text/plain':
                 text = part.get_payload(decode=True).decode()
         return subject, text, msg
+
 
 
 def test_owner_notices(admin):
@@ -1855,6 +1841,299 @@ def test_payments(admin):
     AUTO_PAY = True
 
 
+def test_vehicle_classes(admin):
+    """One active vehicle per class per ID; admin override; replace vehicle (credit carried over); retire."""
+    global AUTO_PAY, AUTO_REASON
+    import sqlite3
+    section('Vehicle classes: limit, override, replace, retire')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def reg(plate, owner_id, vtype='4-Wheel', **extra):
+        return call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': 'Vera Class', 'ownerIdNumber': owner_id, 'vehicleType': vtype, **extra}, admin)
+
+    def pay(vehicle_id):
+        return call('POST', 'payments.php', {'action': 'cash', 'vehicleId': vehicle_id}, admin)
+
+    # --- one active vehicle per class
+    code, res = reg('VCL 0001', 'VCL-1')
+    check('first four-wheel vehicle registers', code == 201, res)
+    code, res = reg('VCL 0002', 'VCL-1')
+    check('second four-wheel vehicle -> 409 OWNER_CLASS_LIMIT naming the existing plate', code == 409 and res['data']['code'] == 'OWNER_CLASS_LIMIT'
+          and res['data']['plateNumber'] == 'VCL 0001' and res['data']['vehicleClass'] == 'four', res)
+    code, res = reg('VCL 0002', '  vcl-1 ', 'Campus Fleet')
+    check('same ID with different case / spaces, same class (fleet counts as four-wheel) -> 409', code == 409, res)
+    code, res = reg('VCL 0003', 'VCL-1', 'Motorcycle')
+    check('a motorcycle is a different class -> 201', code == 201, res)
+    code, res = reg('VCL 0004', 'VCL-1', 'Bicycle')
+    check('a bicycle is its own class -> 201', code == 201 and res['data']['paymentStatus'] == 'Waived', res)
+    code, res = reg('VCL 0005', 'VCL-1', '3-Wheel (Tricycle)')
+    check('a second two/three-wheel vehicle -> 409', code == 409 and res['data']['vehicleClass'] == 'two', res)
+    code, res = reg('VCL 0005', 'VCL-1', 'Motorcycle', overrideReason='abc')
+    check('an override reason that is too short is not enough -> 409', code == 409, res)
+    code, res = reg('VCL 0005', 'VCL-1', 'Motorcycle', overrideReason='Faculty also owns a scooter for deliveries')
+    check('an admin can allow an extra vehicle with a written reason -> 201', code == 201, res)
+    _, aud = call('GET', 'audit.php?action=vehicle.limit_override&q=VCL0005', token=admin)
+    check('  ...the override is in the audit log with the reason', aud['data']['total'] == 1 and 'scooter' in aud['data']['rows'][0]['reason'], aud['data'])
+    code, _ = call('POST', 'vehicles.php', {'plateNumber': 'VCL 0099', 'ownerName': 'X', 'ownerIdNumber': 'VCL-9'}, guard)
+    check('guards cannot register vehicles -> 403', code == 403, code)
+
+    # --- changing the class or owner through an edit obeys the same rule
+    v1 = call('GET', 'vehicles.php?plate=VCL0003', token=admin)[1]['data']
+    code, res = call('PUT', 'vehicles.php', {'id': v1['id'], 'vehicleType': '4-Wheel'}, admin)
+    check('re-typing a motorcycle as a car when the ID already has one -> 409', code == 409 and res['data']['code'] == 'OWNER_CLASS_LIMIT', res)
+    code, res = call('PUT', 'vehicles.php', {'id': v1['id'], 'vehicleType': '4-Wheel', 'overrideReason': 'Owner keeps both cars on campus'}, admin)
+    check('  ...unless an admin gives a reason', code == 200, res)
+
+    # --- replace a vehicle: the old one is retired, the paid fee is carried over
+    old = reg('VCL 1001', 'VCL-2')[1]['data']
+    pay(old['id'])
+    code, res = reg('VCL 1002', 'VCL-2', '4-Wheel', replacesVehicleId=old['id'])
+    check('replacing needs a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    code, res = reg('VCL 1002', 'VCL-2', '4-Wheel', replacesVehicleId=old['id'], replaceReason='Sold the old car, bought a new one')
+    new = res['data']
+    check('replacing a paid car with a car -> 201, credit covers the whole fee, the new pass is active',
+          code == 201 and new['replaced']['plateNumber'] == 'VCL 1001' and new['replaced']['creditApplied'] == 500 and new['paymentStatus'] == 'Paid' and new['qrPayload'], res)
+    old_now = call('GET', 'vehicles.php?plate=VCL1001', token=admin)[1]['data']
+    check('the old vehicle is retired: no QR, history kept', old_now['isRetired'] is True and old_now['qrPayload'] is None and old_now['replacedByVehicleId'] == new['id']
+          and 'sold the old car' in old_now['retiredReason'].lower(), old_now)
+    code, v = verify({'plate': 'VCL 1001', 'gate_type': 'Ingress'}, guard)
+    check('a retired vehicle is refused at entry (RETIRED)', v.get('result') == 'RETIRED' and not v['accepted'], v)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'VCL 1001', 'driverName': 'Vera Class', 'action': 'Entry Recorded', 'gate_type': 'Ingress'}, headers=SCANNER)
+    check('  ...and entry cannot be recorded (VEHICLE_RETIRED)', code == 403 and res['data']['code'] == 'VEHICLE_RETIRED', res)
+    code, res = call('PUT', 'vehicles.php', {'id': old['id'], 'action': 'toggle_status'}, admin)
+    check('a retired vehicle cannot be reactivated -> 409', code == 409 and res['data']['code'] == 'VEHICLE_RETIRED', res)
+    _, pays = call('GET', 'payments.php?q=VCL1002', token=admin)
+    credit_rows = [p for p in pays['data']['payments'] if p['method'] == 'Credit']
+    check('the credit is recorded as a payment with a receipt', len(credit_rows) == 1 and credit_rows[0]['amount'] == 500 and credit_rows[0]['purpose'] == 'Transfer credit'
+          and credit_rows[0]['receiptNumber'], credit_rows)
+    code, res = call('POST', 'verify.php', {'qr_code': new['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('the new vehicle verifies at the gate', res['data']['result'] == 'VALID', res)
+
+    # a cheaper class: the credit covers the fee; nothing is refunded
+    car = reg('VCL 2001', 'VCL-3')[1]['data']
+    pay(car['id'])
+    code, res = reg('VCL 2002', 'VCL-3', 'Motorcycle', replacesVehicleId=car['id'], replaceReason='Switched to a motorcycle')
+    check('replacing a car with a motorcycle: only the 250 fee is covered, Paid', code == 201 and res['data']['replaced']['creditApplied'] == 250 and res['data']['paymentStatus'] == 'Paid', res)
+    # a dearer class: the balance is due
+    moto = reg('VCL 3001', 'VCL-4', 'Motorcycle')[1]['data']
+    pay(moto['id'])
+    code, res = reg('VCL 3002', 'VCL-4', '4-Wheel', replacesVehicleId=moto['id'], replaceReason='Bought a car')
+    check('replacing a motorcycle (250 paid) with a car: 250 credited, 250 still due', code == 201 and res['data']['replaced']['creditApplied'] == 250
+          and res['data']['replaced']['balanceDue'] == 250 and res['data']['paymentStatus'] == 'Unpaid' and res['data']['feeAmount'] == 250 and res['data']['qrPayload'] is None, res)
+    code, res = pay(res['data']['id'])
+    check('  ...paying the balance activates it; the vehicle shows 500 paid in total', code == 201 and res['data']['vehicle']['paymentStatus'] == 'Paid' and res['data']['vehicle']['feeAmount'] == 500, res)
+    # an unpaid old vehicle carries no credit
+    unpaid_old = reg('VCL 4001', 'VCL-5')[1]['data']
+    code, res = reg('VCL 4002', 'VCL-5', '4-Wheel', replacesVehicleId=unpaid_old['id'], replaceReason='Typed the wrong plate at registration')
+    check('replacing an unpaid vehicle carries no credit; the new one owes the full fee', code == 201 and res['data']['replaced']['creditApplied'] == 0 and res['data']['paymentStatus'] == 'Unpaid'
+          and res['data']['feeAmount'] == 500, res)
+
+    # --- guards for replace / retire
+    other = reg('VCL 5001', 'VCL-6')[1]['data']
+    code, res = reg('VCL 5002', 'VCL-7', '4-Wheel', replacesVehicleId=other['id'], replaceReason='Not my vehicle at all')
+    check('a vehicle that belongs to another ID cannot be replaced -> 400', code == 400, res)
+    pay(other['id'])
+    call('POST', 'violations.php', {'vehicle_id': other['id'], 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'hold'}, guard)
+    code, res = reg('VCL 5002', 'VCL-6', '4-Wheel', replacesVehicleId=other['id'], replaceReason='Selling the vehicle')
+    check('a vehicle on violation hold cannot be replaced -> 409', code == 409 and res['data']['code'] == 'VEHICLE_HAS_VIOLATION', res)
+    code, res = call('PUT', 'vehicles.php', {'id': other['id'], 'action': 'retire', 'reason': 'Selling the vehicle'}, admin)
+    check('...nor retired -> 409', code == 409 and res['data']['code'] == 'VEHICLE_HAS_VIOLATION', res)
+
+    retire_me = reg('VCL 6001', 'VCL-8')[1]['data']
+    AUTO_REASON = False
+    code, res = call('PUT', 'vehicles.php', {'id': retire_me['id'], 'action': 'retire'}, admin)
+    check('retiring needs a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    AUTO_REASON = True
+    code, res = call('PUT', 'vehicles.php', {'id': retire_me['id'], 'action': 'retire', 'reason': 'Vehicle was sold'}, admin)
+    check('retire a vehicle -> 200, isRetired', code == 200 and res['data']['isRetired'] is True, res)
+    code, res = call('PUT', 'vehicles.php', {'id': retire_me['id'], 'action': 'retire', 'reason': 'Vehicle was sold'}, admin)
+    check('retiring twice -> 409', code == 409, res)
+    code, res = reg('VCL 6002', 'VCL-8')
+    check('the freed class slot can be used again -> 201', code == 201, res)
+
+    # --- the owner's portal shows only active vehicles
+    student = reg('VCL 7001', 'VCL-9')[1]['data']
+    temp_pw = student['studentAccount']['tempPassword']
+    tok = call('POST', 'auth.php?action=login&realm=student', {'username': 'VCL-9', 'password': temp_pw})[1]['data']['token']
+    call('POST', 'auth.php?action=change_password', {'current_password': temp_pw, 'new_password': 'Student-Cls-2026'}, tok)
+    pay(student['id'])
+    reg('VCL 7002', 'VCL-9', '4-Wheel', replacesVehicleId=student['id'], replaceReason='Replacing the old car')
+    code, res = call('GET', 'student.php?action=vehicles', token=tok)
+    check('the portal lists only the new vehicle after a replacement', [x['plateNumber'] for x in res['data']] == ['VCL 7002'], res)
+    code, res = call('GET', 'student.php?action=me', token=tok)
+    check('  ...and counts one vehicle', res['data']['summary']['vehicles'] == 1, res['data']['summary'])
+    AUTO_PAY = True
+
+
+def test_audit_and_approvals(admin):
+    """Admin action log, mandatory reasons, second-admin approvals, settings. Runs last: it adds (then removes) a second admin."""
+    global AUTO_PAY, AUTO_REASON
+    section('Audit log, reasons, second-admin approvals')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    AUTO_PAY = False
+
+    # --- the log is admin-only and records the day's actions
+    code, _ = call('GET', 'audit.php', token=guard)
+    check('guards cannot read the audit log -> 403', code == 403, code)
+    code, res = call('GET', 'audit.php?limit=5', token=admin)
+    check('admin reads the log: total, page, action list, rows', code == 200 and res['data']['total'] > 20 and len(res['data']['rows']) == 5 and 'vehicle.register' in res['data']['actions'], res['data'].get('total'))
+    code, res = call('GET', 'audit.php?action=payment.cash&limit=100', token=admin)
+    check('filter by action', res['data']['rows'] and all(r['action'] == 'payment.cash' for r in res['data']['rows']), res['data']['total'])
+    code, res = call('GET', 'audit.php?action=vehicle&limit=100', token=admin)
+    check('an action prefix matches the whole group (vehicle.*)', {r['action'] for r in res['data']['rows']} >= {'vehicle.register', 'vehicle.replace'}, {r['action'] for r in res['data']['rows']})
+    code, res = call('GET', 'audit.php?q=VCL1001&limit=100', token=admin)
+    check('search by plate finds that vehicle\'s history', len(res['data']['rows']) >= 3 and all('VCL 1001' == r['plateNumber'] for r in res['data']['rows'] if r['plateNumber']), len(res['data']['rows']))
+    code, res = call('GET', 'audit.php?from=2999-01-01', token=admin)
+    check('date filter', res['data']['total'] == 0, res['data']['total'])
+    check('every row names who did it', all(r['actor'] and r['createdAt'] for r in call('GET', 'audit.php?limit=100', token=admin)[1]['data']['rows']), '')
+
+    # --- reasons are mandatory for the sensitive actions
+    AUTO_REASON = False
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'AUD 1001', 'ownerName': 'Ada Audit', 'ownerIdNumber': 'AUD-1', 'vehicleType': '4-Wheel'}, admin)
+    veh = res['data']
+    call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id']}, admin)
+
+    def vip_body(**kw):
+        return {'id': veh['id'], 'passClass': 'VIP', **kw}
+    code, res = call('PUT', 'vehicles.php', vip_body(), admin)
+    check('granting VIP without a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    code, res = call('PUT', 'vehicles.php', vip_body(reason='abc'), admin)
+    check('a reason under 5 characters is not enough -> 400', code == 400, res)
+    code, res = call('PUT', 'vehicles.php', vip_body(reason='School president\'s official vehicle'), admin)
+    check('with a reason (and no second admin available) VIP is granted directly', code == 200 and res['data']['isVip'] is True, res)
+    _, aud = call('GET', 'audit.php?action=vehicle.vip_grant&q=AUD1001', token=admin)
+    check('  ...logged with the reason and the note that nobody could approve', aud['data']['total'] == 1 and 'president' in aud['data']['rows'][0]['reason']
+          and 'no second administrator' in aud['data']['rows'][0]['detail'], aud['data'])
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passClass': 'Standard'}, admin)
+    check('withdrawing VIP needs a reason too -> 400', code == 400, res)
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passClass': 'Standard', 'reason': 'No longer holds the office'}, admin)
+    check('  ...with one it works and is logged', code == 200 and call('GET', 'audit.php?action=vehicle.vip_withdraw&q=AUD1001', token=admin)[1]['data']['total'] == 1, res)
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passValidUntil': '2026-11-30'}, admin)
+    check('moving a pass date needs a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passValidUntil': '2026-11-30', 'reason': 'Registrar extended the school year'}, admin)
+    check('  ...with one it works', code == 200 and res['data']['passValidUntil'] == '2026-11-30', res)
+    _, aud = call('GET', 'audit.php?action=vehicle.pass_date&q=AUD1001', token=admin)
+    check('  ...and the log shows the old and new date', aud['data']['total'] == 1 and '2026-12-31 -> 2026-11-30' in aud['data']['rows'][0]['detail'], aud['data'])
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passValidUntil': '2026-11-30', 'makeModelColor': 'Blue'}, admin)
+    check('re-sending the same date needs no reason', code == 200, res)
+    code, res = call('POST', 'passes.php', {'vehicle_id': veh['id'], 'action': 'reissue'}, admin)
+    check('reissuing a pass needs a reason -> 400', code == 400, res)
+    code, res = call('POST', 'passes.php', {'vehicle_id': veh['id'], 'action': 'reissue', 'reason': 'Phone was lost'}, admin)
+    check('  ...with one it is reissued and logged', code == 200 and call('GET', 'audit.php?action=pass.reissue&q=AUD1001', token=admin)[1]['data']['total'] == 1, res)
+    fresh = call('POST', 'vehicles.php', {'plateNumber': 'AUD 2002', 'ownerName': 'Del Ete', 'ownerIdNumber': 'AUD-2', 'vehicleType': '4-Wheel'}, admin)[1]['data']
+    code, res = call('DELETE', f"vehicles.php?id={fresh['id']}", token=admin)
+    check('deleting needs a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    code, res = call('DELETE', f"vehicles.php?id={fresh['id']}&reason=Registered%20by%20mistake", token=admin)
+    check('  ...with one it is deleted and logged', code == 200 and call('GET', 'audit.php?action=vehicle.delete&q=AUD2002', token=admin)[1]['data']['total'] == 1, res)
+    AUTO_REASON = True
+
+    # --- other actions are logged
+    code, res = call('POST', 'users.php', {'username': 'audit.guard', 'full_name': 'Audit Guard', 'role': 'guard', 'badge_number': 'NCST-SEC-77'}, admin)
+    gid = res['data']['user']['id']
+    call('PUT', 'users.php', {'id': gid, 'action': 'set_status', 'status': 'Inactive'}, admin)
+    call('PUT', 'users.php', {'id': gid, 'action': 'reset_password'}, admin)
+    actions = {r['action'] for r in call('GET', 'audit.php?action=staff&limit=50', token=admin)[1]['data']['rows']}
+    check('staff create / status / password reset are logged', {'staff.create', 'staff.status', 'staff.password_reset'} <= actions, actions)
+    call('POST', 'students.php', {'owner_id_number': 'AUD-1', 'action': 'issue'}, admin)
+    check('issuing a student login is logged', call('GET', 'audit.php?action=student.login_issued', token=admin)[1]['data']['total'] >= 1, '')
+    v2 = call('POST', 'vehicles.php', {'plateNumber': 'AUD 3003', 'ownerName': 'Vio Late', 'ownerIdNumber': 'AUD-3'}, admin)[1]['data']
+    vid = call('POST', 'violations.php', {'vehicle_id': v2['id'], 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'hydrant'}, guard)[1]['data']['violation']['id']
+    check('a violation issued by a guard is logged under the guard', any(r['action'] == 'violation.issue' and r['actorRole'] == 'guard'
+          for r in call('GET', 'audit.php?q=AUD3003', token=admin)[1]['data']['rows']), '')
+
+    # --- settings
+    code, res = call('GET', 'settings.php?scope=all', token=guard)
+    check('the settings list is admin-only -> 403', code == 403, code)
+    code, res = call('PUT', 'settings.php', {'parking_capacity': 150, 'hold_reminder_days': 5}, admin)
+    check('admin saves settings', code == 200 and {s['key']: s['value'] for s in res['data']['settings']}['parking_capacity'] == 150, res)
+    code, res = call('PUT', 'settings.php', {'parking_capacity': -3}, admin)
+    check('a value outside its limits is refused -> 400', code == 400, res)
+    code, res = call('PUT', 'settings.php', {'parking_capacity': 'lots'}, admin)
+    check('a non-number is refused -> 400', code == 400, res)
+    code, res = call('GET', 'settings.php')
+    check('the public settings expose the capacity (the apps need it) but not the internal policy values', res['data']['parking_capacity'] == 150 and 'hold_reminder_days' not in res['data'], res['data'])
+    check('setting changes are logged with old and new value', 'parking_capacity: 0 -> 150' in str([r['detail'] for r in call('GET', 'audit.php?action=settings', token=admin)[1]['data']['rows']]), '')
+    call('PUT', 'settings.php', {'parking_capacity': 0, 'hold_reminder_days': 3}, admin)
+
+    # --- second-admin approvals
+    code, res = call('POST', 'users.php', {'username': 'admin.two', 'full_name': 'Second Admin', 'role': 'admin', 'badge_number': 'NCST-SEC-02'}, admin)
+    a2_id, a2_temp = res['data']['user']['id'], res['data']['tempPassword']
+    a2 = login('admin.two', a2_temp)[1]['data']['token']
+    call('POST', 'auth.php?action=change_password', {'current_password': a2_temp, 'new_password': 'Admin-Two-2026'}, a2)
+    a2 = login('admin.two', 'Admin-Two-2026')[1]['data']['token']
+
+    target = call('POST', 'vehicles.php', {'plateNumber': 'APR 1001', 'ownerName': 'App Rove', 'ownerIdNumber': 'APR-1', 'vehicleType': '4-Wheel'}, admin)[1]['data']
+    code, res = call('PUT', 'vehicles.php', {'id': target['id'], 'passClass': 'VIP', 'reason': 'Dean of the college'}, admin)
+    check('with two administrators, granting VIP becomes a request (202), nothing changes yet', code == 202 and res['data']['vipApprovalPending'] is True and res['data']['isVip'] is False, res)
+    check('  ...the vehicle is still Standard and still owes its fee', call('GET', 'vehicles.php?plate=APR1001', token=admin)[1]['data']['paymentStatus'] == 'Unpaid', '')
+    code, res = call('PUT', 'vehicles.php', {'id': target['id'], 'passClass': 'VIP', 'reason': 'Dean of the college'}, admin)
+    check('asking again while one is pending -> 409', code == 409 and res['data']['code'] == 'APPROVAL_PENDING', res)
+    code, res = call('GET', 'approvals.php?status=Pending', token=admin)
+    req = [r for r in res['data']['requests'] if r['plateNumber'] == 'APR 1001'][0]
+    check('the request shows who asked, what and why', req['type'] == 'vip_grant' and req['requestedBy'].startswith('System Administrator') and req['reason'] == 'Dean of the college'
+          and res['data']['pending'] >= 1 and res['data']['secondAdminAvailable'] is True, req)
+    code, res = call('POST', 'approvals.php', {'id': req['id'], 'decision': 'approve'}, admin)
+    check('the requester cannot approve their own request -> 403', code == 403, res)
+    code, _ = call('POST', 'approvals.php', {'id': req['id'], 'decision': 'approve'}, guard)
+    check('guards cannot decide -> 403', code == 403, code)
+    code, res = call('POST', 'approvals.php', {'id': req['id'], 'decision': 'approve', 'note': 'Confirmed with the HR office'}, a2)
+    check('a different administrator approves -> VIP is granted', code == 200 and res['data']['request']['status'] == 'Approved', res)
+    got = call('GET', 'vehicles.php?plate=APR1001', token=admin)[1]['data']
+    check('  ...the vehicle is VIP, its fee waived, granted by both names', got['isVip'] is True and got['paymentStatus'] == 'Waived' and 'approved by Second Admin' in got['vipGrantedBy'], got)
+    code, res = call('POST', 'approvals.php', {'id': req['id'], 'decision': 'reject', 'note': 'late'}, a2)
+    check('a decided request cannot be decided again -> 409', code == 409, res)
+    check('the approval is in the audit log', call('GET', 'audit.php?action=approval.approved', token=admin)[1]['data']['total'] == 1, '')
+
+    t2 = call('POST', 'vehicles.php', {'plateNumber': 'APR 2002', 'ownerName': 'Rej Ect', 'ownerIdNumber': 'APR-2', 'vehicleType': '4-Wheel'}, admin)[1]['data']
+    call('PUT', 'vehicles.php', {'id': t2['id'], 'passClass': 'VIP', 'reason': 'Friend of a trustee'}, admin)
+    req2 = [r for r in call('GET', 'approvals.php?status=Pending', token=admin)[1]['data']['requests'] if r['plateNumber'] == 'APR 2002'][0]
+    code, res = call('POST', 'approvals.php', {'id': req2['id'], 'decision': 'reject'}, a2)
+    check('rejecting needs a note for the requester -> 400', code == 400, res)
+    code, res = call('POST', 'approvals.php', {'id': req2['id'], 'decision': 'reject', 'note': 'Not a trustee guest'}, a2)
+    check('reject with a note -> Rejected, the vehicle stays Standard', code == 200 and res['data']['request']['status'] == 'Rejected'
+          and call('GET', 'vehicles.php?plate=APR2002', token=admin)[1]['data']['isVip'] is False, res)
+
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'APR 3003', 'ownerName': 'Reg Vip', 'ownerIdNumber': 'APR-3', 'vehicleType': '4-Wheel', 'passClass': 'VIP', 'reason': 'Guest of honour'}, admin)
+    check('registering as VIP with two administrators: registered Standard, request pending', code == 201 and res['data']['vipApprovalPending'] is True and res['data']['isVip'] is False
+          and res['data']['paymentStatus'] == 'Unpaid', res)
+
+    # dismissing a violation needs the second administrator; resolving does not
+    t3 = call('POST', 'vehicles.php', {'plateNumber': 'APR 4004', 'ownerName': 'Dis Miss', 'ownerIdNumber': 'APR-4', 'vehicleType': '4-Wheel'}, admin)[1]['data']
+    v_id = call('POST', 'violations.php', {'vehicle_id': t3['id'], 'type': 'Unauthorized Driver at Helm', 'notes': 'x'}, guard)[1]['data']['violation']['id']
+    code, res = call('PUT', 'violations.php', {'violation_id': v_id, 'action': 'dismiss', 'notes': 'Issued to the wrong vehicle'}, admin)
+    check('dismissing a violation becomes a request (202); the vehicle stays on hold', code == 202 and res['data']['approvalPending'] is True
+          and call('GET', 'vehicles.php?plate=APR4004', token=admin)[1]['data']['isBanned'] is True, res)
+    code, res = call('PUT', 'violations.php', {'violation_id': v_id, 'action': 'dismiss', 'notes': 'Issued to the wrong vehicle'}, admin)
+    check('  ...asking again -> 409', code == 409, res)
+    req3 = [r for r in call('GET', 'approvals.php?status=Pending', token=admin)[1]['data']['requests'] if r['plateNumber'] == 'APR 4004'][0]
+    code, res = call('POST', 'approvals.php', {'id': req3['id'], 'decision': 'approve'}, a2)
+    got = call('GET', 'vehicles.php?plate=APR4004', token=admin)[1]['data']
+    check('the second administrator approves -> dismissed, the hold is lifted', code == 200 and got['isBanned'] is False, res)
+    pend = call('GET', 'violations.php?status=Dismissed&plate=APR4004', token=admin)[1]['data']
+    check('  ...the dismissal carries both names and the requester\'s notes', pend and 'approved by Second Admin' in pend[0]['resolvedBy'] and pend[0]['resolutionNotes'] == 'Issued to the wrong vehicle', pend)
+    v_id2 = call('POST', 'violations.php', {'vehicle_id': t3['id'], 'type': 'Unauthorized Driver at Helm', 'notes': 'again'}, guard)[1]['data']['violation']['id']
+    code, res = call('PUT', 'violations.php', {'violation_id': v_id2, 'action': 'resolve', 'notes': 'Cleared at the office'}, admin)
+    check('resolving a violation stays a single-admin action', code == 200 and res['data']['holdLifted'] is True, res)
+
+    # a violation that was resolved meanwhile closes its pending dismissal request
+    t4 = call('POST', 'vehicles.php', {'plateNumber': 'APR 5005', 'ownerName': 'Race Cond', 'ownerIdNumber': 'APR-5', 'vehicleType': '4-Wheel'}, admin)[1]['data']
+    v4 = call('POST', 'violations.php', {'vehicle_id': t4['id'], 'type': 'Unauthorized Driver at Helm', 'notes': 'x'}, guard)[1]['data']['violation']['id']
+    call('PUT', 'violations.php', {'violation_id': v4, 'action': 'dismiss', 'notes': 'Mistake'}, admin)
+    call('PUT', 'violations.php', {'violation_id': v4, 'action': 'resolve', 'notes': 'Paid and cleared'}, admin)
+    req4 = [r for r in call('GET', 'approvals.php?status=Pending', token=admin)[1]['data']['requests'] if r['plateNumber'] == 'APR 5005'][0]
+    code, res = call('POST', 'approvals.php', {'id': req4['id'], 'decision': 'approve'}, a2)
+    check('approving a dismissal of an already-closed violation just closes the request', code == 200, res)
+
+    # --- back to one administrator: no second approver exists, so actions apply directly again
+    call('PUT', 'users.php', {'id': a2_id, 'action': 'set_status', 'status': 'Inactive'}, admin)
+    t5 = call('POST', 'vehicles.php', {'plateNumber': 'APR 6006', 'ownerName': 'Solo Admin', 'ownerIdNumber': 'APR-6', 'vehicleType': '4-Wheel'}, admin)[1]['data']
+    code, res = call('PUT', 'vehicles.php', {'id': t5['id'], 'passClass': 'VIP', 'reason': 'Only one administrator is active'}, admin)
+    check('with one active administrator VIP is granted directly again', code == 200 and res['data']['isVip'] is True, res)
+    AUTO_REASON = True
+    AUTO_PAY = True
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -1882,9 +2161,10 @@ def main():
     test_vip_passes(admin)
     test_offline_sync(admin)
     test_payments(admin)
-    test_one_vehicle_per_id(admin)
+    test_vehicle_classes(admin)
     test_loophole_fixes(admin)
     test_owner_notices(admin)
+    test_audit_and_approvals(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
 

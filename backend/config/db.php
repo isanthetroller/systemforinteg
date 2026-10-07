@@ -325,6 +325,79 @@ function initializeSqliteSchema($pdo) {
             `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS `idx_notices_owner` ON `owner_notices` (`owner_id_number`, `id`);
+
+        CREATE TABLE IF NOT EXISTS `audit_log` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `actor_user_id` INTEGER NULL,
+            `actor_label` TEXT NOT NULL,
+            `actor_role` TEXT NULL,
+            `action` TEXT NOT NULL,
+            `entity_type` TEXT NULL,
+            `entity_id` INTEGER NULL,
+            `plate_number` TEXT NULL,
+            `detail` TEXT NULL,
+            `reason` TEXT NULL,
+            `ip_address` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS `idx_audit_time` ON `audit_log` (`created_at`);
+
+        CREATE TABLE IF NOT EXISTS `approval_requests` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `type` TEXT NOT NULL,
+            `vehicle_id` INTEGER NULL,
+            `violation_id` INTEGER NULL,
+            `plate_number` TEXT NULL,
+            `requested_by_user_id` INTEGER NULL,
+            `requested_by_label` TEXT NOT NULL,
+            `reason` TEXT NOT NULL,
+            `status` TEXT NOT NULL DEFAULT 'Pending',
+            `decided_by_user_id` INTEGER NULL,
+            `decided_by_label` TEXT NULL,
+            `decision_note` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `decided_at` TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS `exit_releases` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `vehicle_id` INTEGER NOT NULL,
+            `plate_number` TEXT NOT NULL,
+            `reason` TEXT NOT NULL,
+            `released_by_user_id` INTEGER NULL,
+            `released_by_label` TEXT NOT NULL,
+            `expires_at` TEXT NOT NULL,
+            `used_at` TEXT NULL,
+            `used_by_label` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS `evidence_photos` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `kind` TEXT NOT NULL,
+            `gate_log_id` INTEGER NULL,
+            `violation_id` INTEGER NULL,
+            `incident_id` INTEGER NULL,
+            `plate_number` TEXT NOT NULL,
+            `plate_read` TEXT NULL,
+            `plate_matches` INTEGER NULL,
+            `size_bytes` INTEGER NOT NULL DEFAULT 0,
+            `data` TEXT NULL,
+            `taken_by_user_id` INTEGER NULL,
+            `taken_by_label` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `purged_at` TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS `guard_shifts` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `user_id` INTEGER NOT NULL,
+            `guard_label` TEXT NOT NULL,
+            `gate` TEXT NULL,
+            `started_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `ended_at` TEXT NULL,
+            `handover_notes` TEXT NULL
+        );
         CREATE INDEX IF NOT EXISTS `idx_payments_vehicle` ON `payments` (`vehicle_id`);
         CREATE INDEX IF NOT EXISTS `idx_payments_owner` ON `payments` (`owner_id_number`);
         CREATE INDEX IF NOT EXISTS `idx_payments_session` ON `payments` (`provider_session_id`);
@@ -344,6 +417,22 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'vehicles', 'payment_status', "TEXT NOT NULL DEFAULT 'Paid'");
     ensureColumn($pdo, 'vehicles', 'fee_amount', 'REAL NOT NULL DEFAULT 0');
     ensureColumn($pdo, 'vehicles', 'paid_at', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'is_retired', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'retired_at', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'retired_reason', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'replaced_by_vehicle_id', 'INTEGER NULL');
+    ensureColumn($pdo, 'payments', 'purpose', "TEXT NOT NULL DEFAULT 'Registration'");
+    ensureColumn($pdo, 'owner_notices', 'ref_key', 'TEXT NULL');
+    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_notices_ref_key` ON `owner_notices` (`ref_key`)");
+    ensureColumn($pdo, 'gate_logs', 'lookup_method', 'TEXT NULL');
+    foreach ([['parking_capacity', '0', 'Vehicles the campus can hold at once (0 = not limited)'],
+              ['renewal_window_days', '60', 'Passes can be renewed this many days before they expire'],
+              ['expiry_warning_days', '30', 'Owners get an expiry notice this many days before the pass expires'],
+              ['hold_reminder_days', '3', 'Owners are reminded every N days while a violation stays unresolved'],
+              ['exit_release_minutes', '30', 'How long an admin-released exit for a vehicle on hold stays valid'],
+              ['evidence_retention_days', '90', 'Guard photos are deleted after this many days']] as $setting) {
+        $pdo->prepare("INSERT OR IGNORE INTO `system_settings` (`setting_key`, `setting_value`, `description`) VALUES (?, ?, ?)")->execute($setting);
+    }
     ensureColumn($pdo, 'vehicles', 'pass_id', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_valid_until', 'TEXT NULL');
     ensureColumn($pdo, 'gate_logs', 'verified_driver_name', 'TEXT NULL');

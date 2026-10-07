@@ -34,8 +34,8 @@ $student = requireStudent($pdo);
 $ownerId = $student['owner_id_number'];
 $action = $_GET['action'] ?? 'me';
 
-function ownVehicles($pdo, $ownerId) {
-    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `owner_id_number` = ? ORDER BY `id` ASC");
+function ownVehicles($pdo, $ownerId, $includeRetired = true) {
+    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `owner_id_number` = ?" . ($includeRetired ? '' : ' AND `is_retired` = 0') . " ORDER BY `id` ASC");
     $stmt->execute([$ownerId]);
     return $stmt->fetchAll();
 }
@@ -124,7 +124,7 @@ function studentVehicleView($pdo, $row) {
 
 switch ($action) {
     case 'me':
-        $vehicles = ownVehicles($pdo, $ownerId);
+        $vehicles = ownVehicles($pdo, $ownerId, false);
         sendResponse(200, [
             'student' => publicStudent($student),
             'summary' => [
@@ -137,7 +137,7 @@ switch ($action) {
         ]);
 
     case 'vehicles':
-        sendResponse(200, array_map(fn($row) => studentVehicleView($pdo, $row), ownVehicles($pdo, $ownerId)));
+        sendResponse(200, array_map(fn($row) => studentVehicleView($pdo, $row), ownVehicles($pdo, $ownerId, false)));
 
     case 'notices':
         $stmt = $pdo->prepare("SELECT * FROM `owner_notices` WHERE `owner_id_number` = ? ORDER BY `id` DESC LIMIT 30");

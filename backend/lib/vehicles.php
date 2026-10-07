@@ -63,6 +63,10 @@ function formatVehicleRow($v) {
         'isVip' => isVipVehicle($v),
         'vipGrantedBy' => isVipVehicle($v) ? ($v['pass_class_by'] ?? null) : null,
         'vipGrantedAt' => isVipVehicle($v) ? ($v['pass_class_at'] ?? null) : null,
+        'isRetired' => (int)($v['is_retired'] ?? 0) === 1,
+        'retiredAt' => $v['retired_at'] ?? null,
+        'retiredReason' => $v['retired_reason'] ?? null,
+        'replacedByVehicleId' => isset($v['replaced_by_vehicle_id']) ? (int)$v['replaced_by_vehicle_id'] : null,
         'paymentStatus' => $v['payment_status'] ?? 'Paid',
         'feeAmount' => (float)($v['fee_amount'] ?? 0),
         'paidAt' => $v['paid_at'] ?? null,
@@ -192,7 +196,7 @@ function vehicleForOutput($pdo, $row, $includeQr = false) {
     $out = formatVehicleRow($row);
     // No QR exists for a vehicle whose registration fee is unpaid; payment issues a fresh pass id
     if ($includeQr) {
-        $out['qrPayload'] = ($row['payment_status'] ?? 'Paid') !== 'Unpaid' ? vehicleQrPayload($row) : null;
+        $out['qrPayload'] = (($row['payment_status'] ?? 'Paid') !== 'Unpaid' && (int)($row['is_retired'] ?? 0) === 0) ? vehicleQrPayload($row) : null;
     }
     return $out;
 }

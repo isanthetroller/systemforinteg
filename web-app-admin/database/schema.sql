@@ -3,8 +3,9 @@
 -- Target Host: InfinityFree MySQL (phpMyAdmin)
 -- WARNING: FRESH INSTALL ONLY. This DROPS EVERY TABLE and recreates it empty (all data is lost).
 --          Import it once into an empty database (phpMyAdmin > Import) and nothing else is needed:
---          it already contains everything from migrations 001 to 008 (v2 security, visitor items,
---          settings, vehicle status, VIP, offline sync, registration payments, owner notices).
+--          it already contains everything from migrations 001 to 009 (v2 security, visitor items,
+--          settings, vehicle status, VIP, offline sync, registration payments, owner notices,
+--          renewals / vehicle replacement, audit log & approvals, exit releases, evidence photos, guard shifts).
 --          For an EXISTING database that must keep its data, run database/migrations/ instead.
 -- First sign-in: admin / Password123!  (you are forced to change it immediately).
 -- Timezone: all DATETIME values are Asia/Manila (UTC+8)
@@ -12,6 +13,11 @@
 -- ==============================================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS `guard_shifts`;
+DROP TABLE IF EXISTS `evidence_photos`;
+DROP TABLE IF EXISTS `exit_releases`;
+DROP TABLE IF EXISTS `approval_requests`;
+DROP TABLE IF EXISTS `audit_log`;
 DROP TABLE IF EXISTS `owner_notices`;
 DROP TABLE IF EXISTS `payments`;
 DROP TABLE IF EXISTS `system_settings`;
@@ -59,6 +65,10 @@ CREATE TABLE `vehicles` (
   `payment_status` VARCHAR(16) NOT NULL DEFAULT 'Paid' COMMENT 'Unpaid (no QR yet) | Paid | Waived (free vehicle or VIP)',
   `fee_amount` DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT 'Amount due while Unpaid; total paid once Paid',
   `paid_at` DATETIME NULL,
+  `is_retired` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = replaced / sold: kept for history, can no longer enter',
+  `retired_at` DATETIME NULL,
+  `retired_reason` VARCHAR(255) NULL,
+  `replaced_by_vehicle_id` INT NULL,
   `pass_id` VARCHAR(40) NULL UNIQUE,
   `pass_valid_until` DATE NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -110,6 +120,7 @@ CREATE TABLE `gate_logs` (
   `logged_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'When it happened (event time)',
   `synced_at` DATETIME NULL COMMENT 'When it reached the server, for events recorded offline',
   `client_ref` VARCHAR(64) NULL UNIQUE COMMENT 'Device reference: makes a resend harmless',
+  `lookup_method` VARCHAR(12) NULL COMMENT 'qr | manual: how the guard identified the vehicle',
   INDEX `idx_log_plate` (`plate_number`),
   INDEX `idx_log_time` (`logged_at`),
   INDEX `idx_log_action` (`action`),
@@ -289,6 +300,7 @@ CREATE TABLE `payments` (
   `owner_id_number` VARCHAR(50) NOT NULL,
   `owner_name` VARCHAR(150) NOT NULL,
   `sticker_year` VARCHAR(10) NULL,
+  `purpose` VARCHAR(20) NOT NULL DEFAULT 'Registration' COMMENT 'Registration | Renewal | Fee difference | Transfer credit',
   `amount` DECIMAL(10,2) NOT NULL,
   `method` VARCHAR(16) NOT NULL COMMENT 'Cash | PayMongo',
   `status` VARCHAR(16) NOT NULL DEFAULT 'Pending' COMMENT 'Pending | Paid | Cancelled',
@@ -328,9 +340,126 @@ CREATE TABLE `owner_notices` (
   `violation_id` INT NULL,
   `incident_id` INT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `ref_key` VARCHAR(80) NULL UNIQUE COMMENT 'Reminders are sent once per key',
   INDEX `idx_notices_owner` (`owner_id_number`, `id`),
   INDEX `idx_notices_status` (`email_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 14. Table: audit_log
+-- Admin action log: who did what, to which record, and why.
+-- ------------------------------------------------------------------------------
+CREATE TABLE `audit_log` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `actor_user_id` INT NULL,
+  `actor_label` VARCHAR(150) NOT NULL,
+  `actor_role` VARCHAR(16) NULL,
+  `action` VARCHAR(60) NOT NULL,
+  `entity_type` VARCHAR(30) NULL,
+  `entity_id` INT NULL,
+  `plate_number` VARCHAR(20) NULL,
+  `detail` TEXT NULL,
+  `reason` TEXT NULL,
+  `ip_address` VARCHAR(45) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_audit_time` (`created_at`),
+  INDEX `idx_audit_action` (`action`),
+  INDEX `idx_audit_plate` (`plate_number`),
+  INDEX `idx_audit_actor` (`actor_user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 15. Table: approval_requests
+-- Second-admin approvals (granting VIP, dismissing a violation).
+-- ------------------------------------------------------------------------------
+CREATE TABLE `approval_requests` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `type` VARCHAR(30) NOT NULL COMMENT 'vip_grant | violation_dismiss',
+  `vehicle_id` INT NULL,
+  `violation_id` INT NULL,
+  `plate_number` VARCHAR(20) NULL,
+  `requested_by_user_id` INT NULL,
+  `requested_by_label` VARCHAR(150) NOT NULL,
+  `reason` TEXT NOT NULL,
+  `status` VARCHAR(12) NOT NULL DEFAULT 'Pending' COMMENT 'Pending | Approved | Rejected',
+  `decided_by_user_id` INT NULL,
+  `decided_by_label` VARCHAR(150) NULL,
+  `decision_note` TEXT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `decided_at` DATETIME NULL,
+  INDEX `idx_approvals_status` (`status`),
+  INDEX `idx_approvals_vehicle` (`vehicle_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 16. Table: exit_releases
+-- One-time exit for a vehicle on violation hold (admin override; expires; single use).
+-- ------------------------------------------------------------------------------
+CREATE TABLE `exit_releases` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `vehicle_id` INT NOT NULL,
+  `plate_number` VARCHAR(20) NOT NULL,
+  `reason` TEXT NOT NULL,
+  `released_by_user_id` INT NULL,
+  `released_by_label` VARCHAR(150) NOT NULL,
+  `expires_at` DATETIME NOT NULL,
+  `used_at` DATETIME NULL,
+  `used_by_label` VARCHAR(150) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_releases_vehicle` (`vehicle_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 17. Table: evidence_photos
+-- Photos taken by guards (vehicle / plate at the gate, evidence for a violation or incident).
+-- `data` is a base64 JPEG; photos older than the retention setting are purged.
+-- ------------------------------------------------------------------------------
+CREATE TABLE `evidence_photos` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `kind` VARCHAR(16) NOT NULL COMMENT 'entry | exit | violation | incident',
+  `gate_log_id` INT NULL,
+  `violation_id` INT NULL,
+  `incident_id` INT NULL,
+  `plate_number` VARCHAR(20) NOT NULL,
+  `plate_read` VARCHAR(40) NULL COMMENT 'Plate text the phone read from the photo',
+  `plate_matches` TINYINT(1) NULL COMMENT '1 = matches the pass, 0 = does not, NULL = not checked',
+  `size_bytes` INT NOT NULL DEFAULT 0,
+  `data` MEDIUMTEXT NULL,
+  `taken_by_user_id` INT NULL,
+  `taken_by_label` VARCHAR(150) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `purged_at` DATETIME NULL,
+  INDEX `idx_evidence_log` (`gate_log_id`),
+  INDEX `idx_evidence_violation` (`violation_id`),
+  INDEX `idx_evidence_plate` (`plate_number`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 18. Table: guard_shifts
+-- Guard duty: who is on which gate, and the handover notes for the next guard.
+-- ------------------------------------------------------------------------------
+CREATE TABLE `guard_shifts` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` INT NOT NULL,
+  `guard_label` VARCHAR(150) NOT NULL,
+  `gate` VARCHAR(100) NULL,
+  `started_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `ended_at` DATETIME NULL,
+  `handover_notes` TEXT NULL,
+  INDEX `idx_shifts_user` (`user_id`),
+  INDEX `idx_shifts_open` (`ended_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- Default policy values (each can be changed in Admin Center > Settings)
+-- ------------------------------------------------------------------------------
+INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`) VALUES
+  ('parking_capacity', '0', 'Vehicles the campus can hold at once (0 = not limited)'),
+  ('renewal_window_days', '60', 'Passes can be renewed this many days before they expire'),
+  ('expiry_warning_days', '30', 'Owners get an expiry notice this many days before the pass expires'),
+  ('hold_reminder_days', '3', 'Owners are reminded every N days while a violation stays unresolved'),
+  ('exit_release_minutes', '30', 'How long an admin-released exit for a vehicle on hold stays valid'),
+  ('evidence_retention_days', '90', 'Guard photos are deleted after this many days');
 
 -- ------------------------------------------------------------------------------
 -- Baseline Seed Administrator

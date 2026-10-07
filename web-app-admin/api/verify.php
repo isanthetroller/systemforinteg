@@ -269,6 +269,9 @@ if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
     } elseif ($vehicle['registration_status'] === 'Suspended') {
         $result = 'SUSPENDED';
         $reasonDetail = 'Vehicle registration is suspended.';
+    } elseif ((int)($vehicle['is_retired'] ?? 0) === 1 && $gateType !== 'Egress') {
+        $result = 'RETIRED';
+        $reasonDetail = 'This vehicle was retired (replaced or sold). It must be registered again, or its owner must use their current vehicle.';
     } elseif ($gateType !== 'Egress' && vehiclePassExpired($vehicle, $today)) {
         // The pass date is checked for every lookup, not only for scanned signed QR codes
         $result = 'EXPIRED';
@@ -378,6 +381,7 @@ $messages = [
     'BANNED' => 'VIOLATION HOLD - unresolved violation.',
     'SUSPENDED' => 'REGISTRATION SUSPENDED.',
     'UNPAID' => 'REGISTRATION FEE UNPAID.',
+    'RETIRED' => 'VEHICLE RETIRED.',
     'NOT_FOUND' => 'No matching vehicle or pass.',
 ];
 

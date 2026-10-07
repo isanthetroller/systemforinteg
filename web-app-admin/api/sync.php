@@ -202,6 +202,7 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
         if ($vehicle) {
             if ((int)$vehicle['is_banned'] === 1) $flags[] = 'BANNED';
             elseif ($vehicle['registration_status'] === 'Suspended') $flags[] = 'SUSPENDED';
+            if ((int)($vehicle['is_retired'] ?? 0) === 1) $flags[] = 'RETIRED';
             if (($vehicle['payment_status'] ?? 'Paid') === 'Unpaid') $flags[] = 'UNPAID';
             if (vehiclePassExpired($vehicle, $eventDay)) $flags[] = 'EXPIRED_PASS';
             $syncDriver = trim((string)($p['driverName'] ?? $p['driver_name'] ?? ''));
