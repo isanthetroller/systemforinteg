@@ -15,7 +15,9 @@
     upcoming: false,
     timeframe: 'today',
     search: '',
-    status: 'All'
+    status: 'All',
+    page: 1,
+    pageSize: 10
   };
   const MAX_ADVANCE_DAYS = 60;
 
@@ -47,18 +49,26 @@
   }
 
   function statusBadge(p) {
-    let label = p.status, cls = 'bg-slate-100 text-slate-700 border-slate-200';
-    if (p.status === 'Active' && p.isInside) { label = 'Inside'; cls = 'bg-emerald-50 text-emerald-700 border-emerald-200/80'; }
-    else if (p.status === 'Active' && p.validDate > manilaToday()) { label = 'Upcoming'; cls = 'bg-amber-50 text-amber-800 border-amber-200'; }
-    else if (p.status === 'Revoked' && p.isInside) { label = 'Revoked (inside)'; cls = 'bg-rose-50 text-rose-700 border-rose-200 font-bold'; }
-    else if (p.status === 'Active') { label = 'Active'; cls = 'bg-blue-50 text-ncst-navy border-blue-200'; }
-    else if (p.status === 'Revoked') {
-      // A pass is revoked automatically when the visitor exits (single use)
-      if (p.exitTime) label = 'Revoked (checked out)';
-      cls = 'bg-slate-100 text-slate-600 border-slate-200';
+    if (p.status === 'Revoked' && p.isInside) {
+      return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300"><span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>Cancelled (still inside)</span>';
     }
-    else if (p.status === 'Expired') cls = 'bg-slate-100 text-slate-600 border-slate-200';
-    return `<span class="px-2 py-0.5 rounded border text-[11px] font-semibold ${cls}">${esc(label)}</span>`;
+    if (p.status === 'Revoked') {
+      const lbl = p.exitTime ? 'Cancelled (left campus)' : 'Cancelled';
+      return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>${lbl}</span>`;
+    }
+    if (p.status === 'Active' && p.isInside) {
+      return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200/80"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Inside</span>';
+    }
+    if (p.status === 'Active' && p.validDate > manilaToday()) {
+      return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Upcoming</span>';
+    }
+    if (p.status === 'Active') {
+      return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-ncst-navy border border-blue-200"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>Active</span>';
+    }
+    if (p.status === 'Expired') {
+      return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>Expired</span>';
+    }
+    return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>${esc(p.status)}</span>`;
   }
 
   // A pass a guard issued on a phone without a connection: show when it reached the server
@@ -152,6 +162,7 @@
     state.search = '';
     state.status = 'All';
     state.timeframe = 'today';
+    state.page = 1;
     const sInput = $('visitorSearchInput');
     if (sInput) sInput.value = '';
     const stFilter = $('visitorStatusFilter');
@@ -170,6 +181,7 @@
     const tf = $('visitorTimeframeFilter') ? $('visitorTimeframeFilter').value : 'today';
     state.timeframe = tf;
     state.upcoming = (tf === 'upcoming');
+    state.page = 1;
     const pickerWrap = $('visitorDatePickerWrapper');
     if (pickerWrap) {
       if (tf === 'custom') {
@@ -188,7 +200,7 @@
     const upBtn = $('visitorsUpcomingBtn');
     if (upBtn) {
       upBtn.setAttribute('aria-pressed', String(state.timeframe === 'upcoming'));
-      upBtn.className = `px-3 py-1.5 rounded-md border text-xs font-semibold cursor-pointer ${state.timeframe === 'upcoming' ? 'border-ncst-navy bg-ncst-navy text-white' : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'}`;
+      upBtn.className = `hidden px-3.5 py-2 rounded-lg border text-xs font-semibold cursor-pointer ${state.timeframe === 'upcoming' ? 'border-ncst-navy bg-ncst-navy text-white' : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'}`;
     }
 
     try {
@@ -214,6 +226,18 @@
     const badge = $('visitorCountBadge');
     const filtered = getFilteredPasses();
 
+    // Pagination calculations (10 passes per page)
+    const total = filtered.length;
+    const pageSize = state.pageSize || 10;
+    const totalPages = Math.ceil(total / pageSize) || 1;
+
+    // Constrain page
+    if (state.page > totalPages) state.page = totalPages;
+    if (state.page < 1) state.page = 1;
+
+    const startIdx = (state.page - 1) * pageSize;
+    const pagedPasses = filtered.slice(startIdx, startIdx + pageSize);
+
     // Update Directory Header Count Badge
     if (badge) {
       const totalCount = state.passes.length;
@@ -224,7 +248,52 @@
       }
     }
 
-    if (!filtered.length) {
+    // Update Pagination UI
+    const paginationInfo = $('visitorPaginationInfo');
+    const pageIndicator = $('visitorPageIndicator');
+    const prevBtn = $('visitorPrevBtn');
+    const nextBtn = $('visitorNextBtn');
+
+    if (paginationInfo) {
+      if (total === 0) {
+        paginationInfo.textContent = 'Showing 0 of 0 passes';
+      } else {
+        const endIdx = Math.min(startIdx + pageSize, total);
+        paginationInfo.textContent = `Showing ${startIdx + 1} to ${endIdx} of ${total} passes`;
+      }
+    }
+
+    if (pageIndicator) {
+      pageIndicator.textContent = `Page ${state.page} of ${totalPages}`;
+    }
+
+    if (prevBtn) {
+      prevBtn.disabled = state.page <= 1;
+      if (!prevBtn.dataset.bound) {
+        prevBtn.dataset.bound = 'true';
+        prevBtn.addEventListener('click', () => {
+          if (state.page > 1) {
+            state.page--;
+            render();
+          }
+        });
+      }
+    }
+
+    if (nextBtn) {
+      nextBtn.disabled = state.page >= totalPages;
+      if (!nextBtn.dataset.bound) {
+        nextBtn.dataset.bound = 'true';
+        nextBtn.addEventListener('click', () => {
+          if (state.page < totalPages) {
+            state.page++;
+            render();
+          }
+        });
+      }
+    }
+
+    if (!total) {
       const isFiltered = !!((state.search && state.search.trim()) || (state.status && state.status !== 'All'));
       if (isFiltered) {
         body.innerHTML = `
@@ -260,40 +329,98 @@
     }
 
     body.innerHTML = '';
-    filtered.forEach(p => {
+    pagedPasses.forEach(p => {
       const tr = document.createElement('tr');
-      tr.className = 'align-top hover:bg-slate-50/60';
+
+      // Left accent border matching On Campus Now design
+      let accentBorder = 'border-l-4 border-l-transparent hover:border-l-slate-300';
+      if (p.status === 'Revoked' || p.overstayed) {
+        accentBorder = 'border-l-4 border-l-rose-600 bg-rose-50/25';
+      } else if (p.status === 'Active' && p.isInside) {
+        accentBorder = 'border-l-4 border-l-emerald-500 bg-emerald-50/20';
+      } else if (p.status === 'Active' && p.validDate > manilaToday()) {
+        accentBorder = 'border-l-4 border-l-amber-500 bg-amber-50/25';
+      }
+
+      tr.className = `h-13 transition-colors ${accentBorder} hover:bg-slate-50/80 cursor-pointer`;
       const canRevoke = isAdmin() && p.status === 'Active';
+
       tr.innerHTML = `
-        <td class="px-4 py-2.5">
-          <div class="font-mono font-bold text-slate-900 whitespace-nowrap">${esc(p.passCode)}</div>
-          <div class="text-[10px] text-slate-400">Valid ${esc(p.validDate)}</div>
+        <td class="py-2.5 px-3.5 align-middle">
+          ${statusBadge(p)}
+        </td>
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="flex items-baseline gap-1.5 flex-wrap">
+            <span class="font-mono font-bold text-slate-900 text-sm tracking-wide">${esc(p.passCode)}</span>
+          </div>
+          <div class="text-[11px] text-slate-400 font-mono mt-0.5">Valid ${esc(p.validDate)}</div>
           ${offlineChip(p)}
         </td>
-        <td class="px-4 py-2.5">
-          <div class="font-semibold text-slate-800">${esc(p.visitorName)}</div>
-          <div class="text-[10px] text-slate-500 font-mono">${esc(p.contactNumber)}</div>
-        </td>
-        <td class="px-4 py-2.5">
-          <div class="font-mono font-bold text-slate-900 whitespace-nowrap">${esc(p.plateNumber)}</div>
-          <div class="text-[10px] text-slate-500">${esc(p.vehicleModel || '')}</div>
-        </td>
-        <td class="px-4 py-2.5">
-          <div class="font-semibold text-slate-800">${esc(p.personToVisit)}</div>
-          <div class="text-[10px] text-slate-500">${esc(p.purposeOfVisit)}</div>
-        </td>
-        <td class="px-4 py-2.5 max-w-[220px]">${itemsInline(p.items)}</td>
-        <td class="px-4 py-2.5">${statusBadge(p)}</td>
-        <td class="px-4 py-2.5 whitespace-nowrap text-slate-600">${formatTime(p.entryTime)} / ${formatTime(p.exitTime)}</td>
-        <td class="px-4 py-2.5">
-          <div class="flex justify-end gap-1.5">
-            <button type="button" data-act="card" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">View Pass</button>
-            ${canRevoke ? '<button type="button" data-act="revoke" class="px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-[11px] font-semibold text-ncst-crimson cursor-pointer">Revoke</button>' : ''}
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="min-w-0 max-w-[180px]">
+            <div class="font-bold text-slate-900 text-xs truncate" title="${esc(p.visitorName)}">${esc(p.visitorName || 'Unknown Visitor')}</div>
+            <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">${esc(p.contactNumber || 'No contact')}</div>
           </div>
-        </td>`;
-      tr.querySelector('[data-act="card"]').addEventListener('click', () => openCard(p));
+        </td>
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="min-w-0 max-w-[170px]">
+            <div class="font-mono font-bold text-slate-900 text-xs tracking-wide truncate">${esc(p.plateNumber || 'No Plate')}</div>
+            <div class="text-[11px] text-slate-500 font-normal truncate mt-0.5">${esc(p.vehicleModel || 'Visitor Vehicle')}</div>
+          </div>
+        </td>
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="min-w-0 max-w-[180px]">
+            <div class="font-bold text-slate-900 text-xs truncate" title="${esc(p.personToVisit)}">Visiting ${esc(p.personToVisit || 'Campus')}</div>
+            <div class="text-[11px] text-slate-500 font-normal truncate mt-0.5" title="${esc(p.purposeOfVisit)}">${esc(p.purposeOfVisit || 'General Visit')}</div>
+          </div>
+        </td>
+        <td class="py-2.5 px-3.5 align-middle max-w-[190px]">
+          ${itemsInline(p.items)}
+        </td>
+        <td class="py-2.5 px-3.5 align-middle whitespace-nowrap">
+          <div class="text-xs text-slate-700 font-medium">In: ${formatTime(p.entryTime)}</div>
+          <div class="text-[11px] text-slate-400 font-mono mt-0.5">Out: ${formatTime(p.exitTime)}</div>
+        </td>
+        <td class="py-2.5 px-3.5 align-middle text-right pr-4">
+          <div class="flex items-center justify-end gap-1.5">
+            <button type="button" data-act="card" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center gap-1 cursor-pointer" title="View Pass QR">
+              <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              <span>View Pass</span>
+            </button>
+            ${canRevoke ? `
+              <button type="button" data-act="revoke" class="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1 cursor-pointer" title="Cancel visitor pass">
+                <svg class="w-3.5 h-3.5 text-rose-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                </svg>
+                <span>Cancel Pass</span>
+              </button>
+            ` : ''}
+          </div>
+        </td>
+      `;
+
+      // Clicking row opens card unless clicking button
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('button') || e.target.closest('a')) return;
+        openCard(p);
+      });
+
+      const cardBtn = tr.querySelector('[data-act="card"]');
+      if (cardBtn) cardBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openCard(p);
+      });
+
       const revokeBtn = tr.querySelector('[data-act="revoke"]');
-      if (revokeBtn) revokeBtn.addEventListener('click', () => revoke(p));
+      if (revokeBtn) revokeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        revoke(p);
+      });
+
       body.appendChild(tr);
     });
   }
@@ -301,15 +428,15 @@
   async function revoke(p) {
     const confirmed = window.SPAlert
       ? await SPAlert.confirm({
-          title: 'Revoke Day Pass?',
+          title: 'Cancel Visitor Pass?',
           text: p.isInside
             ? `${p.visitorName} (${p.plateNumber}) is on campus now. Revoking pass ${p.passCode} opens a security hold, but the visitor is still allowed to leave. Continue?`
-            : `Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})? The QR code will be rejected immediately at the gate.`,
-          confirmText: 'Revoke Pass',
+            : `Cancel visitor pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})? The QR code will be rejected immediately at the gate.`,
+          confirmText: 'Cancel Pass',
           icon: 'warning',
           isDanger: true
         })
-      : confirm(`Revoke day pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})?\n\nThe QR will be rejected at the gate.`);
+      : confirm(`Cancel visitor pass ${p.passCode} for ${p.visitorName} (${p.plateNumber})?\n\nThe QR will be rejected at the gate.`);
     if (!confirmed) return;
     try {
       const res = await ApiClient.revokeVisitorPass(p.id);
@@ -590,6 +717,7 @@
     if (sInput) {
       sInput.addEventListener('input', (e) => {
         state.search = e.target.value;
+        state.page = 1;
         render();
       });
     }
@@ -599,6 +727,7 @@
     if (stFilter) {
       stFilter.addEventListener('change', (e) => {
         state.status = e.target.value;
+        state.page = 1;
         render();
       });
     }
@@ -614,6 +743,7 @@
     if (vDate) {
       vDate.addEventListener('change', () => {
         state.timeframe = 'custom';
+        state.page = 1;
         const tf = $('visitorTimeframeFilter');
         if (tf) tf.value = 'custom';
         const pickerWrap = $('visitorDatePickerWrapper');

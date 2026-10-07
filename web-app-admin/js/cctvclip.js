@@ -72,7 +72,8 @@
     close();
     const info = describe(d);
     overlay = document.createElement('div');
-    overlay.className = 'fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-900/70';
+    overlay.id = 'spClipOverlay';
+    overlay.className = 'fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-900/70';
     overlay.innerHTML = `
       <div class="w-full max-w-xl bg-white rounded-lg shadow-xl border border-slate-200 overflow-hidden" role="dialog" aria-modal="true" aria-label="CCTV clip">
         <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">

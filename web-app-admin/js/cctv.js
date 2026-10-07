@@ -63,7 +63,7 @@
       timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
     }).formatToParts(date).forEach(p => { parts[p.type] = p.value; });
-    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} PST`;
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} PHT`;
   }
 
   const clocks = new Set();
@@ -83,7 +83,7 @@
     const clip = options.clip || null;
     const sources = clip ? clip.sources.slice() : [VIDEO_SRC];
     const clipSeconds = clip ? (clip.seconds || 5) : 0;
-    const badge = clip ? 'REC' : 'LIVE';
+    const badge = clip ? 'REC' : 'DEMO';
 
     host.innerHTML = `
       <div class="sp-cctv" role="img" aria-label="Simulated ${clip ? 'recorded CCTV clip' : 'live CCTV feed'}, ${camera}">
@@ -158,7 +158,5 @@
 
   window.SPCctv = { mount, manilaTimestamp };
 
-  document.addEventListener('DOMContentLoaded', () => {
-    mount(document.getElementById('dashboardCctvMount'), { camera: 'CAM 01 (MAIN GATE)', lane: 'INGRESS MONITOR - LANE 1' });
-  });
 })();
+

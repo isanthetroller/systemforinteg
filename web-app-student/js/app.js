@@ -267,6 +267,7 @@
     const strikes = data.me.summary.strikes + data.me.summary.banned;
     $('strikesBadge').textContent = data.me.summary.banned ? '!' : String(data.me.summary.strikes);
     $('strikesBadge').hidden = strikes === 0;
+    $('strikesBadge').classList.toggle('is-blocked', Boolean(data.me.summary.banned));
     renderAlerts();
     renderPass();
     renderActivity();
@@ -328,6 +329,7 @@
     }
     const v = data.vehicles[data.selected];
     const st = vehicleStanding(v);
+    const qrReady = Boolean(v.qrPayload);
     const chips = data.vehicles.length > 1
       ? `<div class="chips" role="group" aria-label="Choose vehicle">${data.vehicles.map((x, i) =>
           `<button type="button" class="chip" data-index="${i}" aria-pressed="${i === data.selected}">${esc(x.plateNumber)}</button>`).join('')}</div>`
@@ -337,7 +339,7 @@
       ? `<div class="notice bad">This vehicle is being <strong>held at the gate</strong> (${esc(flags[0].gatePoint)}). If you did not authorize this, contact the guard or the Campus Security Office right away. See the <strong>Activity</strong> tab.<div class="alert-clip">${clipButton({ logId: flags[0].logId, plate: flags[0].plateNumber, action: '', gatePoint: flags[0].gatePoint, loggedAt: flags[0].reportedAt }, 'Watch gate clip', 'danger')}</div></div>`
       : '';
     const blockNotice = v.isBanned
-      ? `<div class="notice bad">Your vehicle reached ${STRIKE_LIMIT} strikes or received a violation and is banned from entering campus. Go to the Campus Security Office to settle it. See the <strong>Strikes</strong> tab for details.</div>`
+      ? `<div class="notice bad">Your vehicle reached ${STRIKE_LIMIT} strikes or received a violation and is banned from entering campus. Go to the Campus Security Office to settle it. See the <strong>Warnings</strong> tab for details.</div>`
       : v.registrationStatus === 'Suspended'
         ? '<div class="notice bad">Your registration is suspended. Please visit the Campus Security Office.</div>'
         : v.passExpired
@@ -349,34 +351,38 @@
       <article class="card pass" aria-label="Campus pass for ${esc(v.plateNumber)}">
         <div class="pass-banner ${st.cls}"><span>${esc(st.label)}</span><span>${(v.status || '').toLowerCase().includes('inside') ? 'ON CAMPUS' : 'OFF CAMPUS'}</span></div>
         <div class="pass-body">
+          <div class="pass-kind">${v.isVip ? 'VIP vehicle pass' : 'Campus vehicle pass'}</div>
           <span class="plate">${esc(v.plateNumber)}</span>
           <div class="pass-vehicle">${esc(v.makeModelColor || v.vehicleType || '')}</div>
-          <button type="button" id="passQr" class="pass-qr ${st.blocked ? 'dim' : ''}" aria-label="Show QR full screen">
+          <button type="button" id="passQr" class="pass-qr ${st.blocked ? 'dim' : ''}" aria-label="Show QR full screen" ${qrReady ? '' : 'disabled'}>
+            ${qrReady ? '' : '<span class="pass-qr-empty">Pass unavailable<span>Please contact the Security Office.</span></span>'}
             ${st.blocked ? `<span class="pass-qr-stamp"><span>${v.isBanned ? 'BANNED' : v.passExpired ? 'EXPIRED' : 'SUSPENDED'}</span></span>` : ''}
           </button>
           <div class="pass-id">${esc(v.passId || '')}</div>
+          <div class="pass-actions">
+            <button type="button" class="btn btn-gold" data-action="zoom" ${qrReady ? '' : 'disabled'}>Show at Gate</button>
+            <button type="button" class="btn btn-outline" data-action="save" ${qrReady ? '' : 'disabled'}>Save Image</button>
+          </div>
           <dl class="pass-meta">
             <div><dt>Valid until</dt><dd>${esc(fmtDate(v.passValidUntil))}</dd></div>
             <div><dt>Sticker year</dt><dd>${esc(v.stickerYear || '—')}</dd></div>
-            <div><dt>Strikes</dt><dd>${v.isBanned ? 'Banned' : `${v.warningCount} of ${STRIKE_LIMIT}`}</dd></div>
+            <div><dt>Warning count</dt><dd>${v.isBanned ? 'Banned' : v.isVip ? 'Not applied to VIP' : `${v.warningCount} of ${STRIKE_LIMIT}`}</dd></div>
             <div><dt>Campus status</dt><dd>${(v.status || '').toLowerCase().includes('inside') ? '<span class="status-on">On Campus</span>' : '<span class="status-off">Outside Campus</span>'}</dd></div>
           </dl>
         </div>
-        <div class="pass-actions">
-          <button type="button" class="btn btn-gold" data-action="zoom">Show at Gate</button>
-          <button type="button" class="btn btn-outline" data-action="save">Save Image</button>
-        </div>
       </article>
-      ${flagNotice}${blockNotice}
+      <div class="pass-support">${flagNotice}${blockNotice}
+      <div class="card gate-help"><h2 class="card-title">At the gate</h2><ol><li><span>1</span><div><strong>Open your pass</strong><p>Tap Show at Gate to make the QR code larger.</p></div></li><li><span>2</span><div><strong>Show it to the guard</strong><p>Keep your screen bright enough to scan.</p></div></li><li><span>3</span><div><strong>${v.isVip ? 'Wait for approval' : 'Confirm the driver'}</strong><p>${v.isVip ? 'The guard checks your pass before entry or exit.' : 'The guard checks the driver before entry or exit.'}</p></div></li></ol></div>
       <div class="card">
         <h2 class="card-title">Authorized drivers</h2>
         <ul class="drivers">
           ${(v.authorizedDrivers || []).map(d => `
             <li><span class="avatar">${esc(initials(d.fullName))}</span>
-              <div><div class="name">${esc(d.fullName)}</div><div class="sub">${esc(d.relationship || '')}${d.licenseNo && d.licenseNo !== 'N/A' ? ' · Lic. ' + esc(d.licenseNo) : ''}</div></div></li>`).join('')}
+              <div><div class="name">${esc(d.fullName)}</div><div class="sub">${esc(d.relationship || '')}${d.licenseNo && d.licenseNo !== 'N/A' ? ' · License ' + esc(d.licenseNo) : ''}</div></div></li>`).join('')}
         </ul>
-        <p class="hint">Only these people may drive this vehicle through the gate. Changes are made at the Security Office.</p>
-      </div>`;
+        ${(v.authorizedDrivers || []).length ? '' : '<p class="hint">No drivers are listed. Visit the Security Office to update this vehicle.</p>'}
+        <p class="hint">${v.isVip ? 'VIP passes do not need a driver check. Vehicle changes are made at the Security Office.' : 'Only these people may drive this vehicle through the gate. Changes are made at the Security Office.'}</p>
+      </div></div>`;
 
     if (typeof QRCode !== 'undefined' && v.qrPayload) {
       new QRCode($('passQr'), { text: v.qrPayload, width: 216, height: 216, colorDark: '#0F172A', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
@@ -499,7 +505,7 @@
           <li>
             <div class="row1"><span class="type">${esc(a.reason)}</span><span class="date">${esc(fmtDateTime(a.reportedAt))}</span></div>
             <div class="desc">${esc(a.plateNumber)} · ${esc(a.gatePoint)}</div>
-            <span class="badge ${a.status === 'Held' ? 'pending' : esc(a.status.toLowerCase())}">${a.status === 'Held' ? 'ACTIVE · HELD' : esc(a.status)}</span>
+            <span class="badge ${a.status === 'Held' ? 'held' : esc(a.status.toLowerCase())}">${a.status === 'Held' ? 'ACTIVE · HELD' : esc(a.status)}</span>
             <span class="badge dismissed">${esc(a.caseNumber)}</span>
             ${a.resolvedAt ? `<div class="desc" style="color:var(--muted)">Closed ${esc(fmtDateTime(a.resolvedAt))}</div>` : ''}
             <div class="tl-actions">${clipButton({ logId: a.logId, plate: a.plateNumber, action: '', gatePoint: a.gatePoint, loggedAt: a.reportedAt }, 'Watch gate clip', 'danger')}</div>
@@ -563,12 +569,12 @@
             <span class="badge ${esc(r.status.toLowerCase())}">${esc(r.status)}</span>
             ${r.resolutionNotes ? `<div class="desc" style="color:var(--muted)">${esc(r.resolutionNotes)}</div>` : ''}
           </li>`).join('')}</ul>`
-      : '<p class="empty" style="padding:12px 0">No warnings or violations. Keep it up!</p>';
+      : '<p class="empty" style="padding:12px 0">No warnings or violations recorded.</p>';
     const anyBanned = data.vehicles.some(v => v.isBanned);
 
     $('tabStrikes').innerHTML = `
       ${anyBanned ? '<div class="notice bad">A vehicle is banned. Visit the Campus Security Office to resolve the violation; the ban and your strikes are cleared once it is resolved.</div>' : ''}
-      <div class="card"><h2 class="card-title">Strike standing</h2>${standing || '<p class="hint">No vehicles.</p>'}
+      <div class="card"><h2 class="card-title">Warning count</h2>${standing || '<p class="hint">No vehicles.</p>'}
         <p class="hint">Warnings and overnight / after-curfew parking each add one strike. ${STRIKE_LIMIT} strikes = automatic ban.</p></div>
       <div class="card"><h2 class="card-title">Warnings &amp; violations</h2>${history}</div>`;
   }

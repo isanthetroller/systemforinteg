@@ -17,6 +17,7 @@
     'Invalid / Revoked QR Pass',
     'Security Officer Intervention'
   ];
+  const DENY_LABELS = ['Driver is not allowed', 'Plate does not match the vehicle', 'Parking sticker has expired', 'QR pass is invalid or cancelled', 'Stopped by a security officer'];
 
   const gate = {
     mode: readMode(),
@@ -56,16 +57,14 @@
     document.querySelectorAll('#gateModeToggle .gate-mode-btn').forEach(btn => {
       const active = btn.dataset.mode === gate.mode;
       btn.setAttribute('aria-checked', active ? 'true' : 'false');
-      btn.className = 'gate-mode-btn px-4 py-2 rounded-md text-xs font-extrabold tracking-wide transition-colors cursor-pointer ' + (active
-        ? (gate.mode === 'Ingress' ? 'bg-ncst-green text-white shadow' : 'bg-ncst-navy text-white shadow')
-        : 'text-slate-600 hover:text-slate-900');
+      btn.className = 'gate-mode-btn' + (btn.classList.contains('hidden') ? ' hidden' : '');
     });
     if (gate.cctv) {
-      gate.cctv.setLane(gate.mode === 'Ingress' ? 'INGRESS MONITOR - LANE 1' : 'EGRESS MONITOR - LANE 2');
+      gate.cctv.setLane(gate.mode === 'Ingress' ? 'ENTRY GATE - LANE 1' : 'EXIT GATE - LANE 2');
     }
     const btn = $('gateVerifyBtn');
     if (btn) {
-      btn.textContent = gate.mode === 'Ingress' ? 'Verify Entry' : 'Verify Exit';
+      btn.textContent = gate.mode === 'Ingress' ? 'Check Entry' : 'Check Exit';
       if (gate.mode === 'Ingress') {
         btn.classList.remove('bg-ncst-navy', 'hover:bg-ncst-navyDark');
         btn.classList.add('bg-ncst-green', 'hover:bg-ncst-greenDark');
@@ -74,6 +73,7 @@
         btn.classList.add('bg-ncst-navy', 'hover:bg-ncst-navyDark');
       }
     }
+    $('gateModeHint').textContent = gate.mode === 'Ingress' ? 'Checking vehicles at the entry gate' : 'Checking vehicles at the exit gate';
   }
 
   function setMode(mode) {
@@ -85,7 +85,7 @@
     if (gate.result) {
       resetResult();
       SP.showToast(`Switched to ${mode === 'Ingress' ? 'ENTRY' : 'EXIT'} mode. Scan again.`);
-    }
+    } else renderIdle();
   }
 
   /* ------------------------------------------------------------------------
@@ -105,7 +105,7 @@
       gate.result = await ApiClient.verifyPass({ qrCode: value }, gate.mode);
       if (document.body.classList.contains('role-guard2') && gate.result && gate.result.visitor) {
         gate.result = null;
-        renderError('Visitor passes cannot be processed at Guard 2 / Gate 2 (Exit). Guard 2 is dedicated to Registered Student/Faculty Vehicle QR Exit scans.');
+        renderError('Gate 2 handles registered student and staff vehicles only. Use the visitor gate for visitor passes.');
         return;
       }
       autoSelectDriver();
@@ -142,27 +142,30 @@
      Result rendering
      ------------------------------------------------------------------------ */
   function renderIdle() {
+    setCheckStatus('Ready to check', 'ready');
     const dir = gate.mode === 'Ingress' ? 'entry' : 'exit';
     $('gateResult').innerHTML = `
       <div class="h-full min-h-[320px] flex flex-col items-center justify-center text-center p-8 text-slate-400">
         <svg class="w-12 h-12 mb-3 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/>
         </svg>
-        <p class="text-sm font-bold text-slate-500">Ready for ${dir} verification</p>
-        <p class="text-xs mt-1">Scan a pass or type a plate number.</p>
+        <p class="text-sm font-bold text-slate-500">Waiting for an ${dir} check</p>
+        <p class="text-xs mt-1">Scan a pass or type a plate number above.</p>
       </div>`;
   }
 
   function renderLoading(value) {
+    setCheckStatus('Checking…', 'checking');
     $('gateResult').innerHTML = `
       <div class="min-h-[320px] flex flex-col items-center justify-center p-8 text-slate-500" role="status" aria-live="polite">
         <div class="w-8 h-8 border-4 border-slate-200 border-t-ncst-navy rounded-full animate-spin mb-3"></div>
-        <p class="text-xs font-semibold">Verifying pass&hellip;</p>
+        <p class="text-xs font-semibold">Checking pass&hellip;</p>
         <p class="text-[10px] font-mono text-slate-400 mt-1 max-w-full truncate">${esc(value.slice(0, 60))}</p>
       </div>`;
   }
 
   function renderError(message) {
+    setCheckStatus('Could not check', 'blocked');
     $('gateResult').innerHTML = `
       <div class="p-5 space-y-3">
         <div class="rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight px-4 py-3 text-sm font-semibold text-ncst-crimson" role="alert">${esc(message)}</div>
@@ -172,20 +175,28 @@
   }
 
   const RESULT_LABELS = {
-    VALID: 'Signed pass', LEGACY: 'Legacy pass', MANUAL: 'Manual lookup', FORGED: 'Forged / tampered',
-    REVOKED: 'Revoked pass', EXPIRED: 'Expired pass', EXPIRED_TEMP: 'Expired day pass', NOT_YET_VALID: 'Pass not yet valid',
-    BANNED: 'Banned vehicle', SUSPENDED: 'Suspended registration', NOT_FOUND: 'Not found'
+    VALID: 'Valid QR pass', LEGACY: 'Older pass', MANUAL: 'Plate number check', FORGED: 'Fake or changed pass',
+    REVOKED: 'Cancelled pass', EXPIRED: 'Expired pass', EXPIRED_TEMP: 'Expired day pass', NOT_YET_VALID: 'Pass not active yet',
+    BANNED: 'Banned vehicle', SUSPENDED: 'Registration on hold', NOT_FOUND: 'Not found'
   };
 
+  function setCheckStatus(text, state) {
+    const status = $('gateCheckStatus');
+    if (!status) return;
+    status.textContent = text;
+    status.dataset.state = state;
+  }
+
   function bannerClasses(severity) {
-    if (severity === 'ok') return 'bg-ncst-green text-white';
-    if (severity === 'warning') return 'bg-ncst-gold text-slate-900';
-    return 'bg-ncst-crimson text-white';
+    if (severity === 'ok') return 'sp-gate-banner sp-gate-banner-ok';
+    if (severity === 'warning') return 'sp-gate-banner sp-gate-banner-warning';
+    return 'sp-gate-banner sp-gate-banner-blocked';
   }
 
   function renderResult() {
     const r = gate.result;
     const box = $('gateResult');
+    setCheckStatus(r.accepted ? 'Review before saving' : 'Vehicle blocked', r.accepted ? 'review' : 'blocked');
     const dirLabel = r.gateType === 'Ingress' ? 'ENTRY' : 'EXIT';
 
     const warnings = (r.warnings || []).map(w => `
@@ -216,9 +227,9 @@
             <button type="button" data-act="reset" class="ml-auto px-3 py-2 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">Cancel</button>
           </div>
           <div id="gateDenyPanel" class="hidden rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight/70 p-3 space-y-2">
-            <label for="gateDenyReason" class="block text-[11px] font-bold text-slate-700">Reason for denial</label>
+            <label for="gateDenyReason" class="block text-[11px] font-bold text-slate-700">Why are you blocking this vehicle?</label>
             <select id="gateDenyReason" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs">
-              ${DENY_REASONS.map(x => `<option>${esc(x)}</option>`).join('')}
+              ${DENY_REASONS.map((x, i) => `<option value="${esc(x)}">${esc(DENY_LABELS[i])}</option>`).join('')}
             </select>
             <label for="gateDenyNotes" class="block text-[11px] font-bold text-slate-700">Notes (optional)</label>
             <textarea id="gateDenyNotes" rows="2" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs" placeholder="What did you observe?"></textarea>
@@ -312,7 +323,7 @@
     const drivers = v.authorizedDrivers || [];
     const ownerPhoto = v.ownerPhoto || v.ownerPhotoUrl;
     const vipBanner = v.isVip
-      ? `<div class="flex items-center gap-2 rounded-lg bg-ncst-gold text-slate-900 px-3 py-2"><span class="px-1.5 py-0.5 rounded bg-slate-900 text-ncst-gold text-[10px] font-extrabold tracking-widest">VIP</span><span class="text-xs font-bold">VIP pass &mdash; wave through. No driver check needed; the passage is still logged.</span></div>`
+      ? `<div class="sp-vip-gate-note"><span class="px-1.5 py-0.5 rounded bg-white/70 text-ncst-navy text-[10px] font-extrabold tracking-widest">VIP</span><span class="text-xs font-bold">VIP pass: no driver check required. Allow passage only when the pass check is approved. Entry and exit are recorded.</span></div>`
       : '';
 
     const driverCards = drivers.map(d => {
@@ -340,7 +351,7 @@
           ${photoHtml(v.vehiclePhoto || v.vehiclePicture, v.plateNumber, 'w-20 h-14')}
           <div class="min-w-0 flex-1">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-base tracking-wider">${esc(v.plateNumber)}</span>
+              <span class="sp-plate text-base tracking-wider">${esc(v.plateNumber)}</span>
               ${standing}
               <span class="text-[10px] font-semibold text-slate-500">${esc(v.registrationStatus || '')} &middot; ${esc(v.status || '')}</span>
             </div>
@@ -350,7 +361,7 @@
           </div>
         </div>
         <div>
-          <div class="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Authorized drivers ${r.accepted ? '&mdash; select who is driving' : ''}</div>
+          <div class="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Allowed drivers ${r.accepted ? '&mdash; select who is driving' : ''}</div>
           <div role="radiogroup" aria-label="Driver behind the wheel" class="grid grid-cols-1 sm:grid-cols-2 gap-2">${driverCards || '<p class="text-xs text-slate-400">No drivers on record.</p>'}</div>
         </div>
       </div>`;
@@ -363,7 +374,7 @@
           ${photoHtml('', v.visitorName)}
           <div class="min-w-0 flex-1 text-xs space-y-0.5">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-sm tracking-wider">${esc(v.plateNumber)}</span>
+              <span class="sp-plate text-sm tracking-wider">${esc(v.plateNumber)}</span>
               <span class="px-1.5 py-0.5 rounded bg-ncst-navy text-white text-[10px] font-extrabold">VISITOR DAY PASS</span>
             </div>
             <div class="text-sm font-bold text-slate-900 mt-1">${esc(v.visitorName)}</div>
@@ -489,11 +500,10 @@
       const exit = /Exit/.test(l.action || '');
       const chip = denied ? 'bg-ncst-crimsonLight text-ncst-crimson border-ncst-crimson/30' : (exit ? 'bg-ncst-navy/10 text-ncst-navy border-ncst-navy/20' : 'bg-ncst-greenLight text-ncst-greenDark border-ncst-green/30');
       return `
-        <li class="px-4 py-2 flex items-center gap-3">
-          <span class="px-1.5 py-0.5 rounded border text-[10px] font-bold whitespace-nowrap ${chip}">${esc(l.action)}</span>
-          <span class="font-mono font-bold text-slate-800">${esc(l.plateNumber)}</span>
-          <span class="text-slate-500 truncate flex-1">${esc(l.driverName || '')}</span>
-          <span class="text-[10px] text-slate-400 whitespace-nowrap">${esc(l.timestamp || '')}</span>
+        <li class="sp-gate-recent-row">
+          <div><span class="sp-plate">${esc(l.plateNumber)}</span><span class="sp-gate-recent-action rounded border ${chip}">${denied ? (exit ? 'Exit blocked' : 'Entry blocked') : (exit ? 'Exit saved' : 'Entry saved')}</span></div>
+          <p>${esc(l.driverName || 'Driver not recorded')}</p>
+          <time>${esc(l.timestamp || '')}</time>
         </li>`;
     }).join('');
   }
@@ -535,7 +545,7 @@
         () => {}
       );
       gate.cameraOn = true;
-      $('gateCameraBtn').textContent = 'Stop Camera';
+      $('gateCameraBtn').textContent = 'Stop Scanning';
     } catch (err) {
       $('gateCameraBox').classList.add('hidden');
       cameraError(err && err.message ? err.message : 'Camera unavailable. Check browser permissions.');
@@ -548,7 +558,7 @@
     }
     gate.cameraOn = false;
     if ($('gateCameraBox')) $('gateCameraBox').classList.add('hidden');
-    if ($('gateCameraBtn')) $('gateCameraBtn').textContent = 'Start Camera';
+    if ($('gateCameraBtn')) $('gateCameraBtn').textContent = 'Scan with Camera';
   }
 
   function pauseCamera() {

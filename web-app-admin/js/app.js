@@ -19,11 +19,16 @@ document.addEventListener('DOMContentLoaded', () => {
       role: 'All',
       category: 'All',
       location: 'All',
-      status: 'All'
+      status: 'All',
+      page: 1,
+      pageSize: 10
     },
     auditFilter: {
       search: '',
       status: 'All',
+      eventType: 'All',
+      gate: 'All',
+      dateRange: 'All',
       page: 1,
       pageSize: 10
     },
@@ -120,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Flagged & Blocked
   const incidentsTableBody = document.getElementById('incidentsTableBody');
 
-  // Audit Logs
+  // Gate Records
   const fullAuditSearchInput = document.getElementById('fullAuditSearchInput');
   const auditFilterPills = document.querySelectorAll('.audit-filter-pill');
   const fullAuditTableBody = document.getElementById('fullAuditTableBody');
@@ -134,10 +139,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const auditSummaryInside = document.getElementById('auditSummaryInside');
   const auditSummaryExited = document.getElementById('auditSummaryExited');
   const auditSummaryBlocked = document.getElementById('auditSummaryBlocked');
+  const auditSummaryBlockedCard = document.getElementById('auditSummaryBlockedCard');
+  const auditSummaryBlockedSub = document.getElementById('auditSummaryBlockedSub');
   const auditPillCountAll = document.getElementById('auditPillCountAll');
   const auditPillCountInside = document.getElementById('auditPillCountInside');
   const auditPillCountExited = document.getElementById('auditPillCountExited');
   const auditPillCountBlocked = document.getElementById('auditPillCountBlocked');
+
+  // Secondary Filters
+  const auditEventTypeFilter = document.getElementById('auditEventTypeFilter');
+  const auditGateFilter = document.getElementById('auditGateFilter');
+  const auditDateFilter = document.getElementById('auditDateFilter');
+  const auditResetFiltersBtn = document.getElementById('auditResetFiltersBtn');
 
   // Registration Form
   const vehicleForm = document.getElementById('vehicleRegistrationForm');
@@ -343,14 +356,14 @@ document.addEventListener('DOMContentLoaded', () => {
       appSidebar.classList.add('collapsed');
       if (sidebarExpandBtn) {
         sidebarExpandBtn.classList.remove('hidden');
-        sidebarExpandBtn.classList.add('inline-flex');
+        sidebarExpandBtn.classList.add('flex');
       }
       try { localStorage.setItem('ncst_sidebar_collapsed', 'true'); } catch (e) {}
     } else {
       appSidebar.classList.remove('collapsed');
       if (sidebarExpandBtn) {
         sidebarExpandBtn.classList.add('hidden');
-        sidebarExpandBtn.classList.remove('inline-flex');
+        sidebarExpandBtn.classList.remove('flex');
       }
       try { localStorage.setItem('ncst_sidebar_collapsed', 'false'); } catch (e) {}
     }
@@ -399,7 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (kpiInside) kpiInside.textContent = insideCount;
     if (kpiBlocked) kpiBlocked.textContent = blockedCount;
-    if (kpiTotalLogs) kpiTotalLogs.textContent = entranceLogs.length;
+    if (kpiTotalLogs) kpiTotalLogs.textContent = todaysGateLogs().filter(log => entryPassage(log) && !deniedPassage(log)).length;
     if (kpiRegistered) kpiRegistered.textContent = state.vehicles.length;
 
     if (onCampusSidebarCount) onCampusSidebarCount.textContent = insideCount;
@@ -409,16 +422,18 @@ document.addEventListener('DOMContentLoaded', () => {
       tabCountExit.textContent = exitLogs.length;
       const hasBlockedExit = exitLogs.some(l => l.action === 'Exit Denied' || (l.notes && l.notes.toLowerCase().includes('exit denied')));
       if (hasBlockedExit) {
-        tabCountExit.className = "px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
+        tabCountExit.className = "px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
-        tabCountExit.className = "px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200";
+        tabCountExit.className = "px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200";
       }
     }
 
     if (flaggedSidebarCount) {
       flaggedSidebarCount.textContent = activeIncidents;
+      flaggedSidebarCount.dataset.empty = String(activeIncidents === 0);
+      flaggedSidebarCount.title = activeIncidents ? `${activeIncidents} cases need review` : 'No cases need review';
       if (activeIncidents > 0) {
-        flaggedSidebarCount.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-500 text-white shadow-xs";
+        flaggedSidebarCount.className = "sp-sidebar-count";
       } else {
         flaggedSidebarCount.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-white/15 text-white border border-white/20 shadow-2xs";
       }
@@ -442,195 +457,116 @@ document.addEventListener('DOMContentLoaded', () => {
     Chart.defaults.font.family = '"Plus Jakarta Sans", system-ui, sans-serif';
     Chart.defaults.font.size = 11;
     Chart.defaults.color = '#64748B';
-    Chart.defaults.plugins.tooltip.backgroundColor = '#0F172A';
+    Chart.defaults.plugins.tooltip.backgroundColor = '#172747';
+    Chart.defaults.animation.duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 450;
     Chart.defaults.plugins.tooltip.padding = 8;
     Chart.defaults.plugins.tooltip.cornerRadius = 6;
     Chart.defaults.plugins.tooltip.titleFont = { size: 11, weight: 'bold' };
     Chart.defaults.plugins.tooltip.bodyFont = { size: 11 };
+    Chart.defaults.resizeDelay = 200; // Debounce chart redraws during layout transitions to eliminate lag
   }
 
-  // 3.1 Gate Activity Trend Chart (Hourly Today / By Gate)
+  // Dashboard dates follow the campus timezone, regardless of the viewer's device.
+  const campusDateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const campusHourFormatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', hourCycle: 'h23' });
+  function dashboardLogDate(log) {
+    if (log.loggedAt) {
+      let value = String(log.loggedAt).replace(' ', 'T');
+      if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(value)) value += '+08:00';
+      const date = new Date(value);
+      if (!isNaN(date.getTime())) return date;
+    }
+    // Legacy display records retain their date; they must never all become today's records.
+    const date = getLogDate(log);
+    if (!date) return null;
+    const time = String(log.timestamp || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+    if (time) {
+      const parts = campusDateFormatter.formatToParts(date);
+      const part = type => parts.find(p => p.type === type).value;
+      const hour = (Number(time[1]) % 12) + (time[3].toUpperCase() === 'PM' ? 12 : 0);
+      return new Date(`${part('year')}-${part('month')}-${part('day')}T${String(hour).padStart(2, '0')}:${time[2]}:00+08:00`);
+    }
+    return date;
+  }
+  function todaysGateLogs() {
+    const today = campusDateFormatter.format(new Date());
+    return state.auditLogs.filter(log => {
+      const date = dashboardLogDate(log);
+      return date && campusDateFormatter.format(date) === today && /entry|exit|ingress|egress/i.test(log.action || '');
+    });
+  }
+  const deniedPassage = log => /denied|blocked|rejected/i.test(log.action || '');
+  const entryPassage = log => /entry|ingress/i.test(log.action || '');
+
+  // 3.1 Today's successful traffic, with denied attempts kept separate.
   function renderActivityTrendChart(mode = trendViewMode) {
     if (typeof Chart === 'undefined' || !gateActivityChartCanvas) return;
-
-    if (charts.activityTrend) {
-      charts.activityTrend.destroy();
-      charts.activityTrend = null;
+    const logs = todaysGateLogs();
+    const labels = mode === 'hourly'
+      ? Array.from({length:24}, (_, h) => `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`)
+      : ['Gate 1', 'Gate 2', 'Gate 3'];
+    const entries = labels.map(() => 0), exits = labels.map(() => 0);
+    logs.filter(log => !deniedPassage(log)).forEach(log => {
+      const match = String(log.gatePoint || '').match(/Gate\s*([123])/i);
+      const index = mode === 'hourly' ? Number(campusHourFormatter.format(dashboardLogDate(log))) : (match ? Number(match[1]) - 1 : -1);
+      if (index >= 0 && index < labels.length) (entryPassage(log) ? entries : exits)[index]++;
+    });
+    const approved = logs.filter(log => !deniedPassage(log));
+    const totals = {
+      dashboardEntries: approved.filter(entryPassage).length,
+      dashboardExits: approved.filter(log => !entryPassage(log)).length,
+      dashboardDenied: logs.filter(deniedPassage).length
+    };
+    Object.entries(totals).forEach(([id, value]) => { const element = document.getElementById(id); if (element) element.textContent = value; });
+    gateActivityChartCanvas.setAttribute('aria-label', `${mode === 'hourly' ? 'Hourly' : 'By gate'} activity today: ${totals.dashboardEntries} approved entries, ${totals.dashboardExits} approved exits, ${totals.dashboardDenied} denied attempts.`);
+    activityTrendHourlyBtn?.setAttribute('aria-pressed', String(mode === 'hourly'));
+    activityTrendGateBtn?.setAttribute('aria-pressed', String(mode !== 'hourly'));
+    const data = {
+      labels,
+      datasets: [
+        {label:'Entries', data:entries, borderColor:'#253475', backgroundColor:mode === 'hourly' ? '#25347514' : '#253475', fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointRadius:2, pointHoverRadius:5, borderRadius:6, maxBarThickness:42},
+        {label:'Exits', data:exits, borderColor:'#8294c5', backgroundColor:mode === 'hourly' ? '#8294c51a' : '#8294c5', fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointRadius:2, pointHoverRadius:5, borderRadius:6, maxBarThickness:42}
+      ]
+    };
+    const type = mode === 'hourly' ? 'line' : 'bar';
+    // Refresh existing charts without restarting animations during each data poll.
+    if (charts.activityTrend && charts.activityTrend.config.type === type) {
+      charts.activityTrend.data = data;
+      charts.activityTrend.update('none');
+      return;
     }
-
-    if (mode === 'hourly') {
-      const labels = ['6 AM', '7 AM', '8 AM', '9 AM', '10 AM', '11 AM', '12 PM', '1 PM', '2 PM', '3 PM', '4 PM', '5 PM'];
-      const counts = new Array(labels.length).fill(0);
-
-      state.auditLogs.forEach(log => {
-        const timePart = (log.timestamp || '').replace(/Today,\s*/i, '').trim();
-        const m = timePart.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-        if (m) {
-          let h = parseInt(m[1], 10);
-          const ampm = m[3].toUpperCase();
-          if (ampm === 'PM' && h < 12) h += 12;
-          if (ampm === 'AM' && h === 12) h = 0;
-          const idx = h - 6;
-          if (idx >= 0 && idx < counts.length) {
-            counts[idx]++;
-          }
-        }
-      });
-
-      charts.activityTrend = new Chart(gateActivityChartCanvas, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [{
-            label: 'Passages',
-            data: counts,
-            backgroundColor: '#1A3B8B',
-            borderRadius: 2,
-            barThickness: 18
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => ` ${ctx.parsed.y} passage${ctx.parsed.y === 1 ? '' : 's'} recorded`
-              }
-            }
-          },
-          scales: {
-            x: {
-              grid: { display: false },
-              ticks: { font: { size: 10 }, color: '#64748B' }
-            },
-            y: {
-              beginAtZero: true,
-              suggestedMax: 3,
-              ticks: {
-                stepSize: 1,
-                font: { size: 10, family: 'JetBrains Mono' },
-                color: '#64748B'
-              },
-              grid: { color: '#F1F5F9' }
-            }
-          }
-        }
-      });
-    } else {
-      // By Gate Mode
-      const gateCounts = {
-        'Gate 1 (Main Ingress)': 0,
-        'Gate 2 (Main Egress)': 0,
-        'Gate 3 (Motorcycle & Bike)': 0
-      };
-
-      state.auditLogs.forEach(log => {
-        const pt = log.gatePoint || '';
-        if (pt.includes('Gate 1')) gateCounts['Gate 1 (Main Ingress)']++;
-        else if (pt.includes('Gate 2')) gateCounts['Gate 2 (Main Egress)']++;
-        else if (pt.includes('Gate 3')) gateCounts['Gate 3 (Motorcycle & Bike)']++;
-      });
-
-      const labels = ['Gate 1 (Ingress)', 'Gate 2 (Egress)', 'Gate 3 (Moto/Bike)'];
-      const data = [
-        gateCounts['Gate 1 (Main Ingress)'],
-        gateCounts['Gate 2 (Main Egress)'],
-        gateCounts['Gate 3 (Motorcycle & Bike)']
-      ];
-
-      charts.activityTrend = new Chart(gateActivityChartCanvas, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [{
-            label: 'Passages Recorded',
-            data,
-            backgroundColor: '#1A3B8B',
-            borderRadius: 4,
-            barThickness: 36
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => ` ${ctx.parsed.y} recorded events`
-              }
-            }
-          },
-          scales: {
-            x: {
-              grid: { display: false },
-              ticks: { font: { size: 10 }, color: '#64748B' }
-            },
-            y: {
-              beginAtZero: true,
-              suggestedMax: 4,
-              ticks: {
-                stepSize: 1,
-                font: { size: 10, family: 'JetBrains Mono' },
-                color: '#64748B'
-              },
-              grid: { color: '#F1F5F9' }
-            }
-          }
-        }
-      });
-    }
-  }
-
-  // 3.2 Current Gate Status Donut Chart
-  function renderGateStatusChart() {
-    if (typeof Chart === 'undefined' || !gateStatusChartCanvas) return;
-
-    if (charts.gateStatus) {
-      charts.gateStatus.destroy();
-      charts.gateStatus = null;
-    }
-
-    const insideCount = state.onCampus && state.onCampus.counts
-      ? state.onCampus.counts.total
-      : (state.vehicles.filter(v => v.status === 'Inside Campus').length +
-         (state.visitors || []).filter(v => v.entryTime && !v.exitTime && (v.status === 'Active' || (v.status || '').toLowerCase().includes('inside'))).length);
-    const exitedCount = state.vehicles.filter(v => v.status === 'Exited' || v.status === 'Outside').length;
-    const activeIncidents = state.incidents.filter(i => i.status === 'Held').length;
-    const blockedCount = activeIncidents > 0 ? activeIncidents : state.vehicles.filter(v => v.status === 'Blocked / Alert').length;
-
-    if (legendInsideCount) legendInsideCount.textContent = insideCount;
-    if (legendExitedCount) legendExitedCount.textContent = exitedCount;
-    if (legendBlockedCount) legendBlockedCount.textContent = blockedCount;
-    if (donutCenterTotal) donutCenterTotal.textContent = insideCount;
-
-    charts.gateStatus = new Chart(gateStatusChartCanvas, {
-      type: 'doughnut',
-      data: {
-        labels: ['Inside Campus', 'Exited', 'Blocked / Alert'],
-        datasets: [{
-          data: [insideCount, exitedCount, blockedCount],
-          backgroundColor: ['#16A34A', '#94A3B8', '#D92128'],
-          borderWidth: 2,
-          borderColor: '#FFFFFF',
-          hoverOffset: 4
-        }]
-      },
+    charts.activityTrend?.destroy();
+    charts.activityTrend = new Chart(gateActivityChartCanvas, {
+      type, data,
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: '70%',
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => ` ${ctx.label}: ${ctx.parsed} vehicles`
-            }
-          }
+        responsive:true, maintainAspectRatio:false,
+        animation: {duration:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 450},
+        interaction:{mode:'index',intersect:false},
+        plugins:{legend:{display:true,position:'bottom',align:'start',labels:{usePointStyle:true,boxWidth:8,boxHeight:8,padding:18}},tooltip:{padding:12,cornerRadius:10}},
+        scales:{
+          x:{grid:{display:false},border:{display:false},ticks:{maxTicksLimit:8,maxRotation:0,font:{size:11}}},
+          y:{beginAtZero:true,suggestedMax:3,border:{display:false},ticks:{precision:0,maxTicksLimit:5},grid:{color:'#edf0f6'}}
         }
       }
+    });
+  }
+
+  // 3.2 Occupancy uses mutually exclusive registered / visitor counts.
+  function renderGateStatusChart() {
+    if (typeof Chart === 'undefined' || !gateStatusChartCanvas) return;
+    const registered = Number(state.onCampus?.counts?.registered ?? state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length);
+    const visitors = Number(state.onCampus?.counts?.visitors ?? (state.visitors || []).filter(v => v.entryTime && !v.exitTime && /active|inside/i.test(v.status || '')).length);
+    const total = registered + visitors;
+    if (legendInsideCount) legendInsideCount.textContent = registered;
+    if (legendExitedCount) legendExitedCount.textContent = visitors;
+    if (legendBlockedCount) legendBlockedCount.textContent = total;
+    if (donutCenterTotal) donutCenterTotal.textContent = total;
+    gateStatusChartCanvas.setAttribute('aria-label', `Campus occupancy: ${registered} registered vehicles and ${visitors} visitors, ${total} total.`);
+    const data = {labels:total ? ['Registered vehicles', 'Visitor vehicles'] : ['No vehicles on campus'],datasets:[{data:total ? [registered,visitors] : [1],backgroundColor:total ? ['#253475','#a8b6d9'] : ['#edf0f6'],borderWidth:4,borderColor:'#fff',hoverOffset:total ? 5 : 0}]};
+    if (charts.gateStatus) { charts.gateStatus.data = data; charts.gateStatus.update('none'); return; }
+    charts.gateStatus = new Chart(gateStatusChartCanvas, {
+      type:'doughnut',data,
+      options:{responsive:true,maintainAspectRatio:false,cutout:'78%',animation:{duration:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 450},plugins:{legend:{display:false},tooltip:{filter:() => registered + visitors > 0,callbacks:{label:ctx => ` ${ctx.label}: ${ctx.parsed} vehicles`}}}}
     });
   }
 
@@ -657,7 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
         datasets: [{
           label: 'Vehicles',
           data: [count4W, countMoto, countBike, countFleet],
-          backgroundColor: ['#1A3B8B', '#2B4EA2', '#475569', '#0F265C'],
+          backgroundColor: ['#253475', '#6478b5', '#a8b6d9', '#172747'],
           borderRadius: 4,
           barThickness: 24
         }]
@@ -746,69 +682,26 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    activeIncidents.forEach(inc => {
-      const card = document.createElement('div');
-      card.className = 'p-2.5 rounded-r-lg border-y border-r border-ncst-crimson/20 border-l-4 border-l-ncst-crimson bg-ncst-crimsonLight/40 hover:bg-ncst-crimsonLight/70 transition-colors';
-
-      card.innerHTML = `
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="font-mono font-bold text-xs bg-white text-slate-900 px-1.5 py-0.5 rounded border border-slate-200 shadow-xs">${escapeHtml(inc.plateNumber)}</span>
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30">HELD AT GATE</span>
-          </div>
-          <span class="text-[11px] font-mono text-slate-500">${escapeHtml(inc.timestamp.replace('Today, ', ''))}</span>
-        </div>
-        <div class="text-xs font-semibold text-ncst-crimson mt-1">${escapeHtml(inc.reason)}</div>
-        <div class="grid grid-cols-2 gap-2 mt-1 text-[11px] text-slate-600">
-          <div>Operator: <span class="font-medium text-slate-800">${escapeHtml(inc.driverName)}</span></div>
-          <div>Owner: <span class="font-medium text-slate-800">${escapeHtml(inc.ownerName)}</span></div>
-        </div>
-        <div class="mt-2 flex items-center justify-between pt-1.5 border-t border-ncst-crimson/20">
-          <span class="text-[10px] text-slate-500 font-mono">${escapeHtml(inc.caseNumber)} • ${escapeHtml(inc.gatePoint)}</span>
-          <button type="button" class="investigate-card-btn text-xs font-bold text-ncst-navy hover:underline">
-            Investigate Incident →
-          </button>
-        </div>
-      `;
-
-      card.querySelector('.investigate-card-btn').addEventListener('click', () => {
-        openIncidentDrawer(inc);
-      });
-
-      attentionPanelContent.appendChild(card);
-    });
-
-    unheldExitDeniedLogs.forEach(log => {
-      const card = document.createElement('div');
-      card.className = 'p-2.5 rounded-r-lg border-y border-r border-ncst-crimson/20 border-l-4 border-l-ncst-crimson bg-ncst-crimsonLight/40 hover:bg-ncst-crimsonLight/70 transition-colors';
-
-      card.innerHTML = `
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="font-mono font-bold text-xs bg-white text-slate-900 px-1.5 py-0.5 rounded border border-slate-200 shadow-xs">${escapeHtml(log.plateNumber)}</span>
-            <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30">EXIT BLOCKED</span>
-          </div>
-          <span class="text-[11px] font-mono text-slate-500">${escapeHtml(log.timestamp.replace('Today, ', ''))}</span>
-        </div>
-        <div class="text-xs font-semibold text-ncst-crimson mt-1">${escapeHtml(log.notes || 'Exit Denied at gate')}</div>
-        <div class="grid grid-cols-2 gap-2 mt-1 text-[11px] text-slate-600">
-          <div>Operator: <span class="font-medium text-slate-800">${escapeHtml(log.driverName)}</span></div>
-          <div>Owner: <span class="font-medium text-slate-800">${escapeHtml(log.ownerName)}</span></div>
-        </div>
-        <div class="mt-2 flex items-center justify-between pt-1.5 border-t border-ncst-crimson/20">
-          <span class="text-[10px] text-slate-500 font-mono">Held at ${escapeHtml(log.gatePoint)}</span>
-          <button type="button" class="investigate-log-btn text-xs font-bold text-ncst-navy hover:underline">
-            Inspect Gate Hold →
-          </button>
-        </div>
-      `;
-
-      card.querySelector('.investigate-log-btn').addEventListener('click', () => {
-        openAuditDrawer(log);
-      });
-
-      attentionPanelContent.appendChild(card);
-    });
+    const table = document.createElement('table');
+    table.className = 'sp-alert-table w-full text-left';
+    table.innerHTML = `<caption class="sr-only">Active security alerts and blocked exit attempts</caption>
+      <thead><tr><th scope="col">Vehicle &amp; case</th><th scope="col">Issue</th><th scope="col">People</th><th scope="col">Gate &amp; reported</th><th scope="col">Status</th><th scope="col">Action</th></tr></thead><tbody></tbody>`;
+    const body = table.querySelector('tbody');
+    const addRow = (record, incident) => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td><span class="sp-plate">${escapeHtml(record.plateNumber || 'Unknown')}</span>${incident ? `<small class="sp-cell-detail sp-case-number">${escapeHtml(record.caseNumber || 'Unassigned case')}</small>` : '<small class="sp-cell-detail">Gate event</small>'}</td>
+        <td class="sp-alert-reason">${escapeHtml(incident ? record.reason : (record.notes || 'Exit denied at gate'))}</td>
+        <td><span>${escapeHtml(record.driverName || 'Not recorded')}</span><small class="sp-cell-detail">Owner: ${escapeHtml(record.ownerName || 'Not recorded')}</small></td>
+        <td><span>${escapeHtml(formatGatePoint(record.gatePoint || 'Not recorded'))}</span><small class="sp-cell-detail">${escapeHtml(record.timestamp || 'Not recorded')}</small></td>
+        <td><span class="sp-status sp-status-danger">${incident ? 'Held at gate' : 'Exit blocked'}</span></td>
+        <td><button type="button" class="sp-review-button" aria-label="${incident ? 'Review incident for' : 'View blocked vehicle for'} ${escapeHtml(record.plateNumber || 'vehicle')}">${incident ? 'Review' : 'Details'} &rarr;</button></td>`;
+      row.querySelector('button').addEventListener('click', () => incident ? openIncidentDrawer(record) : openAuditDrawer(record));
+      body.appendChild(row);
+    };
+    activeIncidents.forEach(record => addRow(record, true));
+    unheldExitDeniedLogs.forEach(record => addRow(record, false));
+    attentionPanelContent.appendChild(table);
   }
 
   // 3.5 Bind Dashboard Chart Toggles & Links
@@ -875,9 +768,9 @@ document.addEventListener('DOMContentLoaded', () => {
   function switchGateFlowTab(tab) {
     state.gateFlowTab = tab;
     const tabs = [
-      { id: 'inside', btn: tabCurrentlyInsideBtn, pane: paneCurrentlyInside, subtext: 'Real-time campus custody: Registered vehicles, visitors, and security-held vehicles currently inside campus' },
+      { id: 'inside', btn: tabCurrentlyInsideBtn, pane: paneCurrentlyInside, subtext: 'Vehicles and visitors currently inside campus, including blocked vehicles' },
       { id: 'entrance', btn: tabEntranceBtn, pane: paneEntrance, subtext: 'Recent gate ingresses: Vehicles and visitors processed at entrance gates' },
-      { id: 'exit', btn: tabExitBtn, pane: paneExit, subtext: 'Recent gate egresses: Departed vehicles, dwell durations, and blocked or flagged exit attempts' }
+      { id: 'exit', btn: tabExitBtn, pane: paneExit, subtext: 'Recent exits, time spent inside, and blocked exit attempts' }
     ];
 
     tabs.forEach(t => {
@@ -1097,8 +990,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const holdAlertSnippet = isBlockedOrHeld ? `
         <div class="text-[10px] font-bold text-rose-700 mt-0.5 flex items-center gap-1">
           <svg class="w-3 h-3 text-rose-600 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
-          <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit attempt intercepted & blocked at gate' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
-            ${escapeHtml(isExitBlocked ? 'Exit intercepted & blocked at gate' : (hold ? hold.reason : 'Security Hold'))}
+          <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit blocked at gate' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
+            ${escapeHtml(isExitBlocked ? 'Exit blocked at gate' : (hold ? hold.reason : 'Security Hold'))}
           </span>
         </div>
       ` : '';
@@ -1118,13 +1011,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let actionBtn = `
         <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors">
-          Inspect
+          View Details
         </button>
       `;
       if (isBlockedOrHeld) {
         actionBtn = `
-          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" title="Inspect Security Hold">
-            ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'Inspect Hold'}
+          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" title="View Blocked Vehicle">
+            ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'View Block'}
           </button>
         `;
       }
@@ -1158,7 +1051,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${dwellBadge}
         </td>
         <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
-          <div>${escapeHtml(v.entryGate || 'Main Ingress')}</div>
+          <div>${escapeHtml(v.entryGate || 'Main Entry')}</div>
           <div class="text-slate-400">${escapeHtml(v.admittedBy || 'Officer')}</div>
         </td>
         <td class="py-2.5 px-3.5 text-right">
@@ -1231,8 +1124,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const holdAlertSnippet = isBlockedOrHeld ? `
         <div class="text-[10px] font-bold text-rose-700 mt-0.5 flex items-center gap-1">
           <svg class="w-3 h-3 text-rose-600 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
-          <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit attempt intercepted & blocked' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
-            ${escapeHtml(isExitBlocked ? 'Exit intercepted & blocked' : (hold ? hold.reason : 'Security Hold'))}
+          <span class="truncate max-w-[170px]" title="${escapeHtml(isExitBlocked ? 'Exit blocked' : (hold ? (hold.notes || hold.reason) : 'Security Hold'))}">
+            ${escapeHtml(isExitBlocked ? 'Exit blocked' : (hold ? hold.reason : 'Security Hold'))}
           </span>
         </div>
       ` : '';
@@ -1257,8 +1150,8 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
       if (isBlockedOrHeld) {
         actionBtn = `
-          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" title="Inspect Security Hold">
-            ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'Inspect Hold'}
+          <button type="button" class="inspect-inside-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" title="View Blocked Vehicle">
+            ${hold && hold.caseNumber ? escapeHtml(hold.caseNumber) : 'View Block'}
           </button>
         `;
       }
@@ -1388,12 +1281,12 @@ document.addEventListener('DOMContentLoaded', () => {
           ${escapeHtml(log.timestamp.replace('Today, ', ''))}${offlineChip(log)}
         </td>
         <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
-          <div>${escapeHtml(log.gatePoint)}</div>
+          <div>${escapeHtml(formatGatePoint(log.gatePoint, log.gateType))}</div>
           <div class="text-slate-400">${escapeHtml(log.guardName || 'Officer')}</div>
         </td>
         <td class="py-2.5 px-3.5 text-right">
           <button type="button" class="inspect-entrance-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors" data-id="${escapeHtml(log.id)}">
-            Inspect
+            View Details
           </button>
         </td>
       `;
@@ -1493,7 +1386,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const noteSnippet = isExitDenied ? `
-        <div class="text-[10px] font-semibold text-rose-700 mt-0.5 flex items-center gap-1 truncate max-w-[180px]" title="${escapeHtml(log.notes || 'Exit intercepted & blocked')}">
+        <div class="text-[10px] font-semibold text-rose-700 mt-0.5 flex items-center gap-1 truncate max-w-[180px]" title="${escapeHtml(log.notes || 'Exit blocked')}">
           ⚠️ ${escapeHtml(log.notes || 'Exit Intercepted & Blocked')}
         </div>
       ` : (isFlagged ? `
@@ -1504,14 +1397,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let actionBtn = `
         <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors" data-id="${escapeHtml(log.id)}">
-          Inspect
+          View Details
         </button>
       `;
 
       if (isExitDenied) {
         actionBtn = `
           <button type="button" class="inspect-exit-btn px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold shadow-2xs transition-colors" data-id="${escapeHtml(log.id)}">
-            Inspect Hold
+            View Block
           </button>
         `;
       }
@@ -1540,7 +1433,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${durationBadge}
         </td>
         <td class="py-2.5 px-3.5 text-slate-600 text-[11px]">
-          <div>${escapeHtml(log.gatePoint)}</div>
+          <div>${escapeHtml(formatGatePoint(log.gatePoint, log.gateType))}</div>
           <div class="text-slate-400">${escapeHtml(log.guardName || 'Officer')}</div>
         </td>
         <td class="py-2.5 px-3.5 text-right">
@@ -1620,6 +1513,18 @@ document.addEventListener('DOMContentLoaded', () => {
       return matchesSearch && matchesRole && matchesCategory && matchesLocation && matchesStatus;
     });
 
+    // Pagination calculations (10 items per page)
+    const total = filtered.length;
+    const pageSize = state.vehicleFilter.pageSize || 10;
+    const totalPages = Math.ceil(total / pageSize) || 1;
+
+    // Constrain page
+    if (state.vehicleFilter.page > totalPages) state.vehicleFilter.page = totalPages;
+    if (state.vehicleFilter.page < 1) state.vehicleFilter.page = 1;
+
+    const startIdx = (state.vehicleFilter.page - 1) * pageSize;
+    const pagedVehicles = filtered.slice(startIdx, startIdx + pageSize);
+
     // Update Directory Header Count Badge
     if (directoryVehicleCountBadge) {
       const totalCount = state.vehicles.length;
@@ -1630,7 +1535,52 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (filtered.length === 0) {
+    // Update Pagination UI
+    const vehiclePaginationInfo = document.getElementById('vehiclePaginationInfo');
+    const vehiclePageIndicator = document.getElementById('vehiclePageIndicator');
+    const vehiclePrevBtn = document.getElementById('vehiclePrevBtn');
+    const vehicleNextBtn = document.getElementById('vehicleNextBtn');
+
+    if (vehiclePaginationInfo) {
+      if (total === 0) {
+        vehiclePaginationInfo.textContent = 'Showing 0 of 0 vehicles';
+      } else {
+        const endIdx = Math.min(startIdx + pageSize, total);
+        vehiclePaginationInfo.textContent = `Showing ${startIdx + 1} to ${endIdx} of ${total} vehicles`;
+      }
+    }
+
+    if (vehiclePageIndicator) {
+      vehiclePageIndicator.textContent = `Page ${state.vehicleFilter.page} of ${totalPages}`;
+    }
+
+    if (vehiclePrevBtn) {
+      vehiclePrevBtn.disabled = state.vehicleFilter.page <= 1;
+      if (!vehiclePrevBtn.dataset.bound) {
+        vehiclePrevBtn.dataset.bound = 'true';
+        vehiclePrevBtn.addEventListener('click', () => {
+          if (state.vehicleFilter.page > 1) {
+            state.vehicleFilter.page--;
+            renderVehiclesTable();
+          }
+        });
+      }
+    }
+
+    if (vehicleNextBtn) {
+      vehicleNextBtn.disabled = state.vehicleFilter.page >= totalPages;
+      if (!vehicleNextBtn.dataset.bound) {
+        vehicleNextBtn.dataset.bound = 'true';
+        vehicleNextBtn.addEventListener('click', () => {
+          if (state.vehicleFilter.page < totalPages) {
+            state.vehicleFilter.page++;
+            renderVehiclesTable();
+          }
+        });
+      }
+    }
+
+    if (total === 0) {
       vehiclesTableBody.innerHTML = `
         <tr>
           <td colspan="7" class="py-16 text-center">
@@ -1660,6 +1610,7 @@ document.addEventListener('DOMContentLoaded', () => {
           state.vehicleFilter.category = 'All';
           state.vehicleFilter.location = 'All';
           state.vehicleFilter.status = 'All';
+          state.vehicleFilter.page = 1;
           if (vehicleSearchInput) vehicleSearchInput.value = '';
           if (vehicleRoleFilter) vehicleRoleFilter.value = 'All';
           if (vehicleCategoryFilter) vehicleCategoryFilter.value = 'All';
@@ -1671,29 +1622,39 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    filtered.forEach(vehicle => {
+    pagedVehicles.forEach(vehicle => {
       const tr = document.createElement('tr');
-      tr.className = 'hover:bg-slate-50/80 transition-colors group';
 
-      // Status indicator and badge - 100% matched to vehicle standing
+      // Accent border matching On Campus Now design
+      let accentBorder = 'border-l-4 border-l-transparent hover:border-l-slate-300';
+      if (vehicle.isBanned) {
+        accentBorder = 'border-l-4 border-l-rose-600 bg-rose-50/25';
+      } else if (vehicle.registrationStatus === 'Suspended') {
+        accentBorder = 'border-l-4 border-l-amber-500 bg-amber-50/25';
+      } else if (vehicle.registrationStatus === 'Pending') {
+        accentBorder = 'border-l-4 border-l-blue-400 bg-blue-50/20';
+      }
+
+      tr.className = `h-13 transition-colors ${accentBorder} hover:bg-slate-50/80 cursor-pointer`;
+
+      // Status indicator and badge - 100% matched to On Campus Now design
       let statusDot = 'bg-emerald-500';
       let statusBadge = 'bg-emerald-50 text-emerald-700 border-emerald-200/80';
       let statusLabel = vehicle.registrationStatus || 'Active';
 
       if (vehicle.isBanned) {
-        statusDot = 'bg-rose-500';
-        statusBadge = 'bg-rose-50 text-rose-700 border-rose-200';
+        statusDot = 'bg-rose-600';
+        statusBadge = 'bg-rose-100 text-rose-800 border-rose-300 font-extrabold';
         statusLabel = 'Banned';
       } else if (vehicle.registrationStatus === 'Suspended') {
         statusDot = 'bg-amber-500';
-        statusBadge = 'bg-amber-50 text-amber-800 border-amber-200';
+        statusBadge = 'bg-amber-50 text-amber-800 border-amber-300 font-bold';
         statusLabel = 'Suspended';
       } else if (vehicle.registrationStatus === 'Pending') {
         statusDot = 'bg-blue-500';
-        statusBadge = 'bg-blue-50 text-blue-700 border-blue-200';
+        statusBadge = 'bg-blue-50 text-blue-700 border-blue-200 font-semibold';
         statusLabel = 'Pending';
       } else {
-        // Active
         statusDot = 'bg-emerald-500';
         statusBadge = 'bg-emerald-50 text-emerald-700 border-emerald-200/80';
         statusLabel = 'Active';
@@ -1708,49 +1669,51 @@ document.addEventListener('DOMContentLoaded', () => {
       const driversCount = vehicle.authorizedDrivers ? vehicle.authorizedDrivers.length : 0;
 
       tr.innerHTML = `
-        <td class="py-3 px-3.5 align-middle">
-          <div class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full ${statusDot} ring-2 ring-white flex-shrink-0" title="${statusLabel}"></span>
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${statusBadge}">
-              ${escapeHtml(statusLabel)}
-            </span>
-          </div>
-          <div class="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-medium pl-0.5" title="Gate custody: ${custodyLabel}">
+        <td class="py-2.5 px-3.5 align-middle">
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium border ${statusBadge}">
+            <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
+            ${escapeHtml(statusLabel)}
+          </span>
+          <div class="text-[10px] text-slate-400 font-medium mt-0.5 flex items-center gap-1 pl-0.5" title="Campus status: ${custodyLabel}">
             <span class="w-1.5 h-1.5 rounded-full ${custodyDot} flex-shrink-0"></span>
             <span>${custodyLabel}</span>
           </div>
         </td>
-        <td class="py-3 px-3.5 align-middle">
-          <div class="font-mono font-bold text-slate-900 text-xs flex items-center gap-1.5 flex-wrap">
-            <span>${escapeHtml(vehicle.plateNumber)}</span>
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="flex items-baseline gap-1.5 flex-wrap">
+            <span class="font-mono font-bold text-slate-900 text-sm tracking-wide">${escapeHtml(vehicle.plateNumber)}</span>
             ${strikeChip(vehicle)}
           </div>
           <div class="inline-flex items-center gap-1.5 text-[11px] text-slate-500 font-mono mt-0.5">
             <span class="px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200/80 text-slate-500 text-[10px] font-semibold">PASS</span>
-            <span class="text-slate-600 truncate max-w-[150px]">${escapeHtml(formatPassId(vehicle))}</span>
+            <span class="text-slate-600 truncate max-w-[140px]">${escapeHtml(formatPassId(vehicle))}</span>
           </div>
         </td>
-        <td class="py-3 px-3.5 align-middle">
-          <div class="text-slate-900 font-semibold text-xs leading-snug truncate" title="${escapeHtml(vehicle.makeModelColor)}">${escapeHtml(vehicle.makeModelColor)}</div>
-          <div class="text-[11px] text-slate-500 mt-0.5 leading-tight truncate">
-            <span>${escapeHtml(vehicle.vehicleType)}</span>
-            <span class="text-slate-300 mx-1">&middot;</span>
-            <span>Sticker ${escapeHtml(vehicle.stickerYear || '2026')}</span>
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="min-w-0 max-w-[190px]">
+            <div class="font-bold text-slate-900 text-xs truncate" title="${escapeHtml(vehicle.makeModelColor || 'Vehicle')}">${escapeHtml(vehicle.makeModelColor || 'Vehicle')}</div>
+            <div class="text-[11px] text-slate-500 font-normal truncate mt-0.5">
+              <span>${escapeHtml(vehicle.vehicleType || '4-Wheel')}</span>
+              <span class="text-slate-300 mx-1">&middot;</span>
+              <span>Sticker ${escapeHtml(vehicle.stickerYear || '2026')}</span>
+            </div>
           </div>
         </td>
-        <td class="py-3 px-3.5 align-middle">
-          <div class="text-slate-900 font-semibold text-xs leading-snug truncate" title="${escapeHtml(vehicle.ownerName)}">${escapeHtml(vehicle.ownerName)}</div>
-          <div class="text-[11px] text-slate-400 font-mono mt-0.5 truncate">${escapeHtml(vehicle.ownerIdNumber || 'N/A')}</div>
+        <td class="py-2.5 px-3.5 align-middle">
+          <div class="min-w-0 max-w-[190px]">
+            <div class="font-bold text-slate-900 text-xs truncate" title="${escapeHtml(vehicle.ownerName || 'Unknown Owner')}">${escapeHtml(vehicle.ownerName || 'Unknown Owner')}</div>
+            <div class="text-[11px] text-slate-400 font-mono mt-0.5 truncate">${escapeHtml(vehicle.ownerIdNumber || 'No ID on file')}</div>
+          </div>
         </td>
-        <td class="py-3 px-3.5 align-middle">
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+        <td class="py-2.5 px-3.5 align-middle">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200/80">
             ${escapeHtml(vehicle.ownerRole || 'General')}
           </span>
-          <div class="text-[11px] text-slate-500 mt-0.5 truncate max-w-[190px]" title="${escapeHtml(vehicle.department || '')}">
+          <div class="text-[11px] text-slate-500 mt-0.5 truncate max-w-[170px]" title="${escapeHtml(vehicle.department || '')}">
             ${escapeHtml(vehicle.department || 'NCST Campus')}
           </div>
         </td>
-        <td class="py-3 px-3.5 align-middle">
+        <td class="py-2.5 px-3.5 align-middle whitespace-nowrap">
           <div class="inline-flex items-center gap-1.5 text-slate-700 text-xs font-medium">
             <svg class="w-3.5 h-3.5 text-slate-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
@@ -1761,24 +1724,15 @@ document.addEventListener('DOMContentLoaded', () => {
             <span>${driversCount} ${driversCount === 1 ? 'driver' : 'drivers'}</span>
           </div>
         </td>
-        <td class="py-3 px-3.5 align-middle text-right pr-4">
-          <div class="flex items-center justify-end gap-1.5">
+        <td class="sp-vehicle-actions-cell py-2.5 px-3.5 align-middle text-right pr-4">
+          <div class="sp-vehicle-row-actions flex items-center justify-end gap-1.5">
             <!-- Inspect Primary Action -->
-            <button type="button" class="inspect-btn px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center gap-1 cursor-pointer" title="Inspect vehicle dossier">
+            <button type="button" class="inspect-btn px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center gap-1 cursor-pointer" title="View vehicle details">
               <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
                 <circle cx="12" cy="12" r="3"></circle>
               </svg>
-              <span>Inspect</span>
-            </button>
-
-            <!-- Edit Secondary Action (Admin Only) -->
-            <button type="button" class="edit-btn admin-only px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs hover:border-slate-300 transition-colors flex items-center gap-1 cursor-pointer" title="Edit vehicle record">
-              <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-              </svg>
-              <span>Edit</span>
+              <span>Details</span>
             </button>
 
             <!-- Overflow Actions Menu Container -->
@@ -1793,7 +1747,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <div class="overflow-menu-dropdown hidden absolute right-0 mt-1 w-44 rounded-lg bg-white border border-slate-200 shadow-lg py-1 z-30 divide-y divide-slate-100">
                 <div class="py-1">
-                  <button type="button" class="print-row-btn w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 text-left text-xs font-medium cursor-pointer transition-colors" title="Print Gate Pass Permit">
+                  <button type="button" class="edit-btn admin-only w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 flex items-center gap-2 text-left text-xs font-medium cursor-pointer" title="Edit vehicle record">
+                    <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                    <span>Edit vehicle</span>
+                  </button>
+                  <button type="button" class="print-row-btn w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 text-left text-xs font-medium cursor-pointer transition-colors" title="Print Gate Pass">
                     <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <polyline points="6 9 6 2 18 2 18 9"></polyline>
                       <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
@@ -1835,6 +1796,12 @@ document.addEventListener('DOMContentLoaded', () => {
         </td>
       `;
 
+      // Clicking row opens dossier unless clicking interactive buttons/menu
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('button') || e.target.closest('.overflow-menu-dropdown') || e.target.closest('a')) return;
+        openVehicleDrawer(vehicle);
+      });
+
       // Event Listeners for Row Actions
       const menuBtn = tr.querySelector('.overflow-menu-btn');
       const dropdown = tr.querySelector('.overflow-menu-dropdown');
@@ -1859,7 +1826,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const printBtn = tr.querySelector('.print-row-btn');
       if (printBtn) {
-        printBtn.addEventListener('click', () => {
+        printBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           if (dropdown) dropdown.classList.add('hidden');
           if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
           printVehiclePass(vehicle);
@@ -1868,7 +1836,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const zoomQrBtn = tr.querySelector('.zoom-qr-row-btn');
       if (zoomQrBtn) {
-        zoomQrBtn.addEventListener('click', () => {
+        zoomQrBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           if (dropdown) dropdown.classList.add('hidden');
           if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
           const qrData = passPayloadFor(vehicle);
@@ -1885,17 +1854,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const inspectBtn = tr.querySelector('.inspect-btn');
       if (inspectBtn) {
-        inspectBtn.addEventListener('click', () => openVehicleDrawer(vehicle));
+        inspectBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openVehicleDrawer(vehicle);
+        });
       }
 
       const editBtn = tr.querySelector('.edit-btn');
       if (editBtn) {
-        editBtn.addEventListener('click', () => openEditModal(vehicle));
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (dropdown) dropdown.classList.add('hidden');
+          if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+          openEditModal(vehicle);
+        });
       }
 
       const toggleStatusBtn = tr.querySelector('.toggle-status-btn');
       if (toggleStatusBtn) {
-        toggleStatusBtn.addEventListener('click', () => {
+        toggleStatusBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           if (dropdown) dropdown.classList.add('hidden');
           if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
           toggleVehicleRegistrationStatus(vehicle);
@@ -1950,6 +1928,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (vehicleSearchInput) {
     vehicleSearchInput.addEventListener('input', (e) => {
       state.vehicleFilter.search = e.target.value;
+      state.vehicleFilter.page = 1;
       renderVehiclesTable();
     });
   }
@@ -1957,6 +1936,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (vehicleRoleFilter) {
     vehicleRoleFilter.addEventListener('change', (e) => {
       state.vehicleFilter.role = e.target.value;
+      state.vehicleFilter.page = 1;
       renderVehiclesTable();
     });
   }
@@ -1964,6 +1944,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (vehicleCategoryFilter) {
     vehicleCategoryFilter.addEventListener('change', (e) => {
       state.vehicleFilter.category = e.target.value;
+      state.vehicleFilter.page = 1;
       renderVehiclesTable();
     });
   }
@@ -1971,6 +1952,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (vehicleLocationFilter) {
     vehicleLocationFilter.addEventListener('change', (e) => {
       state.vehicleFilter.location = e.target.value;
+      state.vehicleFilter.page = 1;
       renderVehiclesTable();
     });
   }
@@ -1978,6 +1960,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (vehicleStatusFilter) {
     vehicleStatusFilter.addEventListener('change', (e) => {
       state.vehicleFilter.status = e.target.value;
+      state.vehicleFilter.page = 1;
       renderVehiclesTable();
     });
   }
@@ -1990,6 +1973,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.vehicleFilter.category = 'All';
       state.vehicleFilter.location = 'All';
       state.vehicleFilter.status = 'All';
+      state.vehicleFilter.page = 1;
       if (vehicleSearchInput) vehicleSearchInput.value = '';
       if (vehicleRoleFilter) vehicleRoleFilter.value = 'All';
       if (vehicleCategoryFilter) vehicleCategoryFilter.value = 'All';
@@ -2007,14 +1991,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!incidentsTableBody) return;
     incidentsTableBody.innerHTML = '';
 
-    const incidents = state.incidents;
+    const query = (document.getElementById('incidentSearch')?.value || '').trim().toLowerCase();
+    const status = document.getElementById('incidentStatusFilter')?.value || 'All';
+    const incidents = state.incidents.filter(inc => (status === 'All' || inc.status === status) &&
+      (!query || [inc.plateNumber, inc.caseNumber, inc.ownerName, inc.driverName, inc.reason, inc.gatePoint].some(value => String(value || '').toLowerCase().includes(query))));
 
     if (incidents.length === 0) {
       incidentsTableBody.innerHTML = `
         <tr>
           <td colspan="8" class="py-12 text-center text-slate-400 text-xs">
-            <div class="font-semibold text-ncst-green">No active security stops or flagged vehicles.</div>
-            <div class="text-[11px] text-slate-400 mt-1">All campus gates operating under standard clearance.</div>
+            <div class="font-semibold text-slate-700">${query || status !== 'All' ? 'No incidents match these filters.' : 'No security incidents recorded.'}</div>
+            <div class="text-[11px] text-slate-500 mt-1">${query || status !== 'All' ? 'Try another status or clear your search.' : 'New incidents will appear here for review.'}</div>
           </td>
         </tr>
       `;
@@ -2054,7 +2041,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </span>
         </td>
         <td class="py-2.5 px-4 text-slate-600 text-xs">
-          <div>${escapeHtml(inc.gatePoint)}</div>
+          <div>${escapeHtml(formatGatePoint(inc.gatePoint))}</div>
           <div class="text-[11px] text-slate-400">${escapeHtml(inc.officer)}</div>
         </td>
         <td class="py-2.5 px-4 font-mono text-slate-500 text-xs">
@@ -2085,6 +2072,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateCounts();
   }
+
+  document.getElementById('incidentSearch')?.addEventListener('input', renderIncidentsTable);
+  document.getElementById('incidentStatusFilter')?.addEventListener('change', renderIncidentsTable);
 
   async function resolveIncident(inc) {
     const notes = await SPAlert.prompt({
@@ -2130,45 +2120,138 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ==========================================================================
-     6. Audit Logs Controller (Search, Filter, Pagination, CSV Export)
+     6. Gate Records Controller (Search, Multi-Filter, Pagination, CSV Export)
      ========================================================================== */
+  function formatOfficerName(guardName) {
+    if (!guardName) return 'Gate Officer';
+    return guardName.replace(/\s*\([^)]*\)/g, '').trim() || guardName;
+  }
+
+  function formatGatePoint(gatePoint, gateType) {
+    if (!gatePoint) return gateType ? `Gate · ${gateType}` : 'Gate';
+    let clean = gatePoint;
+    clean = clean.replace(/\(Main Ingress\)/i, '· Entry');
+    clean = clean.replace(/\(Main Egress\)/i, '· Exit');
+    clean = clean.replace(/\(Ingress\)/i, '· Entry');
+    clean = clean.replace(/\(Egress\)/i, '· Exit');
+    clean = clean.replace(/\s*\((.*?)\)/, ' · $1');
+    return clean.trim();
+  }
+
+  function getLogDate(log) {
+    if (!log) return null;
+    if (log.loggedAt) {
+      const d = new Date(String(log.loggedAt).replace(' ', 'T'));
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (log.timestamp) {
+      if (/today/i.test(log.timestamp)) return new Date();
+      if (/yesterday/i.test(log.timestamp)) return new Date(Date.now() - 86400000);
+      const clean = log.timestamp.split('•')[0].trim();
+      const d = new Date(clean);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return null;
+  }
+
   function getFilteredAuditLogs() {
     return state.auditLogs.filter(log => {
-      const q = state.auditFilter.search.toLowerCase().trim();
+      const q = (state.auditFilter.search || '').toLowerCase().trim();
       const matchesSearch = !q ||
-        log.plateNumber.toLowerCase().includes(q) ||
-        log.ownerName.toLowerCase().includes(q) ||
-        log.driverName.toLowerCase().includes(q) ||
-        log.gatePoint.toLowerCase().includes(q) ||
-        (log.guardName && log.guardName.toLowerCase().includes(q));
+        (log.plateNumber && log.plateNumber.toLowerCase().includes(q)) ||
+        (log.ownerName && log.ownerName.toLowerCase().includes(q)) ||
+        (log.driverName && log.driverName.toLowerCase().includes(q)) ||
+        (log.gatePoint && log.gatePoint.toLowerCase().includes(q)) ||
+        (log.guardName && log.guardName.toLowerCase().includes(q)) ||
+        (log.action && log.action.toLowerCase().includes(q)) ||
+        (log.status && log.status.toLowerCase().includes(q)) ||
+        (log.vehicleType && log.vehicleType.toLowerCase().includes(q)) ||
+        (log.notes && log.notes.toLowerCase().includes(q)) ||
+        (String(log.id).includes(q));
 
-      let matchesFilter = true;
+      // 1. Quick Pills Status Filter
+      let matchesStatus = true;
       if (state.auditFilter.status === 'Inside') {
-        matchesFilter = log.status === 'Inside Campus';
+        matchesStatus = log.status === 'Inside Campus';
       } else if (state.auditFilter.status === 'Exited') {
-        matchesFilter = log.status === 'Exited';
+        matchesStatus = log.status === 'Exited';
       } else if (state.auditFilter.status === 'Blocked') {
-        matchesFilter = log.status === 'Blocked / Alert';
+        matchesStatus = log.status === 'Blocked / Alert' || /denied|hold|flag/i.test(log.action || '');
       }
 
-      return matchesSearch && matchesFilter;
+      // 2. Event Type Filter
+      let matchesEventType = true;
+      const act = (log.action || '').toLowerCase();
+      if (state.auditFilter.eventType === 'Entry') {
+        matchesEventType = (act.includes('entry') || act.includes('ingress')) && !act.includes('denied');
+      } else if (state.auditFilter.eventType === 'ExitApproved') {
+        matchesEventType = (act.includes('exit') || act.includes('egress')) && !act.includes('denied');
+      } else if (state.auditFilter.eventType === 'ExitDenied') {
+        matchesEventType = act.includes('exit') && act.includes('denied');
+      } else if (state.auditFilter.eventType === 'EntryDenied') {
+        matchesEventType = act.includes('entry') && act.includes('denied');
+      } else if (state.auditFilter.eventType === 'SecurityHold') {
+        matchesEventType = act.includes('hold') || act.includes('flag') || act.includes('alert') || log.status === 'Blocked / Alert';
+      }
+
+      // 3. Gate Filter
+      let matchesGate = true;
+      if (state.auditFilter.gate !== 'All') {
+        matchesGate = Boolean(log.gatePoint && log.gatePoint.toLowerCase().includes(state.auditFilter.gate.toLowerCase()));
+      }
+
+      // 4. Date Range Filter
+      let matchesDate = true;
+      if (state.auditFilter.dateRange !== 'All') {
+        const logDate = getLogDate(log);
+        if (logDate) {
+          const now = new Date();
+          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          const logTime = logDate.getTime();
+          if (state.auditFilter.dateRange === 'Today') {
+            matchesDate = logTime >= todayStart;
+          } else if (state.auditFilter.dateRange === 'Yesterday') {
+            const yesterdayStart = todayStart - 86400000;
+            matchesDate = logTime >= yesterdayStart && logTime < todayStart;
+          } else if (state.auditFilter.dateRange === 'Last7Days') {
+            const weekStart = todayStart - (7 * 86400000);
+            matchesDate = logTime >= weekStart;
+          }
+        }
+      }
+
+      return matchesSearch && matchesStatus && matchesEventType && matchesGate && matchesDate;
     });
   }
 
   function updateAuditSummaryStats() {
     const total = state.auditLogs.length;
-    const insideCount = state.auditLogs.filter(l => l.status === 'Inside Campus').length;
-    const exitedCount = state.auditLogs.filter(l => l.status === 'Exited').length;
-    const blockedCount = state.auditLogs.filter(l => l.status === 'Blocked / Alert').length;
+    const insideCount = state.auditLogs.filter(l => entryPassage(l) && !deniedPassage(l)).length;
+    const exitedCount = state.auditLogs.filter(l => /exit|egress/i.test(l.action || '') && !deniedPassage(l)).length;
+    const blockedCount = state.auditLogs.filter(l => l.status === 'Blocked / Alert' || /denied|hold|flag/i.test(l.action || '')).length;
 
     if (auditSummaryTotal) auditSummaryTotal.textContent = total;
     if (auditSummaryInside) auditSummaryInside.textContent = insideCount;
     if (auditSummaryExited) auditSummaryExited.textContent = exitedCount;
     if (auditSummaryBlocked) auditSummaryBlocked.textContent = blockedCount;
 
+    if (auditSummaryBlockedCard && auditSummaryBlockedSub) {
+      if (blockedCount > 0) {
+        auditSummaryBlockedCard.className = "bg-rose-50/60 rounded-lg border border-rose-200 p-3 shadow-xs transition-colors";
+        auditSummaryBlocked.className = "text-xl font-bold font-mono text-rose-700 mt-0.5";
+        auditSummaryBlockedSub.className = "text-[10px] text-rose-600 font-semibold mt-0.5";
+        auditSummaryBlockedSub.textContent = `${blockedCount} hold${blockedCount === 1 ? '' : 's'} & stop${blockedCount === 1 ? '' : 's'}`;
+      } else {
+        auditSummaryBlockedCard.className = "bg-white rounded-lg border border-slate-200 p-3 shadow-xs transition-colors";
+        auditSummaryBlocked.className = "text-xl font-bold font-mono text-slate-700 mt-0.5";
+        auditSummaryBlockedSub.className = "text-[10px] text-slate-400 mt-0.5";
+        auditSummaryBlockedSub.textContent = "No holds or stops";
+      }
+    }
+
     if (auditPillCountAll) auditPillCountAll.textContent = `(${total})`;
-    if (auditPillCountInside) auditPillCountInside.textContent = `(${insideCount})`;
-    if (auditPillCountExited) auditPillCountExited.textContent = `(${exitedCount})`;
+    if (auditPillCountInside) auditPillCountInside.textContent = `(${state.auditLogs.filter(log => log.status === 'Inside Campus').length})`;
+    if (auditPillCountExited) auditPillCountExited.textContent = `(${state.auditLogs.filter(log => log.status === 'Exited').length})`;
     if (auditPillCountBlocked) auditPillCountBlocked.textContent = `(${blockedCount})`;
   }
 
@@ -2176,6 +2259,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!fullAuditTableBody) return;
     updateAuditSummaryStats();
     fullAuditTableBody.innerHTML = '';
+
+    // Update Reset button visibility
+    const isFiltered = Boolean(
+      (state.auditFilter.search && state.auditFilter.search.trim()) ||
+      state.auditFilter.status !== 'All' ||
+      state.auditFilter.eventType !== 'All' ||
+      state.auditFilter.gate !== 'All' ||
+      state.auditFilter.dateRange !== 'All'
+    );
+    if (auditResetFiltersBtn) {
+      auditResetFiltersBtn.classList.toggle('hidden', !isFiltered);
+    }
 
     const filtered = getFilteredAuditLogs();
     const total = filtered.length;
@@ -2205,7 +2300,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (pagedLogs.length === 0) {
       fullAuditTableBody.innerHTML = `
         <tr>
-          <td colspan="9" class="py-12 text-center text-slate-500 text-xs bg-slate-50/50">
+          <td colspan="8" class="py-12 text-center text-slate-500 text-xs bg-slate-50/50">
             <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-slate-200 text-slate-500 mb-2">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="11" cy="11" r="8"></circle>
@@ -2213,7 +2308,7 @@ document.addEventListener('DOMContentLoaded', () => {
               </svg>
             </div>
             <div class="font-semibold text-slate-700">No matching audit logs found</div>
-            <div class="text-[11px] text-slate-400 mt-0.5">Try adjusting your search query or status filter.</div>
+            <div class="text-[11px] text-slate-400 mt-0.5">Try adjusting your search query or filter selection.</div>
           </td>
         </tr>
       `;
@@ -2224,79 +2319,155 @@ document.addEventListener('DOMContentLoaded', () => {
       const tr = document.createElement('tr');
       tr.className = 'hover:bg-slate-50/80 transition-colors border-b border-slate-100 text-xs text-slate-800';
 
-      let statusBadge = 'bg-emerald-50 text-emerald-700 border-emerald-200/80 font-semibold';
-      let statusDot = 'bg-emerald-500';
-      let statusText = 'Inside';
-
-      if (log.status === 'Exited') {
-        statusBadge = 'bg-slate-100 text-slate-700 border-slate-200 font-medium';
-        statusDot = 'bg-slate-400';
-        statusText = 'Exited';
-      } else if (log.status === 'Blocked / Alert') {
-        statusBadge = 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
-        statusDot = 'bg-rose-600';
-        statusText = 'Hold / Blocked';
-      }
-
-      // Format event action styling
-      let actionColor = 'text-slate-800 font-medium';
       const actLower = (log.action || '').toLowerCase();
-      if (actLower.includes('entry') || actLower.includes('ingress') || actLower.includes('approved')) {
-        actionColor = 'text-emerald-700 font-semibold';
-      } else if (actLower.includes('exit') || actLower.includes('egress')) {
-        actionColor = 'text-slate-700 font-medium';
-      } else if (actLower.includes('flag') || actLower.includes('held') || actLower.includes('blocked') || actLower.includes('alert')) {
-        actionColor = 'text-rose-700 font-bold';
+      const statLower = (log.status || '').toLowerCase();
+      const isDenied = actLower.includes('denied') || actLower.includes('blocked') || statLower.includes('blocked');
+      const isHold = actLower.includes('hold') || actLower.includes('flag') || actLower.includes('alert');
+
+      // 1. Result Column (Authoritative gate event outcome)
+      let resultPill = '';
+      if (isDenied) {
+        resultPill = `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
+            Denied
+          </span>
+        `;
+      } else if (isHold) {
+        resultPill = `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+            Hold / Alert
+          </span>
+        `;
+      } else if (actLower.includes('exit') || actLower.includes('egress') || statLower === 'exited') {
+        resultPill = `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+            <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+            Exited
+          </span>
+        `;
+      } else {
+        resultPill = `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            Approved
+          </span>
+        `;
       }
+
+      // 2. Time Column (Prominent date & time, uniform row height)
+      const ts = log.timestamp || '';
+      let timePart = ts;
+      let datePart = '';
+      if (ts.includes('•')) {
+        const parts = ts.split('•');
+        datePart = parts[0].trim();
+        timePart = parts[1].trim();
+      } else if (ts.includes(',')) {
+        const parts = ts.split(',');
+        datePart = parts[0].trim();
+        timePart = parts.slice(1).join(',').trim();
+      }
+      const hasClip = Boolean(window.SPClip) && /entry|exit/i.test(log.action || '') && !/denied/i.test(log.action || '');
+
+      // 3. Event Column
+      let eventTitleClass = 'font-bold text-slate-900';
+      if (isDenied) {
+        eventTitleClass = 'font-bold text-rose-700';
+      } else if (isHold) {
+        eventTitleClass = 'font-bold text-amber-800';
+      }
+
+      const campusStateSubtext = log.status === 'Inside Campus' ? 'Currently on campus' : (log.status === 'Exited' ? 'Departed campus' : (log.status || 'Movement logged'));
+
+      // 4. Vehicle Column
+      const plateHtml = `
+        <span class="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300 tracking-wide shadow-2xs">
+          ${escapeHtml(log.plateNumber)}
+        </span>
+      `;
+
+      // 5. Person Column (Consolidated single column without driver/owner redundancy)
+      const dName = (log.driverName || '').trim();
+      const oName = (log.ownerName || '').trim();
+      const rel = (log.driverRelationship || '').trim();
+
+      let personHtml = '';
+      if (!oName || oName.toLowerCase() === dName.toLowerCase() || !dName || dName.toLowerCase() === 'self') {
+        const name = oName || dName || 'Unknown';
+        const roleText = rel && rel.toLowerCase() !== 'self' ? rel : 'Owner';
+        personHtml = `
+          <div class="font-semibold text-slate-900 leading-tight">${escapeHtml(name)}</div>
+          <div class="text-[10.5px] text-slate-500 mt-0.5">${escapeHtml(roleText)}</div>
+        `;
+      } else {
+        personHtml = `
+          <div class="font-semibold text-slate-900 leading-tight">
+            <span class="text-slate-500 text-[10px] font-normal uppercase">Driver:</span> ${escapeHtml(dName)}
+          </div>
+          <div class="text-[10.5px] text-slate-500 mt-0.5">
+            <span class="text-slate-400 text-[10px] uppercase">Owner:</span> ${escapeHtml(oName)}
+          </div>
+        `;
+      }
+
+      // 6. Gate Column
+      const cleanGate = formatGatePoint(log.gatePoint, log.gateType);
+
+      // 7. Officer Column
+      const cleanOfficer = formatOfficerName(log.guardName);
 
       tr.innerHTML = `
         <td class="py-2.5 px-4 whitespace-nowrap">
-          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border ${statusBadge}">
-            <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
-            ${statusText}
-          </span>
+          ${resultPill}
         </td>
         <td class="py-2.5 px-4 whitespace-nowrap">
-          <span class="font-mono font-bold text-xs bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300 tracking-wide shadow-2xs">
-            ${escapeHtml(log.plateNumber)}
-          </span>
-        </td>
-        <td class="py-2.5 px-4 whitespace-nowrap">
-          <div class="${actionColor}">
-            ${escapeHtml(log.action || 'Movement Logged')}
-          </div>
-          <div class="text-[10px] text-slate-500 truncate max-w-[130px] font-normal">
-            ${escapeHtml(log.vehicleType || '')}
+          <div class="leading-tight">
+            <div class="font-mono text-xs font-bold text-slate-800">${escapeHtml(timePart)}</div>
+            <div class="text-[10px] text-slate-400 font-mono flex items-center gap-1 mt-0.5">
+              <span>${escapeHtml(datePart || 'Today')}</span>
+              ${hasClip ? `<span class="inline-flex items-center gap-0.5 text-blue-600 font-sans font-semibold text-[9.5px]" title="Camera video available in Details">🎥 Clip</span>` : ''}
+              ${log.syncedAt && offlineChip(log) ? `<span class="text-ncst-navy font-bold text-[9px]">OFFLINE</span>` : ''}
+            </div>
           </div>
         </td>
-        <td class="py-2.5 px-4">
-          <div class="font-semibold text-slate-900 leading-snug">${escapeHtml(log.driverName)}</div>
-          <div class="text-[11px] text-slate-500">(${escapeHtml(log.driverRelationship || 'Self')})</div>
-        </td>
-        <td class="py-2.5 px-4 text-slate-800 font-medium">
-          ${escapeHtml(log.ownerName)}
-        </td>
-        <td class="py-2.5 px-4 text-slate-700 whitespace-nowrap">
-          <span class="font-medium text-slate-800">${escapeHtml(log.gatePoint)}</span>
+        <td class="py-2.5 px-4 whitespace-nowrap">
+          <div class="leading-tight">
+            <div class="${eventTitleClass} text-xs tracking-tight">${escapeHtml(log.action || 'Gate Movement')}</div>
+            <div class="text-[10.5px] text-slate-500 mt-0.5">${escapeHtml(campusStateSubtext)}</div>
+          </div>
         </td>
         <td class="py-2.5 px-4 whitespace-nowrap">
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-800 font-mono border border-slate-200">
-            ${escapeHtml(log.guardName || 'Gate Officer')}
-          </span>
+          <div class="leading-tight">
+            ${plateHtml}
+            <div class="text-[10px] text-slate-500 font-normal mt-1 truncate max-w-[120px]">
+              ${escapeHtml(log.vehicleType || 'Vehicle')}
+            </div>
+          </div>
         </td>
-        <td class="py-2.5 px-4 text-right font-mono font-medium text-slate-700 whitespace-nowrap">
-          ${escapeHtml(log.timestamp.replace('Today, ', ''))}${offlineChip(log)}
-          ${clipButtonFor(log)}
+        <td class="py-2.5 px-4 min-w-[130px]">
+          ${personHtml}
+        </td>
+        <td class="py-2.5 px-4 whitespace-nowrap">
+          <div class="font-semibold text-slate-800 text-xs">${escapeHtml(cleanGate)}</div>
+        </td>
+        <td class="py-2.5 px-4 whitespace-nowrap">
+          <div class="text-slate-700 font-medium text-xs truncate max-w-[130px]" title="${escapeHtml(log.guardName || '')}">
+            ${escapeHtml(cleanOfficer)}
+          </div>
         </td>
         <td class="py-2.5 px-4 text-right whitespace-nowrap">
-          <button type="button" class="audit-details-btn px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">
-            Inspect
+          <button type="button" class="audit-details-btn inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="View full gate record">
+            <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <span>View Details</span>
           </button>
         </td>
       `;
 
       tr.querySelector('.audit-details-btn').addEventListener('click', () => openAuditDrawer(log));
-
       fullAuditTableBody.appendChild(tr);
     });
   }
@@ -2312,8 +2483,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   auditFilterPills.forEach(pill => {
     pill.addEventListener('click', () => {
-      const activeClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors";
-      const inactiveClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors";
+      const activeClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors cursor-pointer";
+      const inactiveClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer";
 
       auditFilterPills.forEach(p => {
         p.className = inactiveClass;
@@ -2324,6 +2495,54 @@ document.addEventListener('DOMContentLoaded', () => {
       renderFullAuditTable();
     });
   });
+
+  if (auditEventTypeFilter) {
+    auditEventTypeFilter.addEventListener('change', (e) => {
+      state.auditFilter.eventType = e.target.value;
+      state.auditFilter.page = 1;
+      renderFullAuditTable();
+    });
+  }
+
+  if (auditGateFilter) {
+    auditGateFilter.addEventListener('change', (e) => {
+      state.auditFilter.gate = e.target.value;
+      state.auditFilter.page = 1;
+      renderFullAuditTable();
+    });
+  }
+
+  if (auditDateFilter) {
+    auditDateFilter.addEventListener('change', (e) => {
+      state.auditFilter.dateRange = e.target.value;
+      state.auditFilter.page = 1;
+      renderFullAuditTable();
+    });
+  }
+
+  if (auditResetFiltersBtn) {
+    auditResetFiltersBtn.addEventListener('click', () => {
+      state.auditFilter.search = '';
+      state.auditFilter.status = 'All';
+      state.auditFilter.eventType = 'All';
+      state.auditFilter.gate = 'All';
+      state.auditFilter.dateRange = 'All';
+      state.auditFilter.page = 1;
+
+      if (fullAuditSearchInput) fullAuditSearchInput.value = '';
+      if (auditEventTypeFilter) auditEventTypeFilter.value = 'All';
+      if (auditGateFilter) auditGateFilter.value = 'All';
+      if (auditDateFilter) auditDateFilter.value = 'All';
+
+      const activeClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors cursor-pointer";
+      const inactiveClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer";
+      auditFilterPills.forEach(p => {
+        p.className = p.getAttribute('data-filter') === 'All' ? activeClass : inactiveClass;
+      });
+
+      renderFullAuditTable();
+    });
+  }
 
   if (auditPrevBtn) {
     auditPrevBtn.addEventListener('click', () => {
@@ -2351,9 +2570,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function exportAuditCsv() {
-    const logs = state.auditLogs;
+    const logs = getFilteredAuditLogs();
     if (logs.length === 0) {
-      showToast("No logs available to export.");
+      showToast("No matching audit logs available to export.");
       return;
     }
 
@@ -2383,7 +2602,7 @@ document.addEventListener('DOMContentLoaded', () => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast("Audit logs exported to CSV.");
+    showToast(`Exported ${logs.length} audit logs to CSV.`);
   }
 
   /* ==========================================================================
@@ -2714,7 +2933,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const footerHtml = `
       <div class="flex items-center gap-2">
-        <button id="drawerPrintBtn" class="px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer" title="Print Gate Pass Permit">
+        <button id="drawerPrintBtn" class="px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer" title="Print Gate Pass">
           <svg class="w-4 h-4 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 6 2 18 2 18 9"></polyline>
             <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
@@ -2729,7 +2948,7 @@ document.addEventListener('DOMContentLoaded', () => {
           Student Login
         </button>
         <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
-          Reissue Pass
+          Replace Pass
         </button>
         <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
           <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2744,7 +2963,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `;
 
-    openDrawer(`Vehicle Dossier — ${v.plateNumber}`, v.plateNumber, html, footerHtml);
+    openDrawer(`Vehicle Details — ${v.plateNumber}`, v.plateNumber, html, footerHtml);
 
     // Render Scaled-Up 200px Drawer QR Code
     const drawerQrContainer = drawerContent.querySelector('#drawerQrContainer');
@@ -2797,7 +3016,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const confirmed = window.SPAlert
         ? await SPAlert.confirm({
             title: 'Issue Student Portal Login?',
-            text: `Issue login credentials for owner ID ${v.ownerIdNumber}. If the student already has an account, their password will be reset and other sessions will be signed out.`,
+            text: `Create or reset the login for owner ID ${v.ownerIdNumber}. If the student already has an account, their password will be reset and other sessions will be signed out.`,
             confirmText: 'Issue Login',
             icon: 'question'
           })
@@ -2810,7 +3029,7 @@ document.addEventListener('DOMContentLoaded', () => {
             title: 'Student Portal Login Created',
             username: `Owner ID: ${res.ownerIdNumber}`,
             password: res.tempPassword,
-            subtext: `Student credentials issued for ${v.ownerName || 'vehicle owner'} (${res.ownerIdNumber})`
+            subtext: `Student login ready for ${v.ownerName || 'vehicle owner'} (${res.ownerIdNumber})`
           });
         } else if (window.SPTempPassword) {
           SPTempPassword(`Student portal login for owner ID ${res.ownerIdNumber}`, res.tempPassword);
@@ -2860,7 +3079,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <div>
               <span class="text-slate-400 block text-[11px]">Gate & Passage</span>
-              <span class="font-medium text-slate-800">${escapeHtml(inc.gatePoint)}</span>
+              <span class="font-medium text-slate-800">${escapeHtml(formatGatePoint(inc.gatePoint))}</span>
             </div>
             <div>
               <span class="text-slate-400 block text-[11px]">Reporting Officer</span>
@@ -2928,77 +3147,146 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function openAuditDrawer(log) {
     const showClip = Boolean(window.SPClip) && /entry|exit/i.test(log.action || '') && !/denied/i.test(log.action || '');
+    const cleanGate = formatGatePoint(log.gatePoint, log.gateType);
+    const cleanOfficer = formatOfficerName(log.guardName);
+    const officerReference = [...String(log.guardName || '').matchAll(/\(([^)]+)\)/g)].map(match => match[1]).join(' · ');
+
+    const actLower = (log.action || '').toLowerCase();
+    const statLower = (log.status || '').toLowerCase();
+    const isDenied = actLower.includes('denied') || actLower.includes('blocked') || statLower.includes('blocked');
+    const isHold = actLower.includes('hold') || actLower.includes('flag') || actLower.includes('alert');
+
+    let resultBadgeClass = 'bg-emerald-50 text-emerald-800 border-emerald-200';
+    let resultDot = 'bg-emerald-500';
+    let resultLabel = 'Approved';
+    if (isDenied) {
+      resultBadgeClass = 'bg-rose-50 text-rose-800 border-rose-200';
+      resultDot = 'bg-rose-600';
+      resultLabel = 'Denied';
+    } else if (isHold) {
+      resultBadgeClass = 'bg-amber-50 text-amber-900 border-amber-200';
+      resultDot = 'bg-amber-600';
+      resultLabel = 'On hold';
+    } else if (statLower === 'exited') {
+      resultBadgeClass = 'bg-slate-100 text-slate-800 border-slate-200';
+      resultDot = 'bg-slate-500';
+      resultLabel = 'Exited Campus';
+    }
+
     const html = `
-      <div class="space-y-4 text-xs">
-        <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 flex items-center justify-between">
+      <div class="sp-record-details space-y-4 text-xs">
+        
+        <!-- Audit Event Primary Banner -->
+        <div class="sp-record-summary p-3.5 rounded-lg border border-slate-200 bg-slate-50/80 flex items-center justify-between gap-3">
           <div>
-            <span class="text-[11px] text-slate-400 font-mono block">AUDIT LOG ID</span>
-            <span class="text-base font-bold font-mono text-slate-900">${escapeHtml(log.id)}</span>
+            <div class="sp-record-label">Gate event</div>
+            <div class="text-base font-bold text-slate-900 mt-0.5">${escapeHtml(log.action || 'Gate Passage')}</div>
           </div>
-          <span class="px-2 py-0.5 rounded text-xs font-bold ${log.status === 'Blocked / Alert' ? 'bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30' : 'bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30'}">
-            ${escapeHtml(log.status)}
-          </span>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3 bg-white p-3 rounded border border-slate-200">
-          <div>
-            <span class="text-slate-400 block text-[11px]">Plate Number</span>
-            <span class="font-bold font-mono text-slate-900">${escapeHtml(log.plateNumber)}</span>
-          </div>
-          <div>
-            <span class="text-slate-400 block text-[11px]">Event Action</span>
-            <span class="font-medium text-slate-800">${escapeHtml(log.action || 'Gate Passage')}</span>
-          </div>
-          <div>
-            <span class="text-slate-400 block text-[11px]">Driver Verified</span>
-            <span class="font-medium text-slate-800">${escapeHtml(log.driverName)}</span>
-            <span class="text-[11px] text-slate-500 block">(${escapeHtml(log.driverRelationship || 'Self')})</span>
-          </div>
-          <div>
-            <span class="text-slate-400 block text-[11px]">Registered Owner</span>
-            <span class="font-medium text-slate-800">${escapeHtml(log.ownerName)}</span>
-          </div>
-          <div>
-            <span class="text-slate-400 block text-[11px]">Gate Location</span>
-            <span class="font-medium text-slate-800">${escapeHtml(log.gatePoint)}</span>
-          </div>
-          <div>
-            <span class="text-slate-400 block text-[11px]">Gate Officer</span>
-            <span class="font-medium text-slate-800">${escapeHtml(log.guardName || 'Officer on duty')}</span>
-          </div>
-          <div class="col-span-2">
-            <span class="text-slate-400 block text-[11px]">Logged Timestamp</span>
-            <span class="font-medium font-mono text-slate-800">${escapeHtml(log.timestamp)}</span>
-            ${log.syncedAt && offlineChip(log) ? `<span class="block mt-1 text-[11px] text-ncst-navy font-semibold">Recorded offline at the gate &middot; reached the server ${escapeHtml(log.syncedAt)}</span>` : ''}
+          <div class="text-right flex flex-col items-end gap-1">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${resultBadgeClass}">
+              <span class="w-1.5 h-1.5 rounded-full ${resultDot}"></span>
+              ${resultLabel}
+            </span>
+            <span class="sp-record-reference">Record #${escapeHtml(String(log.id || '—'))}</span>
           </div>
         </div>
 
-        ${showClip ? `<div>
-          <span class="text-slate-500 block text-[11px] font-bold uppercase mb-1">CCTV Clip &middot; ${SPClip.seconds} s at the ${/exit/i.test(log.action || '') ? 'exit' : 'entrance'}</span>
-          <div id="auditClipHost"></div>
-          <p class="mt-1 text-[10px] text-slate-500">Simulated clip. Footage is supplied by the school; a placeholder shows until the video is added.</p>
-        </div>` : ''}
+        <!-- 2-Column Details Ledger -->
+        <div class="sp-record-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+          
+          <!-- Vehicle Card -->
+          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-2">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1 flex items-center justify-between">
+              <span>Vehicle</span>
+            </div>
+            <div class="flex items-center gap-2 pt-0.5">
+              <span class="font-mono font-bold text-sm bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                ${escapeHtml(log.plateNumber)}
+              </span>
+              <span class="text-xs text-slate-600">${escapeHtml(log.vehicleType || '')}</span>
+            </div>
+            <div class="text-[11px] text-slate-500 pt-1">
+              <span class="sp-record-label">Campus status</span> <strong class="text-slate-700">${escapeHtml(log.status || 'Recorded')}</strong>
+            </div>
+          </section>
 
-        <div>
-          <span class="text-slate-500 block text-[11px] font-bold uppercase mb-1">Passage Verification Notes</span>
-          <div class="p-3 bg-slate-50 rounded border border-slate-200 text-slate-700 leading-relaxed">
-            ${escapeHtml(log.notes || 'Routine gate check completed with verified custody credentials.')}
-          </div>
+          <!-- Person Card -->
+          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-2">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">
+              Driver &amp; owner
+            </div>
+            <div>
+              <div class="sp-record-label">Driver</div>
+              <div class="font-semibold text-slate-900">${escapeHtml(log.driverName || 'Not recorded')}</div>
+              ${log.driverRelationship && !/^unverified$/i.test(log.driverRelationship) ? `<div class="sp-record-secondary">${escapeHtml(log.driverRelationship)}</div>` : ''}
+            </div>
+            <div class="pt-1 border-t border-slate-50">
+              <div class="sp-record-label">Owner</div>
+              <div class="font-semibold text-slate-800">${escapeHtml(log.ownerName || '—')}</div>
+            </div>
+          </section>
+
+          <!-- Gate Location Card -->
+          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-1.5">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">
+              Gate
+            </div>
+            <div class="font-bold text-slate-900 text-xs">${escapeHtml(cleanGate)}</div>
+          </section>
+
+          <!-- Officer Card -->
+          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-1.5">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">
+              Checked by
+            </div>
+            <div class="font-bold text-slate-900 text-xs">${escapeHtml(cleanOfficer)}</div>
+            ${officerReference ? `<div class="sp-record-secondary">${escapeHtml(officerReference)}</div>` : ''}
+          </section>
+
         </div>
+
+        <!-- Verification Notes -->
+        <section class="sp-record-card sp-record-notes p-3 rounded-lg border border-slate-200 bg-white space-y-1">
+          <div class="sp-record-label">Gate check notes</div>
+          <p class="text-xs text-slate-700 leading-relaxed">${escapeHtml(log.notes || 'Gate check completed.')}</p>
+          ${log.syncedAt && offlineChip(log) ? `
+            <div class="pt-1 text-[10.5px] text-blue-700 font-semibold font-mono">
+              Recorded offline at gate &middot; synced to server at ${escapeHtml(log.syncedAt)}
+            </div>
+          ` : ''}
+        </section>
+
+        <!-- CCTV Clip Section -->
+        ${showClip ? `
+          <div class="p-3 rounded-lg border border-slate-200 bg-white space-y-2">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+              <span>Gate camera</span>
+              <span class="font-mono text-blue-700 font-semibold">5s Gate Recording</span>
+            </div>
+            <div id="auditClipHost"></div>
+          </div>
+        ` : ''}
+
       </div>
     `;
 
     const auditVehicle = state.vehicles.find(x => (x.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() === (log.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase());
-    const auditFooter = auditVehicle ? `
-      <div class="flex items-center justify-end gap-2 w-full">
-        <button id="auditFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
-          Flag Violation / Warning
-        </button>
-        <button id="drawerCancelBtnInner" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">
+    const auditFooter = `
+      <div class="flex items-center justify-between gap-2 w-full">
+        <div>
+          ${auditVehicle ? `
+            <button id="auditFlagBtn" class="px-3 py-1.5 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-rose-700 shadow-2xs transition-colors cursor-pointer" title="Record a warning or violation">
+              Record issue
+            </button>
+          ` : ''}
+        </div>
+        <button id="drawerCancelBtnInner" class="px-3.5 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">
           Close
         </button>
-      </div>` : '';
-    openDrawer(`Gate Passage Audit — ${log.plateNumber}`, log.timestamp, html, auditFooter);
+      </div>
+    `;
+
+    openDrawer(`Gate record — ${log.plateNumber}`, log.timestamp, html, auditFooter);
     if (showClip) SPClip.mount(document.getElementById('auditClipHost'), { logId: log.id, plate: log.plateNumber, action: log.action, loggedAt: log.loggedAt, gatePoint: log.gatePoint });
     const auditFlagBtn = document.getElementById('auditFlagBtn');
     if (auditFlagBtn) auditFlagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(auditVehicle, { context: `Gate log: ${log.action} at ${log.gatePoint}, ${log.timestamp}` }));
@@ -3278,6 +3566,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const targetId = editVehicleId.value;
       const v = state.vehicles.find(item => String(item.id) === String(targetId));
       if (!v) return;
+      const beforeSave = { ...v };
+      const requestedVip = editPassClassVip ? editPassClassVip.checked : Boolean(v.isVip);
 
       const ownerRole = editOwnerRole ? editOwnerRole.value : (v.ownerRole || 'Student');
       const ownerIdNumber = editOwnerIdNumber ? editOwnerIdNumber.value.trim() : (v.ownerIdNumber || '');
@@ -3348,10 +3638,7 @@ document.addEventListener('DOMContentLoaded', () => {
       v.make_model_color = makeModelColor;
       v.stickerYear = stickerYear;
       v.sticker_year = stickerYear;
-      if (editPassClassVip) {
-        v.isVip = editPassClassVip.checked;
-        v.passClass = v.isVip ? 'VIP' : 'Standard';
-      }
+      // VIP status stays server-confirmed until the update succeeds.
       v.registrationStatus = registrationStatus;
       v.registration_status = registrationStatus;
       v.ownerPhoto = editOwnerPhotoDataUrl;
@@ -3365,7 +3652,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderVehiclesTable();
       updateCounts();
       renderDashboard();
-      showToast(`Record for ${v.plateNumber} successfully updated.`);
+      showToast(`Saving changes for ${v.plateNumber}…`);
 
       // Sync with InfinityFree backend API
       if (window.ApiClient && v.id) {
@@ -3382,7 +3669,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhone: v.ownerPhone,
           ownerEmail: v.ownerEmail,
           stickerYear: v.stickerYear,
-          passClass: v.isVip ? 'VIP' : 'Standard',
+          passClass: requestedVip ? 'VIP' : 'Standard',
           registrationStatus: v.registrationStatus,
           ownerPhoto: v.ownerPhoto,
           vehiclePhoto: v.vehiclePhoto,
@@ -3390,10 +3677,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }).then((saved) => {
           if (saved) applyServerPass(v, saved);
           renderVehiclesTable();
+          updateCounts();
+          renderDashboard();
+          showToast(`Changes saved for ${v.plateNumber}.`);
           console.log('[App] Vehicle updated on server:', v.plateNumber);
         }).catch(err => {
           console.warn('[App] Update API sync notice:', err.message);
-          showToast(`Note: Updated locally, server sync: ${err.message}`);
+          Object.assign(v, beforeSave);
+          renderVehiclesTable();
+          updateCounts();
+          renderDashboard();
+          showToast(`Changes were not saved: ${err.message}`);
         });
       }
     });
@@ -4353,7 +4647,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctx.font = '9px "Plus Jakarta Sans", sans-serif';
       ctx.fillStyle = '#64748B';
       ctx.fillText('This permit must be displayed on vehicle windshield or presented to Gate Officers upon entry.', 32, footY + 16);
-      ctx.fillText('Unauthorized duplication or custody transfer is subject to administrative sanction and vehicle impoundment.', 32, footY + 30);
+      ctx.fillText('Do not copy or share this pass. Misuse may lead to a penalty or the vehicle being held.', 32, footY + 30);
 
       callback(canvas.toDataURL('image/png'));
     }
@@ -4397,7 +4691,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // QR Technology Action Button Handlers
   if (downloadPassBadgeBtn) {
     downloadPassBadgeBtn.addEventListener('click', () => {
-      showToast('Register the vehicle first. The signed pass opens automatically after saving (Print Pass in the dossier).');
+      showToast('Register the vehicle first. The signed pass opens automatically after saving (Print Pass in vehicle details).');
       return;
       // eslint-disable-next-line no-unreachable
       if (!qrCodeContainer) return;
@@ -4574,11 +4868,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const saved = await ApiClient.reissuePass(v.id);
       const target = state.vehicles.find(x => x.id === v.id) || v;
       applyServerPass(target, saved);
-      showToast(`New pass issued for ${v.plateNumber}. Old QR codes are revoked.`, 'success');
+      showToast(`New pass issued for ${v.plateNumber}. Old QR codes no longer work.`, 'success');
       renderVehiclesTable();
       openVehicleDrawer(target);
     } catch (err) {
-      showToast(`Reissue failed: ${err.message}`, 'error');
+      showToast(`Could not replace pass: ${err.message}`, 'error');
     }
   }
 

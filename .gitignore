@@ -53,3 +53,6 @@ app.*.map.json
 **/config/secret.production.php
 backend/data/
 web-app-admin/data/
+
+# Local testing and design preview artifacts
+artifacts/

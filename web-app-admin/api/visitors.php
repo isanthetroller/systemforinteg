@@ -108,59 +108,23 @@ function handleListVisitors($pdo) {
         sendResponse(200, formatVisitorPass($row));
     }
 
-    $isUpcoming = !empty($_GET['upcoming']);
-    $isAll = !empty($_GET['all']) || (isset($_GET['date']) && strtolower($_GET['date']) === 'all');
+    if (!empty($_GET['upcoming'])) {
+        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `valid_date` > ? AND `status` = 'Active' ORDER BY `valid_date` ASC, `id` ASC");
+        $stmt->execute([date('Y-m-d', spNow())]);
+        sendResponse(200, array_map('formatVisitorPass', $stmt->fetchAll()));
+    }
+
     $date = $_GET['date'] ?? date('Y-m-d', spNow());
-    $search = isset($_GET['search']) ? trim((string)$_GET['search']) : '';
-    $status = isset($_GET['status']) ? trim((string)$_GET['status']) : '';
-
-    $where = [];
-    $params = [];
-
-    if ($isUpcoming) {
-        $where[] = "(`valid_date` > ? AND `status` = 'Active')";
-        $params[] = date('Y-m-d', spNow());
-    } elseif (!$isAll) {
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
-            $date = date('Y-m-d', spNow());
-        }
-        $where[] = "(`valid_date` = ? OR (`entry_time` IS NOT NULL AND `exit_time` IS NULL AND `valid_date` < ?))";
-        $params[] = $date;
-        $params[] = $date;
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        sendResponse(400, null, 'date must be YYYY-MM-DD.');
     }
-
-    if ($status !== '' && strtolower($status) !== 'all') {
-        if ($status === 'Inside') {
-            $where[] = "(`entry_time` IS NOT NULL AND `exit_time` IS NULL)";
-        } elseif ($status === 'CheckedOut') {
-            $where[] = "(`exit_time` IS NOT NULL)";
-        } elseif ($status === 'Upcoming') {
-            $where[] = "(`valid_date` > ? AND `status` = 'Active')";
-            $params[] = date('Y-m-d', spNow());
-        } elseif (in_array($status, ['Active', 'Used', 'Expired', 'Revoked'], true)) {
-            $where[] = "`status` = ?";
-            $params[] = $status;
-        }
+    $sql = "SELECT * FROM `visitor_passes` WHERE (`valid_date` = ? OR (`entry_time` IS NOT NULL AND `exit_time` IS NULL AND `valid_date` < ?))";
+    $params = [$date, $date];
+    if (!empty($_GET['status']) && in_array($_GET['status'], ['Active', 'Used', 'Expired', 'Revoked'], true)) {
+        $sql .= " AND `status` = ?";
+        $params[] = $_GET['status'];
     }
-
-    if ($search !== '') {
-        $needle = "%{$search}%";
-        $where[] = "(`visitor_name` LIKE ? OR `plate_number` LIKE ? OR `vehicle_model` LIKE ? OR `pass_code` LIKE ? OR `person_to_visit` LIKE ? OR `purpose_of_visit` LIKE ? OR `contact_number` LIKE ?)";
-        $params[] = $needle;
-        $params[] = $needle;
-        $params[] = $needle;
-        $params[] = $needle;
-        $params[] = $needle;
-        $params[] = $needle;
-        $params[] = $needle;
-    }
-
-    $sql = "SELECT * FROM `visitor_passes`";
-    if (!empty($where)) {
-        $sql .= " WHERE " . implode(" AND ", $where);
-    }
-    $sql .= $isUpcoming ? " ORDER BY `valid_date` ASC, `id` ASC" : " ORDER BY `valid_date` DESC, `id` DESC";
-
+    $sql .= " ORDER BY `id` DESC";
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     sendResponse(200, array_map('formatVisitorPass', $stmt->fetchAll()));

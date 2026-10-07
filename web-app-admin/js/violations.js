@@ -20,7 +20,9 @@
     'Other'
   ];
 
-  const view = { records: [], flagTarget: null, flagOptions: {}, resolveTarget: null };
+  const view = { records: [], flagTarget: null, flagOptions: {}, resolveTarget: null, page: 1, pageSize: 10 };
+  let recordsRequest = 0;
+  let refreshInProgress = false;
 
   const esc = (v) => (window.SP ? SP.escapeHtml(v == null ? '' : String(v)) : String(v == null ? '' : v));
   const isAdmin = () => !!(window.SPAuth && SPAuth.hasRole('admin'));
@@ -77,7 +79,7 @@
 
     $('flagVehicleSummary').innerHTML = `
       <div class="flex flex-wrap items-center gap-2">
-        <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold tracking-wider">${esc(vehicle.plateNumber)}</span>
+        <span class="sp-plate tracking-wider">${esc(vehicle.plateNumber)}</span>
         <span class="font-semibold text-slate-700">${esc(vehicle.ownerName || '')}</span>
         ${strikeMeter(vehicle.warningCount, vehicle.isBanned)}
       </div>
@@ -197,56 +199,62 @@
   /* ------------------------------------------------------------------------
      Violations & Penalties view
      ------------------------------------------------------------------------ */
-  async function loadRecords() {
+  async function loadRecords({ silent = false } = {}) {
+    const request = ++recordsRequest;
     const body = $('violTableBody');
+    $('violRecordsRegion').setAttribute('aria-busy', 'true');
+    if (!silent) body.innerHTML = `<tr><td colspan="${isAdmin() ? 5 : 4}" class="sp-violations-empty">Loading records&hellip;</td></tr>`;
     try {
-      view.records = await ApiClient.getViolations({ status: $('violStatusFilter').value });
+      const records = await ApiClient.getViolations({ status: $('violStatusFilter').value });
+      if (request !== recordsRequest) return;
+      view.records = records;
       renderRecords();
     } catch (err) {
-      body.innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
+      if (request !== recordsRequest) return;
+      body.innerHTML = `<tr><td colspan="${isAdmin() ? 5 : 4}" class="sp-violations-empty text-ncst-crimson" role="alert">${esc(err.message)}<br>Use Refresh to try again.</td></tr>`;
+      $('violPaginationInfo').textContent = 'Records could not be loaded';
+      $('violRecordsCount').textContent = 'Unavailable';
+      $('violPrevBtn').disabled = $('violNextBtn').disabled = true;
+    } finally {
+      if (request === recordsRequest) $('violRecordsRegion').setAttribute('aria-busy', 'false');
     }
   }
 
   function renderRecords() {
     const q = ($('violSearch').value || '').trim().toLowerCase();
     const rows = view.records.filter(r => !q ||
-      [r.plateNumber, r.ownerName, r.violationType, r.loggedBy].some(x => (x || '').toLowerCase().includes(q)));
+      [r.plateNumber, r.ownerName, r.violationType, r.loggedBy, r.description, r.resolutionNotes].some(x => String(x || '').toLowerCase().includes(q)));
+    const pages = Math.max(1, Math.ceil(rows.length / view.pageSize));
+    view.page = Math.min(Math.max(1, view.page), pages);
+    const start = (view.page - 1) * view.pageSize;
+    $('violRecordsCount').textContent = `${rows.length} ${rows.length === 1 ? 'record' : 'records'}`;
+    $('violPaginationInfo').textContent = rows.length ? `Showing ${start + 1}–${Math.min(start + view.pageSize, rows.length)} of ${rows.length} records` : '0 matching records';
+    $('violPageIndicator').textContent = `Page ${view.page} of ${pages}`;
+    $('violPrevBtn').disabled = view.page <= 1;
+    $('violNextBtn').disabled = view.page >= pages;
     const body = $('violTableBody');
+    const admin = isAdmin();
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No records.</td></tr>';
+      body.innerHTML = `<tr><td colspan="${admin ? 5 : 4}" class="sp-violations-empty"><strong>${q ? 'No records match your search' : 'No records in this status'}</strong><p>${q ? 'Try a different plate, owner, or issue.' : 'Choose another status to view the record history.'}</p></td></tr>`;
       return;
     }
-    const admin = isAdmin();
     body.innerHTML = '';
-    rows.forEach(r => {
+    rows.slice(start, start + view.pageSize).forEach(r => {
       const tr = document.createElement('tr');
-      tr.className = 'align-top hover:bg-slate-50/60';
-      const resolution = r.status !== 'Pending' && r.resolutionNotes
-        ? `<div class="mt-1 text-[10px] text-slate-500">${esc(r.status)} by ${esc(r.resolvedBy || '')}: ${esc(r.resolutionNotes)}</div>` : '';
+      const detail = r.description || r.resolutionNotes;
       tr.innerHTML = `
-        <td class="px-4 py-2.5 whitespace-nowrap text-slate-600">${formatDate(r.createdAt)}</td>
-        <td class="px-4 py-2.5">
-          <div class="font-mono font-bold text-slate-900 whitespace-nowrap">${esc(r.plateNumber)}</div>
-          <div class="text-[10px] text-slate-500">${esc(r.ownerName || '')}</div>
+        <td><span class="sp-plate">${esc(r.plateNumber)}</span><small class="sp-cell-detail sp-violation-owner">${esc(r.ownerName || 'Owner not recorded')}</small></td>
+        <td>${severityBadge(r.severity)}<div class="sp-violation-issue">${esc(r.violationType)}</div>
+          ${detail ? `<details class="sp-violation-details"><summary>View notes${r.resolutionNotes ? ' &amp; resolution' : ''}</summary>${r.description ? `<p>${esc(r.description)}</p>` : ''}${r.resolutionNotes ? `<p><strong>${esc(r.status)} by ${esc(r.resolvedBy || 'administrator')}</strong><br>${esc(r.resolutionNotes)}</p>` : ''}</details>` : ''}
         </td>
-        <td class="px-4 py-2.5">
-          <div class="font-semibold text-slate-800">${esc(r.violationType)}</div>
-          ${r.description ? `<div class="text-[10px] text-slate-500 max-w-xs">${esc(r.description)}</div>` : ''}
-          ${resolution}
-        </td>
-        <td class="px-4 py-2.5">${severityBadge(r.severity)}</td>
-        <td class="px-4 py-2.5 text-slate-600">${esc(r.loggedBy)}</td>
-        <td class="px-4 py-2.5">${statusBadge(r.status)}</td>
-        <td class="px-4 py-2.5 admin-only">
-          <div class="flex justify-end gap-1.5">
-            ${admin && r.status === 'Pending' && r.severity === 'Violation' ? '<button type="button" data-act="resolve" class="px-2.5 py-1 rounded bg-ncst-green hover:bg-ncst-greenDark text-white text-[11px] font-bold cursor-pointer">Resolve</button>' : ''}
-            ${admin && r.status === 'Pending' ? '<button type="button" data-act="dismiss" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">Dismiss</button>' : ''}
-          </div>
-        </td>`;
-      const resolveBtn = tr.querySelector('[data-act="resolve"]');
-      if (resolveBtn) resolveBtn.addEventListener('click', () => openResolveModal({ action: 'resolve', record: r }));
-      const dismissBtn = tr.querySelector('[data-act="dismiss"]');
-      if (dismissBtn) dismissBtn.addEventListener('click', () => openResolveModal({ action: 'dismiss', record: r }));
+        <td><time>${formatDate(r.createdAt)}</time><small class="sp-cell-detail">${esc(r.loggedBy || 'Officer not recorded')}</small></td>
+        <td>${statusBadge(r.status)}</td>
+        <td class="admin-only"><div class="sp-violation-actions">
+          ${admin && r.status === 'Pending' && r.severity === 'Violation' ? `<button type="button" data-act="resolve" class="sp-review-button" aria-label="Resolve violation for ${esc(r.plateNumber)}">Resolve</button>` : ''}
+          ${admin && r.status === 'Pending' ? `<button type="button" data-act="dismiss" class="sp-violation-dismiss" aria-label="Dismiss record for ${esc(r.plateNumber)}">Dismiss</button>` : '<span class="sp-cell-detail">Completed</span>'}
+        </div></td>`;
+      tr.querySelector('[data-act="resolve"]')?.addEventListener('click', () => openResolveModal({ action:'resolve', record:r }));
+      tr.querySelector('[data-act="dismiss"]')?.addEventListener('click', () => openResolveModal({ action:'dismiss', record:r }));
       body.appendChild(tr);
     });
   }
@@ -266,22 +274,19 @@
       return;
     }
     const admin = isAdmin();
-    list.innerHTML = '';
+    list.innerHTML = '<div class="overflow-x-auto" role="region" aria-label="Vehicles on watch" tabindex="0"><table class="sp-watch-table w-full text-left"><thead><tr><th scope="col">Vehicle</th><th scope="col">Owner</th><th scope="col">Strike status</th><th scope="col">Actions</th></tr></thead><tbody></tbody></table></div>';
+    const watchBody = list.querySelector('tbody');
     watched.forEach(v => {
-      const row = document.createElement('div');
-      row.className = 'px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs';
+      const row = document.createElement('tr');
       row.innerHTML = `
-        <span class="font-mono font-bold text-slate-900 w-24">${esc(v.plateNumber)}</span>
-        <span class="text-slate-600 flex-1 min-w-[120px] truncate">${esc(v.ownerName || '')}${v.ownerPhone ? ' &middot; ' + esc(v.ownerPhone) : ''}</span>
-        ${strikeMeter(v.warningCount, v.isBanned)}
-        <div class="flex gap-1.5">
-          <button type="button" data-act="flag" class="px-2.5 py-1 rounded border border-ncst-crimson/30 bg-white hover:bg-ncst-crimsonLight text-[11px] font-semibold text-ncst-crimson cursor-pointer">Flag</button>
-          ${admin ? '<button type="button" data-act="reset" class="px-2.5 py-1 rounded border border-ncst-green/30 bg-ncst-greenLight hover:bg-ncst-greenLight/80 text-[11px] font-semibold text-ncst-greenDark cursor-pointer">Reset Strikes &amp; Lift Suspension</button>' : ''}
-        </div>`;
+        <td><span class="sp-plate">${esc(v.plateNumber)}</span></td>
+        <td><span>${esc(v.ownerName || 'Not recorded')}</span>${v.ownerPhone ? `<small class="sp-cell-detail">${esc(v.ownerPhone)}</small>` : ''}</td>
+        <td>${strikeMeter(v.warningCount, v.isBanned)}</td>
+        <td><div class="sp-watch-actions"><button type="button" data-act="flag" class="sp-review-button" aria-label="Record issue for ${esc(v.plateNumber)}">Record issue</button>${admin ? `<button type="button" data-act="reset" class="sp-violation-dismiss" aria-label="Reset strikes and lift suspension for ${esc(v.plateNumber)}">Reset strikes</button>` : ''}</div></td>`;
       row.querySelector('[data-act="flag"]').addEventListener('click', () => openFlagModal(v));
       const resetBtn = row.querySelector('[data-act="reset"]');
       if (resetBtn) resetBtn.addEventListener('click', () => openResolveModal({ action: 'reset', vehicle: v }));
-      list.appendChild(row);
+      watchBody.appendChild(row);
     });
   }
 
@@ -293,18 +298,26 @@
       const badge = $('violationsSidebarCount');
       if (badge) {
         badge.textContent = pending.length;
-        badge.className = "text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-amber-950 shadow-xs";
+        badge.dataset.empty = String(pending.length === 0);
+        badge.title = pending.length ? `${pending.length} warnings or violations need review` : 'No warnings or violations need review';
+        badge.className = "sp-sidebar-count";
       }
     } catch (_) { /* badge is optional */ }
   }
 
   async function refreshAfterChange() {
-    if (window.SP && SP.reload) await SP.reload();
-    if ($('violationsView').classList.contains('active')) {
-      renderWatchList();
-      loadRecords();
+    if (refreshInProgress) return;
+    refreshInProgress = true;
+    try {
+      if (window.SP && SP.reload) await SP.reload();
+      if ($('violationsView').classList.contains('active')) {
+        renderWatchList();
+        await loadRecords({ silent: true });
+      }
+      await updatePendingCount();
+    } finally {
+      refreshInProgress = false;
     }
-    updatePendingCount();
   }
 
   function showView() {
@@ -324,12 +337,15 @@
     document.querySelectorAll('input[name="flagSeverity"]').forEach(r => r.addEventListener('change', updateStrikeHint));
     $('resolveForm').addEventListener('submit', submitResolve);
     $('resolveCancelBtn').addEventListener('click', () => hideModal('resolveModal'));
-    $('violStatusFilter').addEventListener('change', loadRecords);
-    $('violSearch').addEventListener('input', renderRecords);
+    $('violStatusFilter').addEventListener('change', () => { view.page = 1; loadRecords(); });
+    $('violSearch').addEventListener('input', () => { view.page = 1; renderRecords(); });
+    $('violPrevBtn').addEventListener('click', () => { view.page--; renderRecords(); });
+    $('violNextBtn').addEventListener('click', () => { view.page++; renderRecords(); });
     $('violationsRefreshBtn').addEventListener('click', refreshAfterChange);
 
     document.addEventListener('sp:data-loaded', () => {
-      if ($('violationsView').classList.contains('active')) renderWatchList();
+      if (refreshInProgress) return;
+      if ($('violationsView').classList.contains('active')) { renderWatchList(); loadRecords({ silent: true }); }
       updatePendingCount();
     });
   });

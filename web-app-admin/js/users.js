@@ -59,7 +59,7 @@
         <td class="px-4 py-2.5 font-mono text-[11px]">${esc(u.username)}</td>
         <td class="px-4 py-2.5">${roleBadge(u.role)}</td>
         <td class="px-4 py-2.5 font-mono text-[11px]">${esc(u.badgeNumber || '—')}</td>
-        <td class="px-4 py-2.5">${esc(u.gateAssigned || '—')}</td>
+        <td class="px-4 py-2.5">${esc((u.gateAssigned || '—').replace(/Ingress/g, 'Entry').replace(/Egress/g, 'Exit'))}</td>
         <td class="px-4 py-2.5">${statusBadge(u)}</td>
         <td class="px-4 py-2.5 whitespace-nowrap">${formatDateTime(u.lastLogin)}</td>
         <td class="px-4 py-2.5">

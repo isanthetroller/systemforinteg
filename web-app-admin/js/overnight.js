@@ -29,7 +29,7 @@
   function strikeLabel(item) {
     if (item.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">BANNED</span>';
     const n = Math.min(Number(item.warningCount || 0), STRIKE_LIMIT);
-    const cls = n === 0 ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-ncst-goldLight text-amber-950 border-ncst-gold/40';
+    const cls = n === 0 ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-slate-100 text-slate-600 border-slate-200';
     return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-extrabold ${cls}">Strike ${n} of ${STRIKE_LIMIT}</span>`;
   }
 
@@ -56,26 +56,26 @@
     items.forEach(item => {
       const overnight = item.category === 'overnight';
       const row = document.createElement('div');
-      row.className = `px-4 py-3 border-l-4 ${overnight ? 'border-l-ncst-navy bg-ncst-navy/5' : 'border-l-ncst-gold bg-ncst-goldLight/40'}`;
+      row.className = 'sp-parking-row';
       const tel = telHref(item.ownerPhone);
       row.innerHTML = `
         <div class="flex flex-wrap items-center gap-2">
-          <span class="px-2 py-0.5 rounded bg-slate-900 text-ncst-gold font-mono font-extrabold text-xs tracking-wider">${esc(item.plateNumber)}</span>
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-extrabold ${overnight ? 'bg-ncst-navy text-white' : 'bg-ncst-gold text-slate-900'}">${overnight ? 'OVERNIGHT' : 'OVERTIME'}</span>
+          <span class="sp-plate text-xs tracking-wider">${esc(item.plateNumber)}</span>
+          <span class="sp-status ${overnight ? 'sp-status-navy' : 'sp-status-amber'}">${overnight ? 'OVERNIGHT' : 'OVERTIME'}</span>
           ${strikeLabel(item)}
           <span class="ml-auto text-[11px] font-bold ${overnight ? 'text-ncst-navy' : 'text-amber-950'}">${esc(item.elapsedHours)} h inside</span>
         </div>
-        <div class="mt-1.5 grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-0.5 text-[11px] text-slate-600">
-          <div class="truncate">Owner: <span class="font-semibold text-slate-800">${esc(item.ownerName)}</span></div>
-          <div class="truncate">Contact: <span class="font-mono font-semibold text-slate-800">${esc(item.ownerPhone || 'none on file')}</span></div>
-          <div class="truncate">Entered: <span class="font-semibold text-slate-800">${formatTime(item.entryTime)}</span></div>
+        <div class="sp-parking-details">
+          <div class="">Owner: <span class="font-semibold text-slate-800">${esc(item.ownerName)}</span></div>
+          <div class="">Contact: <span class="font-mono font-semibold text-slate-800">${esc(item.ownerPhone || 'none on file')}</span></div>
+          <div class="">Entered: <span class="font-semibold text-slate-800">${formatTime(item.entryTime)}</span></div>
         </div>
-        <div class="mt-2 flex flex-wrap items-center gap-1.5">
+        <div class="sp-parking-actions">
           ${item.ownerPhone ? '<button type="button" data-act="copy" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">Copy Number</button>' : ''}
-          ${tel ? `<a href="${esc(tel)}" class="px-2.5 py-1 rounded border border-ncst-green/30 bg-ncst-greenLight hover:bg-ncst-greenLight/80 text-[11px] font-semibold text-ncst-greenDark">Call Owner</a>` : ''}
+          ${tel ? `<a href="${esc(tel)}" class="sp-call-owner">Call Owner</a>` : ''}
           ${item.flaggedThisNight
             ? `<span class="ml-auto text-[11px] font-semibold text-slate-500">Strike recorded ${formatTime(item.flaggedAt)}</span>`
-            : '<button type="button" data-act="flag" class="ml-auto px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">Flag Overnight Strike</button>'}
+            : '<button type="button" data-act="flag" class="ml-auto px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">Record Strike</button>'}
         </div>`;
 
       const copyBtn = row.querySelector('[data-act="copy"]');

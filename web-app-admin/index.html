@@ -4,6 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SecurePark — Campus Gate & Vehicle Administration</title>
+  <style>
+    /* First-paint rules must load before the CDN styles and session scripts. */
+    body.sp-auth-pending #loginOverlay,
+    body.sp-auth-pending #appShell { visibility:hidden !important; }
+    body.sp-auth-pending #loginOverlay { display:none !important; }
+    #authLoading { position:fixed; inset:0; z-index:100; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; background:#f4f6fa; color:#253475; font:500 14px system-ui,sans-serif; }
+    #authLoading[hidden] { display:none !important; }
+    #authLoading .auth-loading-mark { width:42px; height:42px; padding:10px; box-sizing:border-box; border:1px solid #dce3ef; border-radius:13px; background:#fff; }
+    #authLoading p { margin:0; }
+  </style>
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -59,15 +69,45 @@
   </script>
 
   <style>
+    :root {
+      --sp-navy: #253475;
+      --sp-navy-dark: #1E2B64;
+      --sp-navy-light: #2B3D86;
+      --sp-gold: #F5B800;
+      --sp-gold-dark: #D49B00;
+      --sp-crimson: #D62828;
+      --sp-green: #16A34A;
+      --sp-surface: #FFFFFF;
+      --sp-canvas: #F8FAFC;
+      --sp-border: #E2E8F0;
+      --sp-text: #0F172A;
+      --sp-muted: #64748B;
+    }
+
     .view-panel { display: none; }
     .view-panel.active { display: block; }
 
-    /* Harmonized NCST Brand Status Badges */
-    .sp-badge-success { background-color: #DCFCE7; color: #15803D; border: 1px solid rgba(22, 163, 74, 0.3); }
-    .sp-badge-warning { background-color: #FEF08A; color: #854D0E; border: 1px solid rgba(212, 155, 0, 0.4); }
-    .sp-badge-danger { background-color: #FEE2E2; color: #D62828; border: 1px solid rgba(214, 40, 40, 0.3); }
-    .sp-badge-info { background-color: rgba(27, 54, 118, 0.08); color: #1B3676; border: 1px solid rgba(27, 54, 118, 0.2); }
-    .sp-badge-neutral { background-color: #F1F5F9; color: #475569; border: 1px solid #CBD5E1; }
+    /* Unified NCST Institutional Status Badges */
+    .sp-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      line-height: 1.25;
+      white-space: nowrap;
+      border-width: 1px;
+      border-style: solid;
+      letter-spacing: -0.01em;
+    }
+    .sp-badge-success { background-color: #ECFDF5; color: #047857; border-color: #A7F3D0; }
+    .sp-badge-warning { background-color: #FFFBEB; color: #B45309; border-color: #FDE68A; }
+    .sp-badge-danger { background-color: #FEF2F2; color: #B91C1C; border-color: #FECACA; }
+    .sp-badge-info { background-color: #EFF6FF; color: #1D4ED8; border-color: #BFDBFE; }
+    .sp-badge-neutral { background-color: #F8FAFC; color: #475569; border-color: #E2E8F0; }
+    .sp-badge-vip { background-color: #FEF9C3; color: #854D0E; border-color: #FDE047; font-weight: 700; }
 
     /* Role-based visibility (set on <body> by js/auth.js). Server enforces the same rules. */
     body.role-guard .admin-only { display: none !important; }
@@ -84,31 +124,17 @@
     /* Nothing behind the login screen is visible until a session is confirmed */
     body:not(.sp-authed) #appShell { visibility: hidden; }
 
-    /* ==========================================================================
-       SecurePark Admin Login Screen Styling
-       ========================================================================== */
-    .sp-login-canvas {
-      position: fixed;
-      inset: 0;
-      z-index: 60;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow-y: auto;
-      overflow-x: hidden;
-      padding: 1.25rem 1rem;
-      background-color: #1a2656;
-      background: radial-gradient(circle at 50% 35%, #22306c 0%, #1a2656 55%, #131d42 100%);
-    }
-    
-    /* Smooth Sidebar Hide/Show Transition & Royal Blue Gradient */
+    /* Sidebar shell; workspace.css controls its opening and closing motion. */
     #appSidebar {
-      transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+      width: 16rem;
+      flex-shrink: 0;
+      overflow: hidden;
       background: linear-gradient(180deg, #182554 0%, #121c40 50%, #0a1028 100%);
+      will-change: margin-left;
+      contain: layout style;
     }
     #appSidebar.collapsed {
       margin-left: -16rem; /* Fully hides 64 width */
-      opacity: 0;
       pointer-events: none;
     }
     #appSidebar nav::-webkit-scrollbar {
@@ -120,6 +146,18 @@
     }
     #appSidebar nav::-webkit-scrollbar-thumb:hover {
       background: rgba(255, 255, 255, 0.25);
+    }
+
+    /* Responsive Mobile/Tablet Off-Canvas Sidebar */
+    @media (max-width: 1023px) {
+      #appSidebar:not(.collapsed) {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 50;
+        box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.4), 0 8px 10px -6px rgba(15, 23, 42, 0.3);
+      }
     }
 
     /* Print: Only output the official NCST QR Decal (Navy Top Banner + Centered QR Code) */
@@ -181,29 +219,32 @@
       }
     }
   </style>
-</head>
-<body class="h-full font-sans text-slate-900 antialiased bg-slate-50 overflow-x-hidden">
+<link rel="stylesheet" href="css/workspace.css?v=20261007q">
+<link rel="stylesheet" href="css/login.css?v=20261007d"></head>
+<body class="sp-auth-pending h-full font-sans text-slate-900 antialiased bg-slate-50 overflow-x-hidden">
+  <div id="authLoading" role="status" aria-live="polite">
+    <svg class="auth-loading-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m8 12 3 3 5-6"/></svg>
+    <p>Opening SecurePark&hellip;</p>
+  </div>
+  <noscript><style>#authLoading { display:none; }</style><p style="padding:24px;text-align:center">Enable JavaScript to open SecurePark.</p></noscript>
 
   <div id="appShell" class="flex h-full min-h-screen">
     
-    <!-- ==================== SIDEBAR (ROYAL BLUE GRADIENT THEME, COLLAPSIBLE) ==================== -->
-    <aside id="appSidebar" class="w-64 flex-shrink-0 text-white flex flex-col border-r border-white/10 select-none relative z-30 shadow-md">
+    <!-- ==================== SIDEBAR (GROUPED NAVIGATION, COLLAPSIBLE) ==================== -->
+    <aside id="appSidebar" aria-label="Primary navigation" class="w-64 flex-shrink-0 text-white flex flex-col border-r border-white/10 select-none relative z-30 shadow-md">
       
       <!-- Institutional Branding Header with Collapse Button -->
-      <div class="p-3.5 border-b border-white/10 flex items-center justify-between">
-        <div class="flex items-center gap-2.5 min-w-0">
-          <!-- Official NCST Crest SVG -->
-          <div class="w-9 h-9 rounded-lg bg-white p-1 shadow-xs border border-ncst-gold/40 flex items-center justify-center flex-shrink-0">
-            <img src="assets/ncst-logo.svg" alt="NCST Crest" class="w-full h-full object-contain">
-          </div>
+      <div class="sidebar-brand p-3.5 border-b border-white/10 flex items-center justify-between">
+        <div class="sidebar-brand-lockup">
+          <span class="sidebar-emblem"><img src="assets/ncst-emblem.png" alt="NCST" width="32" height="36"></span>
           <div class="min-w-0">
-            <div class="text-xs font-bold text-white leading-tight">SecurePark</div>
-            <div class="text-[10px] text-blue-200/70 font-medium">Campus Gate Admin</div>
+            <div class="sidebar-brand-name">SecurePark<span aria-hidden="true">.</span></div>
+            <div class="sidebar-brand-caption">NCST Campus Gate</div>
           </div>
         </div>
         
         <!-- Collapse Button to Hide Sidebar -->
-        <button type="button" id="sidebarCollapseBtn" class="p-1.5 rounded-md text-blue-200/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex items-center justify-center flex-shrink-0" title="Hide Sidebar">
+        <button type="button" id="sidebarCollapseBtn" aria-label="Close sidebar" class="p-1.5 rounded-md text-blue-200/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex items-center justify-center flex-shrink-0" title="Hide Sidebar">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="11 17 6 12 11 7"></polyline>
             <polyline points="18 17 13 12 18 7"></polyline>
@@ -211,29 +252,16 @@
         </button>
       </div>
 
-      <!-- Grouped Navigation Menu (Collapsible Royal Blue Gradient Sidebar) -->
-      <nav class="flex-1 p-3 space-y-4 overflow-y-auto">
+      <!-- Grouped Navigation Menu -->
+      <nav aria-label="Campus administration" class="flex-1 p-3 space-y-4 overflow-y-auto">
         
-        <!-- Group: Overview -->
+        <!-- Group: Overview & Monitoring -->
         <div>
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
-            Overview
+          <div class="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-200/70">
+            Daily work
           </div>
           <div class="space-y-1">
-            <button type="button" id="navGateBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
-                <rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><path d="M13 7h4v4"/><path d="M7 17v-4h4"/>
-              </svg>
-              <span>Gate Monitor</span>
-            </button>
-            <button type="button" id="navOnCampusBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>
-              </svg>
-              <span class="flex-1">On Campus Now</span>
-              <span id="onCampusSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-white/15 text-white border border-white/20 shadow-2xs">0</span>
-            </button>
+            <!-- 1. Dashboard (Topmost Landing Overview) -->
             <button type="button" id="navDashboardBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-bold text-white bg-white/15 border-l-4 border-white shadow-xs transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-white flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="3" width="7" height="7" rx="1"/>
@@ -243,15 +271,45 @@
               </svg>
               <span>Dashboard</span>
             </button>
+
+            <!-- 2. Gate Monitor (Live Scanner & Authorization) -->
+            <button type="button" id="navGateBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                <rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><path d="M13 7h4v4"/><path d="M7 17v-4h4"/>
+              </svg>
+              <span>Gate Monitor</span>
+            </button>
+
+            <!-- 3. On Campus Now (Live Custody Presence) -->
+            <button type="button" id="navOnCampusBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>
+              </svg>
+              <span class="flex-1">On Campus Now</span>
+              <span id="onCampusSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-white/15 text-white border border-white/20 shadow-2xs">0</span>
+            </button>
+
+            <button type="button" id="navAuditBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+              <span>Gate Records</span>
+            </button>
           </div>
         </div>
 
-        <!-- Group: Vehicle Management -->
+        <!-- Group: Fleet & Visitor Management -->
         <div>
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
-            Vehicle Management
+          <div class="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-200/70">
+            Vehicles &amp; Visitors
           </div>
           <div class="space-y-1">
+            <!-- 4. Vehicle Directory -->
             <button type="button" id="navVehiclesBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"/>
@@ -263,40 +321,31 @@
 
             <button type="button" id="navAccountBtn" class="admin-only nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <line x1="19" y1="8" x2="19" y2="14"/>
-                <line x1="16" y1="11" x2="22" y2="11"/>
+                <path d="m3 10 2-5h8l2 5M3 10h12v7H3zM5 17v2M13 17v2M6 13h.01M12 13h.01M19 7v6M16 10h6"/>
               </svg>
               <span>Register Vehicle</span>
             </button>
 
+            <!-- 5. Visitor Day Passes -->
             <button type="button" id="navVisitorsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="17" x2="11" y2="17"/>
+                <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="17" x2="11" y2="17"/>
               </svg>
               <span>Visitor Day Passes</span>
             </button>
+
+            <!-- 6. Register Vehicle (Admin Enrollment) -->
+
           </div>
         </div>
 
-        <!-- Group: Security Operations -->
+        <!-- Group: Security & Compliance -->
         <div>
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
-            Security Operations
+          <div class="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-200/70">
+            Security
           </div>
           <div class="space-y-1">
-            <button type="button" id="navAuditBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
-              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-                <polyline points="10 9 9 9 8 9"/>
-              </svg>
-              <span>Audit Logs</span>
-            </button>
-
+            <!-- 7. Flagged & Blocked (Security Incidents & Holds) -->
             <button type="button" id="navFlaggedBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
@@ -304,28 +353,33 @@
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
               <span class="flex-1">Flagged & Blocked</span>
-              <span id="flaggedSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-500 text-white shadow-xs">
-                1
+              <span id="flaggedSidebarCount" class="sp-sidebar-count">
+                0
               </span>
             </button>
 
+            <!-- 8. Violations & Penalties (Citations & Strikes) -->
             <button type="button" id="navViolationsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                 <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
               </svg>
               <span class="flex-1">Violations &amp; Penalties</span>
-              <span id="violationsSidebarCount" class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-amber-950 shadow-xs">0</span>
+              <span id="violationsSidebarCount" class="sp-sidebar-count">0</span>
             </button>
+
+            <!-- 9. Gate Records (Authoritative Gate Passage Records) -->
+
           </div>
         </div>
 
-        <!-- Group: Administration (admin only) -->
+        <!-- Group: Administration -->
         <div class="admin-only">
-          <div class="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-300">
-            Administration
+          <div class="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-200/70">
+            Staff
           </div>
           <div class="space-y-1">
+            <!-- 10. Staff Accounts (User Management) -->
             <button type="button" id="navStaffBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -340,141 +394,106 @@
       </nav>
 
       <!-- User Officer Profile Card (Bottom Pinned) -->
-      <div class="p-3 bg-black/20 border-t border-white/10">
-        <div class="flex items-center gap-2.5">
+      <div class="sidebar-account p-3 bg-black/20 border-t border-white/10 space-y-2">
+        <div class="sidebar-profile flex items-center gap-2.5">
           <div id="sidebarUserInitials" class="w-8 h-8 rounded-full bg-white/20 text-white font-bold text-xs flex items-center justify-center border-2 border-white shadow-xs flex-shrink-0">
             --
           </div>
           <div class="min-w-0 flex-1">
             <div id="sidebarUserName" class="text-xs font-bold text-white truncate">Signed out</div>
+            <div id="sidebarUserRole" class="text-[10px] text-blue-200/70 font-medium truncate">Gate Staff</div>
           </div>
         </div>
+        <button type="button" id="logoutBtn" class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-rose-500/25 text-white hover:text-rose-200 text-xs font-semibold border border-white/15 transition-colors cursor-pointer shadow-2xs" title="Sign out of administration session">
+          <svg class="w-3.5 h-3.5 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+          </svg>
+          <span>Sign Out</span>
+        </button>
         <!-- Hidden stubs for JS compatibility -->
         <button type="button" id="changePasswordBtn" class="hidden" aria-hidden="true"></button>
-        <button type="button" id="logoutBtn" class="hidden" aria-hidden="true"></button>
       </div>
 
-      <!-- Sidebar Bottom Brand -->
-      <div class="px-3.5 py-2.5 border-t border-white/10 text-xs flex items-center justify-between bg-black/25">
-        <span class="text-blue-100 font-bold tracking-wide text-[11px]">SecurePark</span>
-      </div>
     </aside>
 
     <!-- ==================== MAIN WORKSPACE ==================== -->
-    <main class="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-slate-50">
-      
-      <!-- Top Utility Header -->
-      <header class="bg-white border-b border-slate-200 px-5 py-2.5 flex items-center justify-between flex-shrink-0 z-20 shadow-2xs">
-        <div class="flex items-center gap-3">
-          <!-- Expand Sidebar Button (Only visible when sidebar is collapsed) -->
-          <button type="button" id="sidebarExpandBtn" class="hidden p-1.5 rounded-md text-slate-500 hover:text-ncst-navy hover:bg-slate-100 border border-slate-200 shadow-2xs transition-colors cursor-pointer items-center justify-center flex-shrink-0" title="Show Sidebar">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="13 17 18 12 13 7"></polyline>
-              <polyline points="6 17 11 12 6 7"></polyline>
-            </svg>
-          </button>
-
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-slate-700 font-bold text-xs tracking-tight">National College of Science and Technology</span>
-            <span class="text-slate-400 hidden md:inline">•</span>
-            <span class="text-slate-500 hidden md:inline text-[11px] font-medium">Campus Gate Administration</span>
-          </div>
-        </div>
-
-        <!-- Top Header Action Controls -->
-        <div class="flex items-center gap-2.5">
-          <button type="button" id="topHeaderLogoutBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 text-slate-600 text-xs font-semibold shadow-2xs transition-colors cursor-pointer" title="Sign out of administration session">
-            <svg class="w-3.5 h-3.5 text-slate-400 group-hover:text-rose-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-              <polyline points="16 17 21 12 16 7"></polyline>
-              <line x1="21" y1="12" x2="9" y2="12"></line>
-            </svg>
-            <span>Sign Out</span>
-          </button>
-        </div>
+    <main class="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-slate-50 relative">      <button id="workspaceBackdrop" class="workspace-backdrop" type="button" aria-label="Close navigation" hidden></button>
+      <header class="workspace-bar">
+        <button type="button" id="workspaceMenu" class="workspace-menu" aria-label="Open navigation" aria-controls="appSidebar" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="workspace-context"><small>NCST · Campus operations</small><strong id="workspacePage" aria-live="polite">Dashboard</strong></div>
+        <time id="workspaceDate" class="workspace-date"></time>
       </header>
+      
+      <!-- Sidebar Expand Toggle (Docked at Left-Side Middle, visible only when sidebar is collapsed) -->
+      <button type="button" id="sidebarExpandBtn" class="hidden fixed left-0 top-1/2 -translate-y-1/2 z-40 px-1.5 py-3 rounded-r-xl bg-white hover:bg-slate-50 text-slate-700 hover:text-ncst-navy border-y border-r border-slate-300 shadow-md hover:shadow-lg transition-all duration-150 cursor-pointer items-center justify-center flex-col gap-1.5 group select-none" title="Show Sidebar (Expand)">
+        <svg class="w-4 h-4 text-blue-800 group-hover:translate-x-0.5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+        <span class="text-[9px] font-extrabold uppercase tracking-widest text-slate-500 group-hover:text-blue-900" style="writing-mode: vertical-rl; transform: rotate(180deg);">SIDEBAR</span>
+      </button>
 
       <!-- Scrollable Main Panels Area -->
-      <div class="flex-1 overflow-y-auto p-6">
+      <div class="workspace-content flex-1 overflow-y-auto p-6">
       
       <!-- ==================== VIEW 0: GATE MONITOR (GUARD LANDING) ==================== -->
       <section id="gateView" class="view-panel space-y-4">
-        <div class="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 class="text-lg font-extrabold text-slate-900 tracking-tight">Gate Monitor</h1>
-            <p class="text-xs text-slate-500">Scan a pass or look up a plate, confirm the driver, then record the decision.</p>
-          </div>
-          <!-- Gate direction toggle -->
-          <div id="gateModeToggle" role="radiogroup" aria-label="Gate direction" class="inline-flex p-1 rounded-lg bg-slate-200/70 border border-slate-300 shadow-inner">
-            <button type="button" role="radio" data-mode="Ingress" class="gate-mode-btn px-4 py-2 rounded-md text-xs font-extrabold tracking-wide transition-colors cursor-pointer">
-              &#8594; INGRESS (ENTRY)
-            </button>
-            <button type="button" role="radio" data-mode="Egress" class="gate-mode-btn px-4 py-2 rounded-md text-xs font-extrabold tracking-wide transition-colors cursor-pointer">
-              EGRESS (EXIT) &#8594;
-            </button>
+        <div class="sp-gate-heading">
+          <div><h1 class="text-2xl font-bold tracking-tight text-slate-900">Gate Monitor</h1><p>Check the pass and driver before allowing entry or exit.</p></div>
+          <div id="gateModeToggle" role="radiogroup" aria-label="Choose entry or exit" class="sp-gate-mode">
+            <button type="button" role="radio" data-mode="Ingress" class="gate-mode-btn">Entry</button>
+            <button type="button" role="radio" data-mode="Egress" class="gate-mode-btn">Exit</button>
           </div>
         </div>
-
-        <div class="grid grid-cols-1 xl:grid-cols-5 gap-4">
-          <!-- Left: CCTV + scanner -->
-          <div class="xl:col-span-2 space-y-4">
-            <div id="gateCctvMount"></div>
-
-            <div class="bg-white border border-slate-200 rounded-lg shadow-2xs p-4 space-y-3">
-              <div class="flex items-center justify-between">
-                <h2 class="text-xs font-extrabold uppercase tracking-wider text-slate-600">Scan / Lookup</h2>
-                <button type="button" id="gateCameraBtn" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">
-                  Start Camera
-                </button>
+        <ol class="sp-gate-steps" aria-label="Steps for a gate check">
+          <li><span>1</span>Check the pass</li><li><span>2</span>Confirm the driver or items</li><li><span>3</span>Save entry or exit</li>
+        </ol>
+        <div class="sp-gate-layout">
+          <div class="sp-gate-main">
+            <section class="sp-gate-card sp-gate-scan" aria-labelledby="gateScanTitle">
+              <div class="sp-gate-card-heading"><div><h2 id="gateScanTitle">Check a vehicle</h2><p id="gateModeHint">Checking vehicles at the entry gate</p></div><button type="button" id="gateCameraBtn" class="sp-gate-camera-button">Scan with Camera</button></div>
+              <div class="sp-gate-scan-body">
+                <form id="gateManualForm" autocomplete="off">
+                  <label for="gateManualInput">Plate number or QR code</label>
+                  <div class="sp-gate-input-row"><input id="gateManualInput" type="text" placeholder="Enter a plate or scan a pass" spellcheck="false" aria-describedby="gateInputHelp"><button type="submit" id="gateVerifyBtn">Check Entry</button></div>
+                </form>
+                <p id="gateInputHelp">Type a plate number and press Enter, or scan a pass with a USB or Bluetooth scanner.</p>
+                <div id="gateCameraBox" class="hidden rounded-lg overflow-hidden border border-slate-300 bg-slate-900"><div id="gateCameraReader" class="w-full"></div></div>
+                <p id="gateCameraError" class="hidden text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="alert"></p>
               </div>
-              <div id="gateCameraBox" class="hidden rounded-md overflow-hidden border border-slate-300 bg-slate-900">
-                <div id="gateCameraReader" class="w-full"></div>
-              </div>
-              <p id="gateCameraError" class="hidden text-[11px] font-semibold text-ncst-goldDark bg-ncst-goldLight/40 border border-ncst-gold/40 rounded px-2.5 py-1.5"></p>
-              <form id="gateManualForm" class="flex gap-2" autocomplete="off">
-                <label for="gateManualInput" class="sr-only">QR payload or plate number</label>
-                <input id="gateManualInput" type="text" placeholder="Scan with USB reader, paste QR text, or type a plate" class="flex-1 min-w-0 px-3 py-2 rounded-md border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ncst-navy/30 focus:border-ncst-navy">
-                <button type="submit" id="gateVerifyBtn" class="px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold cursor-pointer disabled:opacity-60 transition-colors">Verify</button>
-              </form>
-              <p class="text-[10px] text-slate-400">USB / Bluetooth scanners type the code and press Enter. Plain text is treated as a plate lookup.</p>
-            </div>
+            </section>
+            <section class="sp-gate-card sp-gate-result-card" aria-labelledby="gateResultTitle">
+              <div class="sp-gate-card-heading"><div><h2 id="gateResultTitle">Check result</h2><p>Review the details below before saving.</p></div><span class="sp-gate-status" id="gateCheckStatus" role="status">Ready to check</span></div>
+              <div id="gateResult"></div>
+            </section>
           </div>
-
-          <!-- Right: verification result -->
-          <div class="xl:col-span-3 space-y-4">
-            <div id="gateResult" class="bg-white border border-slate-200 rounded-lg shadow-2xs min-h-[320px]"></div>
-
-            <div class="bg-white border border-slate-200 rounded-lg shadow-2xs">
-              <div class="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
-                <h2 class="text-xs font-extrabold uppercase tracking-wider text-slate-600">Recent Gate Activity</h2>
-                <span class="text-[10px] text-slate-400">Latest 8 decisions</span>
-              </div>
-              <ul id="gateRecentList" class="divide-y divide-slate-100 text-xs"></ul>
-            </div>
-          </div>
+          <aside class="sp-gate-side">
+            <section class="sp-gate-card sp-gate-camera-card" aria-labelledby="gateFeedTitle"><div class="sp-gate-card-heading"><div><h2 id="gateFeedTitle">Gate camera</h2><p>Use this view to check the vehicle.</p></div></div><div id="gateCctvMount"></div><p class="sp-gate-camera-note">The feed below is a demo video.</p></section>
+            <section class="sp-gate-card sp-gate-recent" aria-labelledby="gateRecentTitle"><div class="sp-gate-card-heading"><div><h2 id="gateRecentTitle">Recent gate checks</h2><p>Latest 8 saved records</p></div></div><ul id="gateRecentList"></ul></section>
+          </aside>
         </div>
       </section>
 
       <!-- ==================== VIEW 1: DASHBOARD ==================== -->
       <section id="dashboardView" class="view-panel active space-y-4">
         <!-- Header -->
-        <div class="flex items-center justify-between pb-3.5 border-b border-slate-200">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-xl font-bold text-slate-900">Dashboard</h1>
-            <p class="text-xs text-slate-500 mt-0.5">Gate activity and campus security overview</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+            <p class="text-xs text-slate-500 mt-1">Your campus at a glance. Track gate traffic, vehicles, and attention items.</p>
           </div>
           <div class="flex items-center gap-2">
-            <button id="quickFlaggedBtn" class="px-3 py-1.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimsonLight/80 text-ncst-crimson text-xs font-semibold transition-colors">
+            <button id="quickFlaggedBtn" class="px-3.5 py-2 rounded-lg border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimsonLight/80 text-ncst-crimson text-xs font-bold transition-colors cursor-pointer shadow-2xs">
               Review Incidents
             </button>
-            <button id="quickNewAccBtn" class="admin-only px-3 py-1.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold transition-colors">
+            <button id="quickNewAccBtn" class="admin-only px-3.5 py-2 rounded-lg bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs">
               Register Vehicle
             </button>
           </div>
         </div>
 
-        <div class="grid grid-cols-1 xl:grid-cols-5 gap-4 items-start">
-          <div id="dashboardCctvMount" class="xl:col-span-2"></div>
+        <div class="sp-dashboard-support grid grid-cols-1 xl:grid-cols-5 gap-4 items-start">
           <div class="xl:col-span-3">
         <!-- Overtime & Overnight Parking attention panel (js/overnight.js) -->
         <div id="overnightPanel" class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
@@ -495,12 +514,12 @@
         </div>
 
         <!-- 4 Purposeful Operational KPIs -->
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+        <div class="sp-kpis grid grid-cols-2 lg:grid-cols-4 gap-3.5">
           
           <div class="bg-white rounded-lg border border-slate-200 p-3.5">
             <div class="text-xs font-medium text-slate-500">Currently Inside</div>
             <div id="kpiInside" class="text-2xl font-bold text-ncst-greenDark mt-1 font-mono">0</div>
-            <button type="button" id="kpiInsideLink" class="text-[11px] text-ncst-greenDark mt-0.5 font-bold hover:underline cursor-pointer">View who is inside &rarr;</button>
+            <button type="button" id="kpiInsideLink" class="text-[11px] text-ncst-greenDark mt-0.5 font-bold hover:underline cursor-pointer">View vehicles &rarr;</button>
           </div>
 
           <div class="bg-white rounded-lg border border-slate-200 p-3.5">
@@ -510,28 +529,28 @@
           </div>
 
           <div class="bg-white rounded-lg border border-slate-200 p-3.5">
-            <div class="text-xs font-medium text-slate-500">Today's Gate Entries</div>
+            <div class="text-xs font-medium text-slate-500">Today's Approved Entries</div>
             <div id="kpiTotalLogs" class="text-2xl font-bold text-slate-900 mt-1 font-mono">0</div>
-            <div class="text-[11px] text-slate-500 mt-0.5">Recorded today</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">Successful entries today</div>
           </div>
 
           <div class="bg-white rounded-lg border border-slate-200 p-3.5">
-            <div class="text-xs font-medium text-slate-500">Registered Fleet</div>
+            <div class="text-xs font-medium text-slate-500">Registered Vehicles</div>
             <div id="kpiRegistered" class="text-2xl font-bold text-slate-900 mt-1 font-mono">0</div>
-            <div class="text-[11px] text-slate-500 mt-0.5">Authorized vehicles</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">Registered vehicles</div>
           </div>
 
         </div>
 
-        <!-- Analytics Row 1: Gate Activity & Current Vehicles on Campus -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- Analytics Row 1: Gate Activity & Inside Campus -->
+        <div class="sp-dashboard-analytics grid grid-cols-1 lg:grid-cols-3 gap-4">
           
           <!-- Gate Activity Chart (2 cols) -->
           <div class="lg:col-span-2 bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col justify-between">
             <div class="flex items-center justify-between pb-2.5 border-b border-slate-100">
               <div>
                 <h2 class="text-sm font-bold text-slate-900">Gate Activity</h2>
-                <p class="text-[11px] text-slate-500">Vehicle passages recorded today</p>
+                <p class="text-[11px] text-slate-500">Entry and exit activity today · Philippine time</p>
               </div>
               <div class="flex items-center gap-1 bg-slate-100 p-0.5 rounded text-xs">
                 <button type="button" id="activityTrendHourlyBtn" class="px-2.5 py-1 rounded text-xs font-semibold bg-white text-slate-900 shadow-xs transition-colors">
@@ -543,18 +562,19 @@
               </div>
             </div>
             <div class="relative h-48 w-full pt-2">
-              <canvas id="gateActivityChart"></canvas>
+              <canvas id="gateActivityChart" role="img" aria-label="Today’s hourly entry and exit activity"></canvas>
             </div>
+            <div class="sp-chart-summary" aria-live="polite"><span><strong id="dashboardEntries">0</strong> entries</span><span><strong id="dashboardExits">0</strong> exits</span><span><strong id="dashboardDenied">0</strong> denied attempts</span></div>
           </div>
 
-          <!-- Current Vehicles on Campus Donut (1 col) -->
+          <!-- Inside Campus Donut (1 col) -->
           <div class="bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col justify-between">
             <div class="pb-2.5 border-b border-slate-100">
-              <h2 class="text-sm font-bold text-slate-900">Current Vehicles on Campus</h2>
-              <p class="text-[11px] text-slate-500">Active custody breakdown</p>
+              <h2 class="text-sm font-bold text-slate-900">Inside Campus</h2>
+              <p class="text-[11px] text-slate-500">Who is currently inside campus</p>
             </div>
             <div class="relative h-36 w-full flex items-center justify-center">
-              <canvas id="gateStatusChart"></canvas>
+              <canvas id="gateStatusChart" role="img" aria-label="Registered vehicles and visitors currently on campus"></canvas>
               <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span id="donutCenterTotal" class="text-xl font-bold font-mono text-slate-900 leading-none">0</span>
                 <span class="text-[10px] text-slate-500 font-medium mt-0.5">On Campus</span>
@@ -563,15 +583,15 @@
             <!-- Status Metric Legend Cards -->
             <div class="grid grid-cols-3 gap-1.5 pt-2 border-t border-slate-100 text-center text-xs">
               <div class="p-1 rounded bg-ncst-greenLight border border-ncst-green/30">
-                <div class="text-[10px] font-semibold text-ncst-greenDark uppercase">Inside</div>
+                <div class="text-[10px] font-semibold text-ncst-greenDark uppercase">Registered</div>
                 <div id="legendInsideCount" class="text-xs font-bold font-mono text-ncst-greenDark">0</div>
               </div>
               <div class="p-1 rounded bg-slate-100 border border-slate-200">
-                <div class="text-[10px] font-semibold text-slate-700 uppercase">Exited</div>
+                <div class="text-[10px] font-semibold text-slate-700 uppercase">Visitors</div>
                 <div id="legendExitedCount" class="text-xs font-bold font-mono text-slate-800">0</div>
               </div>
               <div class="p-1 rounded bg-ncst-crimsonLight border border-ncst-crimson/30">
-                <div class="text-[10px] font-semibold text-ncst-crimson uppercase">Blocked</div>
+                <div class="text-[10px] font-semibold text-ncst-crimson uppercase">Total</div>
                 <div id="legendBlockedCount" class="text-xs font-bold font-mono text-ncst-crimson">0</div>
               </div>
             </div>
@@ -579,20 +599,20 @@
 
         </div>
 
-        <!-- Analytics Row 2: Fleet Composition & Security Alerts -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Analytics Row 2: Vehicle Types & Security Alerts -->
+        <div class="sp-dashboard-operations grid grid-cols-1 lg:grid-cols-2 gap-4">
           
-          <!-- Fleet Composition Bar Chart -->
+          <!-- Vehicle Types Bar Chart -->
           <div class="bg-white rounded-lg border border-slate-200 p-3.5 flex flex-col justify-between">
             <div class="pb-2.5 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h2 class="text-sm font-bold text-slate-900">Fleet Composition</h2>
+                <h2 class="text-sm font-bold text-slate-900">Vehicle Types</h2>
                 <p class="text-[11px] text-slate-500">Registered vehicles by category</p>
               </div>
               <span class="text-[11px] font-mono text-slate-400">Total: <span id="fleetTotalBadge" class="font-bold text-slate-700">0</span></span>
             </div>
             <div class="relative h-44 w-full pt-2">
-              <canvas id="fleetTypesChart"></canvas>
+              <canvas id="fleetTypesChart" role="img" aria-label="Registered fleet by vehicle category"></canvas>
             </div>
           </div>
 
@@ -610,27 +630,23 @@
               </button>
             </div>
             
-            <div id="attentionPanelContent" class="flex-1 pt-2 space-y-2 overflow-y-auto max-h-44">
+            <div id="attentionPanelContent" class="sp-alert-scroll overflow-auto" tabindex="0" role="region" aria-label="Security alerts table">
               <!-- Rendered dynamically -->
             </div>
           </div>
 
         </div>
 
-        <!-- Real-Time Gate Flow Operations Center: 3 Distinct Real-World Tables -->
-        <div class="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-2xs">
+        <!-- Real-Time Campus gate activity: 3 Distinct Real-World Tables -->
+        <div class="sp-dashboard-flow bg-white rounded-lg border border-slate-200 overflow-hidden shadow-2xs">
           <!-- Card Header & Navigation Tabs -->
           <div class="p-3.5 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50/70">
             <div>
               <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <span>Gate Flow Operations Center</span>
-                <span id="gateFlowLiveIndicator" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  Live Sync
-                </span>
+                <span>Campus gate activity</span>
               </h2>
               <p class="text-[11px] text-slate-500 mt-0.5" id="gateFlowSubtext">
-                Real-time campus custody and authoritative gate passage flow
+                Current vehicles and recent entry and exit records.
               </p>
             </div>
             
@@ -639,20 +655,20 @@
               <div role="tablist" class="inline-flex p-1 bg-slate-200/80 rounded-lg text-xs font-semibold">
                 <button type="button" id="tabCurrentlyInsideBtn" role="tab" aria-selected="true" class="gate-flow-tab px-3 py-1.5 rounded-md text-xs font-bold transition-all bg-white text-ncst-navy shadow-xs flex items-center gap-1.5">
                   <span>Currently Inside</span>
-                  <span id="tabCountInside" class="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">0</span>
+                  <span id="tabCountInside" class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-ncst-greenLight text-ncst-greenDark border border-ncst-green/30">0</span>
                 </button>
                 <button type="button" id="tabEntranceBtn" role="tab" aria-selected="false" class="gate-flow-tab px-3 py-1.5 rounded-md text-xs font-semibold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5">
                   <span>Entrance Gate</span>
-                  <span id="tabCountEntrance" class="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-600 border border-slate-300">0</span>
+                  <span id="tabCountEntrance" class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-600 border border-slate-300">0</span>
                 </button>
                 <button type="button" id="tabExitBtn" role="tab" aria-selected="false" class="gate-flow-tab px-3 py-1.5 rounded-md text-xs font-semibold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5">
                   <span>Exit Gate</span>
-                  <span id="tabCountExit" class="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-600 border border-slate-300">0</span>
+                  <span id="tabCountExit" class="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-600 border border-slate-300">0</span>
                 </button>
               </div>
 
               <button id="viewAllAuditBtn" class="text-xs font-semibold text-ncst-navy hover:underline whitespace-nowrap ml-2">
-                Full Audit Log →
+                All Gate Records →
               </button>
             </div>
           </div>
@@ -660,21 +676,21 @@
           <!-- TABLE 1: CURRENTLY INSIDE / PERMITTED ON CAMPUS (Active physical custody state) -->
           <div id="paneCurrentlyInside" class="gate-flow-pane overflow-x-auto">
             <div class="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
-              <span class="font-medium">Active campus custody: Registered vehicles and visitors approved at entrance that have not yet exited.</span>
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Source: oncampus.php</span>
+              <span class="font-medium">Vehicles and visitors who entered campus and have not left yet.</span>
+              
             </div>
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Classification / ID</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Admitted At</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Duration Inside</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Gate / Guard</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Action</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Classification / ID</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Admitted At</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Duration Inside</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Gate / Guard</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Action</th>
                 </tr>
               </thead>
               <tbody id="currentlyInsideTableBody" class="divide-y divide-slate-100">
@@ -687,20 +703,20 @@
           <div id="paneEntrance" class="gate-flow-pane overflow-x-auto hidden">
             <div class="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
               <span class="font-medium">Recent entrance passages: Vehicles and day passes processed and approved through campus entrance gates.</span>
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Filter: Ingress</span>
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Filter: Entry</span>
             </div>
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Driver / Relationship</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Pass / QR Info</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Entry Time</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Gate & Guard</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Inspect</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Driver / Relationship</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Pass / QR Info</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Entry Time</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Gate & Guard</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700 text-right">View Details</th>
                 </tr>
               </thead>
               <tbody id="entranceTableBody" class="divide-y divide-slate-100">
@@ -713,20 +729,20 @@
           <div id="paneExit" class="gate-flow-pane overflow-x-auto hidden">
             <div class="px-3.5 py-2 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between">
               <span class="font-medium">Recent exit passages: Vehicles and visitors verified and departed through campus exit gates.</span>
-              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Filter: Egress</span>
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600">Filter: Exit</span>
             </div>
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Entry Time</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Exit Time</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Duration Inside</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700">Gate & Guard</th>
-                  <th class="py-2.5 px-3.5 font-bold text-slate-700 text-right">Inspect</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Status</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Plate Number</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Name / Owner</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Vehicle Type</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Entry Time</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Exit Time</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Duration Inside</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700">Gate & Guard</th>
+                  <th scope="col" class="py-2.5 px-3.5 font-bold text-slate-700 text-right">View Details</th>
                 </tr>
               </thead>
               <tbody id="exitTableBody" class="divide-y divide-slate-100">
@@ -744,15 +760,15 @@
       <section id="vehiclesView" class="view-panel space-y-5">
         
         <!-- Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
           <div>
             <div class="flex items-center gap-2.5">
-              <h1 class="text-2xl font-semibold text-slate-900 tracking-tight">Vehicle Directory</h1>
+              <h1 class="text-2xl font-bold tracking-tight text-slate-900">Vehicle Directory</h1>
               <span id="directoryVehicleCountBadge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/80">
                 0 vehicles
               </span>
             </div>
-            <p class="text-[13px] text-slate-500 mt-1">Manage registered campus fleet, credentialed passes, and driver authorizations</p>
+            <p class="text-xs text-slate-500 mt-1">Find vehicles, manage passes, and review authorized drivers.</p>
           </div>
           <button id="directoryNewAccBtn" class="admin-only inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs hover:shadow-sm transition-all self-start sm:self-auto cursor-pointer">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -765,7 +781,7 @@
 
         <!-- Vehicle Controls (Search & Filters) -->
         <div class="bg-white rounded-xl border border-slate-200/90 p-3 sm:p-3.5 shadow-2xs">
-          <div class="flex flex-col lg:flex-row items-stretch lg:items-end gap-3">
+          <div class="sp-filter-grid flex flex-col lg:flex-row items-stretch lg:items-end gap-3">
             
             <!-- Search (Largest Field - flex-1) -->
             <div class="flex-1 min-w-[260px]">
@@ -873,33 +889,34 @@
         </div>
 
         <!-- Vehicles Table -->
-        <div class="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+        <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
           <div class="overflow-x-auto min-h-[300px]">
-            <table class="w-full text-left border-collapse table-fixed min-w-[1080px]">
-              <colgroup>
-                <col style="width: 110px;"> <!-- STATUS -->
-                <col style="width: 225px;"> <!-- PLATE / PASS ID -->
-                <col style="width: 225px;"> <!-- VEHICLE DETAILS -->
-                <col style="width: 190px;"> <!-- OWNER -->
-                <col style="width: 215px;"> <!-- AFFILIATION -->
-                <col style="width: 95px;">  <!-- DRIVERS -->
-                <col style="width: 220px;"> <!-- ACTIONS -->
-              </colgroup>
-              <thead class="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-xs text-slate-700 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider select-none shadow-2xs">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider select-none">
                 <tr>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Status</th>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Plate / Pass ID</th>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Vehicle Details</th>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Owner</th>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Affiliation</th>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700">Drivers</th>
-                  <th scope="col" class="py-3 px-3.5 font-semibold text-slate-700 text-right pr-4">Actions</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-28">Status</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-36">Plate</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[160px]">Vehicle</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[160px]">Person</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-32">Affiliation</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-28">Drivers</th>
+                  <th scope="col" class="sp-vehicle-actions-heading py-3 px-3.5 font-bold text-slate-700 text-right pr-4">Actions</th>
                 </tr>
               </thead>
-              <tbody id="vehiclesTableBody" class="divide-y divide-slate-100 bg-white text-xs">
+              <tbody id="vehiclesTableBody" class="divide-y divide-slate-100 bg-white">
                 <!-- Rendered by JS -->
               </tbody>
             </table>
+          </div>
+
+          <!-- Pagination Bar -->
+          <div class="p-3 border-t border-slate-200 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
+            <span id="vehiclePaginationInfo" class="font-medium">Showing 1 to 10 of 0 vehicles</span>
+            <div class="flex items-center gap-1.5">
+              <button type="button" id="vehiclePrevBtn" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-medium text-xs text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs transition-colors cursor-pointer" disabled>Previous</button>
+              <span id="vehiclePageIndicator" class="px-2 py-1 text-xs text-slate-500 font-medium">Page 1 of 1</span>
+              <button type="button" id="vehicleNextBtn" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-medium text-xs text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs transition-colors cursor-pointer" disabled>Next</button>
+            </div>
           </div>
         </div>
 
@@ -909,10 +926,10 @@
       <section id="flaggedView" class="view-panel space-y-6">
         
         <!-- Header -->
-        <div class="flex items-center justify-between pb-4 border-b border-slate-200">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-xl font-bold text-slate-900">Flagged & Blocked Incidents</h1>
-            <p class="text-xs text-slate-500 mt-0.5">Campus gate discrepancies, unauthorized operators, and access stops</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Flagged &amp; Blocked Incidents</h1>
+            <p class="text-xs text-slate-500 mt-1">Campus gate discrepancies, unauthorized operators, and active security stops</p>
           </div>
         </div>
 
@@ -925,18 +942,22 @@
             </span>
           </div>
 
+          <div class="sp-incident-filters">
+            <div><label for="incidentSearch">Search incidents</label><input id="incidentSearch" type="search" placeholder="Plate, case number, person, or issue" /></div>
+            <div><label for="incidentStatusFilter">Status</label><select id="incidentStatusFilter"><option value="All">All statuses</option><option value="Held">Active holds</option><option value="Resolved">Resolved</option></select></div>
+          </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Status</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Plate</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Vehicle</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Driver Involved</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Reason for Stop</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Gate & Officer</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Timestamp</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700 text-right">Investigation</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Status</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Plate</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Vehicle</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Driver Involved</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Reason for Stop</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Gate & Officer</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Timestamp</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 text-right">Investigation</th>
                 </tr>
               </thead>
               <tbody id="incidentsTableBody" class="divide-y divide-slate-100">
@@ -952,12 +973,12 @@
       <section id="auditView" class="view-panel space-y-4">
         
         <!-- Header -->
-        <div class="flex items-center justify-between pb-3.5 border-b border-slate-200">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-xl font-bold text-slate-900">Audit Logs</h1>
-            <p class="text-xs text-slate-500 mt-0.5">Chronological record of all campus vehicle movements and security events</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Gate Records</h1>
+            <p class="text-xs text-slate-500 mt-1">Chronological record of all campus vehicle movements and security events</p>
           </div>
-          <button id="exportCsvBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs flex items-center gap-1.5 transition-colors">
+          <button id="exportCsvBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer">
             <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
               <polyline points="7 10 12 15 17 10"></polyline>
@@ -975,38 +996,79 @@
             <div class="text-[10px] text-slate-400 mt-0.5">Logged movements</div>
           </div>
           <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
-            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Ingresses</div>
+            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Entries</div>
             <div id="auditSummaryInside" class="text-xl font-bold font-mono text-emerald-700 mt-0.5">0</div>
-            <div class="text-[10px] text-emerald-600 mt-0.5">Approved entries today</div>
+            <div class="text-[10px] text-emerald-600 mt-0.5">Recorded entries</div>
           </div>
           <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
-            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Egresses</div>
+            <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Exits</div>
             <div id="auditSummaryExited" class="text-xl font-bold font-mono text-slate-800 mt-0.5">0</div>
             <div class="text-[10px] text-slate-400 mt-0.5">Recorded departures</div>
           </div>
-          <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
+          <div id="auditSummaryBlockedCard" class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs transition-colors">
             <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Security Actions</div>
-            <div id="auditSummaryBlocked" class="text-xl font-bold font-mono text-rose-700 mt-0.5">0</div>
-            <div class="text-[10px] text-rose-600 mt-0.5">Holds & stops</div>
+            <div id="auditSummaryBlocked" class="text-xl font-bold font-mono text-slate-700 mt-0.5">0</div>
+            <div id="auditSummaryBlockedSub" class="text-[10px] text-slate-400 mt-0.5">No holds or stops</div>
           </div>
         </div>
 
-        <!-- Controls: Filters & Search with high contrast -->
-        <div class="bg-white rounded-lg border border-slate-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+        <!-- Controls: Quick Status Pills, Secondary Filters & Search -->
+        <div class="bg-white rounded-lg border border-slate-200 p-3 space-y-2.5 shadow-xs">
           
-          <div class="flex items-center gap-1.5 flex-wrap" id="auditPillsContainer">
-            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors" data-filter="All">All Events <span id="auditPillCountAll" class="ml-1 opacity-80">(0)</span></button>
-            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors" data-filter="Inside">Inside Campus <span id="auditPillCountInside" class="ml-1 opacity-80">(0)</span></button>
-            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors" data-filter="Exited">Exited <span id="auditPillCountExited" class="ml-1 opacity-80">(0)</span></button>
-            <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors" data-filter="Blocked">Security Holds <span id="auditPillCountBlocked" class="ml-1 opacity-80">(0)</span></button>
+          <!-- Top Row: Quick Status Pills & Compact Search -->
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div class="flex items-center gap-1.5 flex-wrap" id="auditPillsContainer">
+              <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors cursor-pointer" data-filter="All">All Events <span id="auditPillCountAll" class="ml-1 opacity-80">(0)</span></button>
+              <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer" data-filter="Inside">Inside Campus <span id="auditPillCountInside" class="ml-1 opacity-80">(0)</span></button>
+              <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer" data-filter="Exited">Exited <span id="auditPillCountExited" class="ml-1 opacity-80">(0)</span></button>
+              <button class="audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer" data-filter="Blocked">Security Holds <span id="auditPillCountBlocked" class="ml-1 opacity-80">(0)</span></button>
+            </div>
+
+            <div class="w-full md:w-72 relative">
+              <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </div>
+              <input type="text" id="fullAuditSearchInput" placeholder="Search plate, person, gate, officer..." class="w-full pl-9 pr-3.5 h-9 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy transition-colors">
+            </div>
           </div>
 
-          <div class="w-full sm:w-80 relative">
-            <input type="text" id="fullAuditSearchInput" placeholder="Search plate, driver, owner, gate, officer..." class="w-full pl-8 pr-3 py-1.5 rounded-md border border-slate-300 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy shadow-2xs">
-            <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
+          <!-- Bottom Row: Filter Dropdowns Strip -->
+          <div class="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100 text-xs">
+            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Filter by:</span>
+            
+            <!-- Event Type Filter -->
+            <select id="auditEventTypeFilter" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+              <option value="All">All Event Types</option>
+              <option value="Entry">Entry Recorded</option>
+              <option value="ExitApproved">Exit Approved</option>
+              <option value="ExitDenied">Exit Denied</option>
+              <option value="EntryDenied">Entry Denied</option>
+              <option value="SecurityHold">Security Holds &amp; Alerts</option>
+            </select>
+
+            <!-- Gate Filter -->
+            <select id="auditGateFilter" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+              <option value="All">All Gates</option>
+              <option value="Gate 1">Gate 1 · Entry</option>
+              <option value="Gate 2">Gate 2 · Exit</option>
+            </select>
+
+            <!-- Date Filter -->
+            <select id="auditDateFilter" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+              <option value="All">All Dates</option>
+              <option value="Today">Today</option>
+              <option value="Yesterday">Yesterday</option>
+              <option value="Last7Days">Last 7 Days</option>
+            </select>
+
+            <!-- Reset Filters Button -->
+            <button type="button" id="auditResetFiltersBtn" class="hidden h-8 px-2.5 rounded-md border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <span>Reset Filters</span>
+            </button>
           </div>
 
         </div>
@@ -1017,18 +1079,17 @@
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Status</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Plate</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Event / Action</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Driver</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Owner</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Gate</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700">Officer</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700 text-right">Time</th>
-                  <th class="py-2.5 px-4 font-bold text-slate-700 text-right">Details</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 whitespace-nowrap">Result</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 whitespace-nowrap">Time</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 whitespace-nowrap">Event</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 whitespace-nowrap">Vehicle</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700">Person</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 whitespace-nowrap">Gate</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 whitespace-nowrap">Officer</th>
+                  <th scope="col" class="py-2.5 px-4 font-bold text-slate-700 text-right whitespace-nowrap">View Details</th>
                 </tr>
               </thead>
-              <tbody id="fullAuditTableBody" class="divide-y divide-slate-200">
+              <tbody id="fullAuditTableBody" class="divide-y divide-slate-100">
                 <!-- Rendered by JS -->
               </tbody>
             </table>
@@ -1051,12 +1112,12 @@
       <section id="accountView" class="admin-only view-panel space-y-6">
         
         <!-- Header -->
-        <div class="flex items-center justify-between pb-4 border-b border-slate-200">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-xl font-bold text-slate-900">Register Vehicle & Issue Pass</h1>
-            <p class="text-xs text-slate-500 mt-0.5">Enroll new vehicle, record affiliation, and assign authorized drivers</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Register Vehicle &amp; Issue Pass</h1>
+            <p class="text-xs text-slate-500 mt-1">Enroll new vehicle, record affiliation, and assign authorized drivers</p>
           </div>
-          <button type="button" id="resetFormBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-xs transition-colors">
+          <button type="button" id="resetFormBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors cursor-pointer">
             Reset Form
           </button>
         </div>
@@ -1116,12 +1177,12 @@
                 </select>
               </div>
 
-              <div class="sm:col-span-2 rounded-lg border border-ncst-gold/50 bg-ncst-goldLight/40 p-3">
+              <div class="sp-vip-option sm:col-span-2">
                 <label class="flex items-start gap-2.5 cursor-pointer">
-                  <input type="checkbox" id="passClassVip" class="mt-0.5 w-4 h-4 accent-ncst-navy">
+                  <input type="checkbox" id="passClassVip" aria-describedby="vipRegistrationHelp" class="mt-0.5 w-4 h-4 accent-ncst-navy">
                   <span>
                     <span class="block text-xs font-bold text-slate-900">VIP pass <span class="font-normal text-slate-500">(administrators only)</span></span>
-                    <span class="block text-[11px] text-slate-600 mt-0.5">VIP pass: exempt from strikes, bans, overnight / overtime checks and the driver-confirmation step at the gate. The pass is still signed, can be revoked and every passage is logged.</span>
+                    <span id="vipRegistrationHelp" class="block text-[11px] text-slate-600 mt-0.5">Skips automatic parking warnings and driver checks. Security holds, suspensions, pass validation, and gate records still apply.</span>
                   </span>
                 </label>
               </div>
@@ -1290,6 +1351,7 @@
         <!-- RIGHT: Digital Gate Pass & QR Creation Technology Panel -->
         <div class="lg:col-span-5 space-y-4 lg:sticky lg:top-4">
           
+          <div class="sp-preview-heading"><h2>Pass preview</h2><p>Sample details appear until you complete the form.</p></div>
           <!-- Pass Hologram Decal Container -->
           <div id="printableGatePass" class="bg-white rounded-xl border border-slate-300 shadow-sm overflow-hidden transition-all">
             
@@ -1418,7 +1480,7 @@
                       <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
                       <rect x="6" y="14" width="12" height="8"></rect>
                     </svg>
-                    <span>Print Permit</span>
+                    <span>Print Pass</span>
                   </button>
                 </div>
               </div>
@@ -1434,13 +1496,17 @@
 
       <!-- ==================== VIEW 6: STAFF ACCOUNTS (ADMIN) ==================== -->
       <section id="staffView" class="admin-only view-panel space-y-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-lg font-extrabold text-slate-900 tracking-tight">Staff Accounts</h1>
-            <p class="text-xs text-slate-500">Administrators and gate guards who can sign in to SecurePark.</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Staff Accounts</h1>
+            <p class="text-xs text-slate-500 mt-1">Administrators and gate guards who can sign in to SecurePark</p>
           </div>
-          <button type="button" id="staffCreateBtn" class="px-3 py-1.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer">
-            + New Staff Account
+          <button type="button" id="staffCreateBtn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs hover:shadow-sm transition-all self-start sm:self-auto cursor-pointer">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>+ New Staff Account</span>
           </button>
         </div>
 
@@ -1449,14 +1515,14 @@
             <table class="w-full text-xs">
               <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
                 <tr>
-                  <th class="text-left font-bold px-4 py-2.5">Name</th>
-                  <th class="text-left font-bold px-4 py-2.5">Username</th>
-                  <th class="text-left font-bold px-4 py-2.5">Role</th>
-                  <th class="text-left font-bold px-4 py-2.5">Badge</th>
-                  <th class="text-left font-bold px-4 py-2.5">Assigned Gate</th>
-                  <th class="text-left font-bold px-4 py-2.5">Status</th>
-                  <th class="text-left font-bold px-4 py-2.5">Last Login</th>
-                  <th class="text-right font-bold px-4 py-2.5">Actions</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Name</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Username</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Role</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Badge</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Assigned Gate</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Status</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Last Login</th>
+                  <th scope="col" class="text-right font-bold px-4 py-2.5">Actions</th>
                 </tr>
               </thead>
               <tbody id="staffTableBody" class="divide-y divide-slate-100">
@@ -1470,12 +1536,12 @@
 
       <!-- ==================== VIEW 7: VIOLATIONS & PENALTIES ==================== -->
       <section id="violationsView" class="view-panel space-y-4">
-        <div class="flex flex-wrap items-end justify-between gap-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-lg font-extrabold text-slate-900 tracking-tight">Violations &amp; Penalties</h1>
-            <p class="text-xs text-slate-500">Every warning is a strike. The 3rd strike bans the vehicle until an administrator resolves the violation.</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Violations &amp; Penalties</h1>
+            <p class="text-xs text-slate-500 mt-1">Every warning is a strike. The 3rd strike bans the vehicle until an administrator resolves the violation</p>
           </div>
-          <button type="button" id="violationsRefreshBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer">Refresh</button>
+          <button type="button" id="violationsRefreshBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">Refresh</button>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1501,36 +1567,22 @@
           <div id="violWatchList" class="divide-y divide-slate-100"></div>
         </div>
 
-        <!-- Records -->
-        <div class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
-          <div class="px-4 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
-            <h2 class="text-xs font-extrabold uppercase tracking-wider text-slate-600 mr-auto">Records</h2>
-            <label for="violStatusFilter" class="sr-only">Status</label>
-            <select id="violStatusFilter" class="px-2.5 py-1.5 rounded border border-slate-300 bg-white text-xs">
-              <option value="Pending">Pending</option>
-              <option value="Resolved">Resolved</option>
-              <option value="Dismissed">Dismissed</option>
-              <option value="">All</option>
-            </select>
-            <label for="violSearch" class="sr-only">Search</label>
-            <input id="violSearch" type="search" placeholder="Search plate, owner, type" class="px-2.5 py-1.5 rounded border border-slate-300 text-xs w-48">
+        <!-- Violation ledger -->
+        <div class="sp-violations-ledger bg-white border border-slate-200 rounded-lg overflow-hidden">
+          <div class="sp-violations-heading"><div><h2>Violation records</h2><p>Review warnings, violations, and their resolution history.</p></div><span id="violRecordsCount" class="sp-status sp-status-navy">0 records</span></div>
+          <div class="sp-violations-filters">
+            <div><label for="violSearch">Search records</label><input id="violSearch" type="search" placeholder="Plate, owner, issue, or officer" /></div>
+            <div><label for="violStatusFilter">Record status</label><select id="violStatusFilter"><option value="Pending">Pending</option><option value="Resolved">Resolved</option><option value="Dismissed">Dismissed</option><option value="">All statuses</option></select></div>
           </div>
-          <div class="overflow-x-auto">
-            <table class="w-full text-xs">
-              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
-                <tr>
-                  <th class="text-left font-bold px-4 py-2.5">Date</th>
-                  <th class="text-left font-bold px-4 py-2.5">Vehicle</th>
-                  <th class="text-left font-bold px-4 py-2.5">Type</th>
-                  <th class="text-left font-bold px-4 py-2.5">Severity</th>
-                  <th class="text-left font-bold px-4 py-2.5">Logged By</th>
-                  <th class="text-left font-bold px-4 py-2.5">Status</th>
-                  <th class="text-right font-bold px-4 py-2.5 admin-only">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="violTableBody" class="divide-y divide-slate-100"></tbody>
+          <div id="violRecordsRegion" class="overflow-x-auto" role="region" aria-label="Violation records" tabindex="0" aria-busy="false">
+            <table class="sp-violations-table w-full text-left">
+              <caption class="sr-only">Warnings and violations recorded against registered vehicles</caption>
+              <colgroup><col style="width:19%"><col style="width:34%"><col style="width:20%"><col style="width:12%"><col class="admin-only" style="width:15%"></colgroup>
+              <thead><tr><th scope="col">Vehicle &amp; owner</th><th scope="col">Issue</th><th scope="col">Recorded</th><th scope="col">Status</th><th scope="col" class="admin-only">Actions</th></tr></thead>
+              <tbody id="violTableBody"></tbody>
             </table>
           </div>
+          <div class="sp-violations-footer"><span id="violPaginationInfo" role="status">No records loaded</span><div><button type="button" id="violPrevBtn" disabled>Previous</button><span id="violPageIndicator">Page 1 of 1</span><button type="button" id="violNextBtn" disabled>Next</button></div></div>
         </div>
       </section>
 
@@ -1538,15 +1590,15 @@
       <section id="visitorsView" class="view-panel space-y-5">
         
         <!-- Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
           <div>
             <div class="flex items-center gap-2.5">
-              <h1 class="text-2xl font-semibold text-slate-900 tracking-tight">Visitor Day Passes</h1>
+              <h1 class="text-2xl font-bold tracking-tight text-slate-900">Visitor Day Passes</h1>
               <span id="visitorCountBadge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/80">
                 0 passes
               </span>
             </div>
-            <p class="text-[13px] text-slate-500 mt-1">Single-day guest credentials, on-campus entry logs, and temporary vehicle access</p>
+            <p class="text-xs text-slate-500 mt-1">Create visitor passes and check visitor entry and exit records.</p>
           </div>
           <button type="button" id="visitorsNewBtn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs hover:shadow-sm transition-all self-start sm:self-auto cursor-pointer">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -1559,7 +1611,7 @@
 
         <!-- Visitor Controls (Search & Filters) -->
         <div class="bg-white rounded-xl border border-slate-200/90 p-3 sm:p-3.5 shadow-2xs">
-          <div class="flex flex-col lg:flex-row items-stretch lg:items-end gap-3">
+          <div class="sp-filter-grid flex flex-col lg:flex-row items-stretch lg:items-end gap-3">
             
             <!-- Search Field -->
             <div class="flex-1 min-w-[240px]">
@@ -1590,7 +1642,7 @@
                   <option value="CheckedOut">Checked Out</option>
                   <option value="Upcoming">Upcoming</option>
                   <option value="Expired">Expired</option>
-                  <option value="Revoked">Revoked</option>
+                  <option value="Revoked">Cancelled</option>
                 </select>
                 <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
                   <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -1641,71 +1693,155 @@
           </div>
         </div>
 
-        <div class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
-          <div class="overflow-x-auto">
-            <table class="w-full text-xs">
-              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
+        <div class="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
+          <div class="overflow-x-auto min-h-[300px]">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider select-none">
                 <tr>
-                  <th class="text-left font-bold px-4 py-2.5">Pass</th>
-                  <th class="text-left font-bold px-4 py-2.5">Visitor</th>
-                  <th class="text-left font-bold px-4 py-2.5">Vehicle</th>
-                  <th class="text-left font-bold px-4 py-2.5">Visiting / Purpose</th>
-                  <th class="text-left font-bold px-4 py-2.5">Items</th>
-                  <th class="text-left font-bold px-4 py-2.5">Status</th>
-                  <th class="text-left font-bold px-4 py-2.5">In / Out</th>
-                  <th class="text-right font-bold px-4 py-2.5">Actions</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-28">Status</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-36">Pass / Code</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[160px]">Person</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[150px]">Vehicle</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[160px]">Visiting / Host</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[130px] max-w-[200px]">Items</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-36">Time / Gate</th>
+                  <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 text-right w-36 pr-4">Actions</th>
                 </tr>
               </thead>
-              <tbody id="visitorsTableBody" class="divide-y divide-slate-100"></tbody>
+              <tbody id="visitorsTableBody" class="divide-y divide-slate-100 bg-white">
+                <!-- Rendered by JS -->
+              </tbody>
             </table>
+          </div>
+
+          <!-- Pagination Bar -->
+          <div class="p-3 border-t border-slate-200 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
+            <span id="visitorPaginationInfo" class="font-medium">Showing 1 to 10 of 0 passes</span>
+            <div class="flex items-center gap-1.5">
+              <button type="button" id="visitorPrevBtn" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-medium text-xs text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs transition-colors cursor-pointer" disabled>Previous</button>
+              <span id="visitorPageIndicator" class="px-2 py-1 text-xs text-slate-500 font-medium">Page 1 of 1</span>
+              <button type="button" id="visitorNextBtn" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-medium text-xs text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs transition-colors cursor-pointer" disabled>Next</button>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- ==================== VIEW 9: ON CAMPUS NOW ==================== -->
       <section id="onCampusView" class="view-panel space-y-4">
-        <div class="flex flex-wrap items-end justify-between gap-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-lg font-extrabold text-slate-900 tracking-tight">On Campus Now</h1>
-            <p class="text-xs text-slate-500">Every vehicle currently inside, in the order they came in (earliest arrival first), who drove in, and how long they have been here. Flag a registered vehicle or report a visitor directly from this list.</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">On Campus Now</h1>
+            <p class="text-xs text-slate-500 mt-1">See who is inside campus, when they arrived, and how long they have stayed.</p>
           </div>
-          <div class="flex items-center gap-2">
-            <span id="onCampusUpdated" class="text-[10px] text-slate-400"></span>
-            <button type="button" id="onCampusRefreshBtn" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer">Refresh</button>
+          <div class="flex items-center gap-2.5">
+            <span id="onCampusUpdated" class="text-[11px] text-slate-400 font-mono"></span>
+            <button type="button" id="onCampusRefreshBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">Refresh</button>
           </div>
         </div>
 
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="bg-white border border-ncst-green/30 rounded-lg p-3.5 shadow-2xs">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-ncst-greenDark">Inside now</div>
+          <div class="bg-white border border-slate-200/90 rounded-lg p-3.5 shadow-2xs">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Inside now</div>
             <div id="ocTotal" class="text-2xl font-extrabold text-slate-900 mt-0.5">0</div>
           </div>
-          <div class="bg-white border border-slate-200 rounded-lg p-3.5 shadow-2xs">
+          <div class="bg-white border border-slate-200/90 rounded-lg p-3.5 shadow-2xs">
             <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Registered</div>
             <div id="ocRegistered" class="text-2xl font-extrabold text-slate-900 mt-0.5">0</div>
           </div>
-          <div class="bg-white border border-ncst-navy/20 rounded-lg p-3.5 shadow-2xs">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-ncst-navy">Visitors</div>
+          <div class="bg-white border border-slate-200/90 rounded-lg p-3.5 shadow-2xs">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Visitors</div>
             <div id="ocVisitors" class="text-2xl font-extrabold text-slate-900 mt-0.5">0</div>
           </div>
-          <div class="bg-white border border-ncst-gold/40 rounded-lg p-3.5 shadow-2xs">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-ncst-goldDark">Needs attention</div>
-            <div id="ocAttention" class="text-2xl font-extrabold text-slate-900 mt-0.5">0</div>
+          <div class="bg-amber-50/60 border border-amber-300/90 rounded-lg p-3.5 shadow-2xs relative overflow-hidden">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1">
+                <svg class="w-3.5 h-3.5 text-amber-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <span>Needs attention</span>
+              </span>
+            </div>
+            <div id="ocAttention" class="text-2xl font-black text-amber-900 mt-0.5">0</div>
           </div>
         </div>
 
-        <div class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
-          <div class="px-4 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
-            <div id="ocFilter" role="tablist" aria-label="Filter" class="inline-flex p-0.5 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-bold">
-              <button type="button" role="tab" data-filter="all" class="oc-filter px-2.5 py-1 rounded cursor-pointer">All</button>
-              <button type="button" role="tab" data-filter="registered" class="oc-filter px-2.5 py-1 rounded cursor-pointer">Registered</button>
-              <button type="button" role="tab" data-filter="visitors" class="oc-filter px-2.5 py-1 rounded cursor-pointer">Visitors</button>
-              <button type="button" role="tab" data-filter="attention" class="oc-filter px-2.5 py-1 rounded cursor-pointer">Needs attention</button>
+        <!-- Main Content Area: Table with Right-Side Details Drawer -->
+        <div class="relative flex flex-col xl:flex-row gap-4 items-start">
+          
+          <!-- Main Table Card -->
+          <div id="ocTableCard" class="w-full flex-1 min-w-0 bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden transition-all duration-200">
+            <!-- Table Toolbar: Filter Tabs & Search Bar -->
+            <div class="px-4 py-3 border-b border-slate-200/80 bg-slate-50/50 flex flex-wrap items-center justify-between gap-3">
+              <div id="ocFilter" role="tablist" aria-label="Filter" class="inline-flex p-1 rounded-lg bg-slate-200/70 border border-slate-200 text-xs font-bold">
+                <button type="button" role="tab" data-filter="all" class="oc-filter px-3 py-1.5 rounded-md cursor-pointer">All</button>
+                <button type="button" role="tab" data-filter="registered" class="oc-filter px-3 py-1.5 rounded-md cursor-pointer">Registered</button>
+                <button type="button" role="tab" data-filter="visitors" class="oc-filter px-3 py-1.5 rounded-md cursor-pointer">Visitors</button>
+                <button type="button" role="tab" data-filter="attention" class="oc-filter px-3 py-1.5 rounded-md cursor-pointer">Needs attention</button>
+              </div>
+              <div class="relative w-72 max-w-full">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                </div>
+                <input id="ocSearch" type="search" placeholder="Search plate, owner, visitor, driver..." class="w-full pl-9 pr-3 h-8.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-ncst-navy/15 focus:border-ncst-navy transition-colors">
+              </div>
             </div>
-            <label for="ocSearch" class="sr-only">Search</label>
-            <input id="ocSearch" type="search" placeholder="Search plate, owner, visitor, driver" class="ml-auto px-2.5 py-1.5 rounded border border-slate-300 text-xs w-60 max-w-full">
+
+            <!-- Professional Semantic Data Table -->
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider select-none">
+                  <tr>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-28">Status</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-32">Plate</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[140px]">Vehicle</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 min-w-[150px]">Person</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-28">Type</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-36">Entry Time</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 w-28">Duration</th>
+                    <th scope="col" class="py-3 px-3.5 font-bold text-slate-700 text-right w-28">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="ocTableBody" class="divide-y divide-slate-100 bg-white">
+                  <!-- Rendered dynamically -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Fallback mount point if referenced by legacy code -->
+            <div id="ocList" class="hidden"></div>
+
+            <!-- Empty State (when 0 records match filter or search) -->
+            <div id="ocEmptyState" class="hidden px-4 py-12 text-center">
+              <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+                <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.5 2.8C2.1 11.2 2 11.6 2 12v4c0 .6.4 1 1 1h2"/>
+                  <circle cx="7" cy="17" r="2"/>
+                  <circle cx="17" cy="17" r="2"/>
+                </svg>
+              </div>
+              <div id="ocEmptyTitle" class="text-sm font-bold text-slate-800">No vehicles match this filter</div>
+              <p id="ocEmptySubtitle" class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">Try selecting another filter tab or clearing the search bar.</p>
+            </div>
+
+            <!-- Table Footer Summary -->
+            <div class="px-4 py-2.5 border-t border-slate-200/80 bg-slate-50/50 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+              <span id="ocTableSummary">Showing 0 vehicles inside campus</span>
+              <span class="text-[10px] text-slate-400 font-mono">Sorted by arrival order (first in, first listed)</span>
+            </div>
           </div>
-          <div id="ocList" class="divide-y divide-slate-100"></div>
+
+          <!-- Small-screen backdrop overlay for drawer -->
+          <div id="ocDrawerBackdrop" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40 xl:hidden"></div>
+
+          <!-- Right-Side Details Drawer / Panel -->
+          <aside id="ocDrawer" class="hidden fixed inset-y-0 right-0 z-50 w-full sm:w-[420px] bg-white shadow-2xl border-l border-slate-200 xl:static xl:z-auto xl:w-[380px] xl:shadow-xs xl:rounded-xl xl:border overflow-hidden flex flex-col flex-shrink-0 transition-all duration-200">
+            <div id="ocDrawerContent" class="flex flex-col h-full"></div>
+          </aside>
         </div>
       </section>
 
@@ -1732,7 +1868,7 @@
             </svg>
           </div>
           <div>
-            <h3 id="drawerTitle" class="text-sm font-bold text-white tracking-wide">Vehicle Dossier & Permit Inspection</h3>
+            <h3 id="drawerTitle" class="text-sm font-bold text-white tracking-wide">Vehicle Details & Gate Pass</h3>
             <p id="drawerSubtitle" class="text-[11px] text-slate-300 font-mono">Verified Campus Security Record</p>
           </div>
         </div>
@@ -1796,7 +1932,7 @@
               <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Section 1</div>
               <h4 class="text-xs font-bold text-slate-900">Owner & Campus Affiliation</h4>
             </div>
-            <span class="text-[11px] text-slate-500 font-medium">Primary Permit Holder</span>
+            <span class="text-[11px] text-slate-500 font-medium">Vehicle Owner</span>
           </div>
 
           <!-- Owner 1x1 Photo Attachment -->
@@ -1843,12 +1979,12 @@
               </select>
             </div>
 
-            <div class="sm:col-span-2 rounded-lg border border-ncst-gold/50 bg-ncst-goldLight/40 p-3">
+            <div class="sp-vip-option sm:col-span-2">
               <label class="flex items-start gap-2.5 cursor-pointer">
-                <input type="checkbox" id="editPassClassVip" class="mt-0.5 w-4 h-4 accent-ncst-navy">
+                <input type="checkbox" id="editPassClassVip" aria-describedby="vipEditHelp" class="mt-0.5 w-4 h-4 accent-ncst-navy">
                 <span>
                   <span class="block text-xs font-bold text-slate-900">VIP pass</span>
-                  <span class="block text-[11px] text-slate-600 mt-0.5">VIP pass: exempt from strikes, bans, overnight / overtime checks and the driver-confirmation step at the gate. The pass is still signed, can be revoked and every passage is logged.</span>
+                  <span id="vipEditHelp" class="block text-[11px] text-slate-600 mt-0.5">Skips automatic parking warnings and driver checks. Security holds, suspensions, pass validation, and gate records still apply.</span>
                 </span>
               </label>
             </div>
@@ -1952,7 +2088,7 @@
             <div>
               <label for="editRegStatus" class="block font-medium text-slate-700 mb-1">Registration Status <span class="text-rose-500">*</span></label>
               <select id="editRegStatus" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
-                <option value="Active">Active (Permitted on Campus)</option>
+                <option value="Active">Active (Allowed on Campus)</option>
                 <option value="Suspended">Suspended (Access Blocked)</option>
               </select>
             </div>
@@ -2099,79 +2235,35 @@
   <!-- Toast Notification Hub -->
   <!-- ==================== LOGIN SCREEN ==================== -->
   <div id="loginOverlay" class="sp-login-canvas">
-    <!-- Subtle Ambient Background Accents -->
-    <div class="fixed inset-0 pointer-events-none select-none overflow-hidden" aria-hidden="true">
-      <svg class="absolute -top-32 -left-32 w-[520px] h-[520px] text-white/[0.035]" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 520 520">
-        <circle cx="260" cy="260" r="250" />
-        <circle cx="260" cy="260" r="175" />
-      </svg>
-      <svg class="absolute -bottom-40 -right-40 w-[620px] h-[620px] text-white/[0.035]" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 620 620">
-        <circle cx="310" cy="310" r="300" />
-        <circle cx="310" cy="310" r="210" />
-      </svg>
-    </div>
-
-    <!-- Login Card Container -->
-    <div class="w-full max-w-[420px] mx-auto bg-white rounded-2xl shadow-[0_25px_60px_-15px_rgba(10,20,50,0.5),0_0_0_1px_rgba(255,255,255,0.12)] border border-slate-100 p-6 sm:p-7 relative z-10">
-      <!-- Branding Header -->
-      <div class="text-center mb-4">
-        <img src="assets/ncst-emblem.png" alt="NCST Official Emblem" class="w-20 h-20 mx-auto mb-2.5 object-contain select-none pointer-events-none block border-0 outline-none">
-        <p class="text-xs sm:text-[13px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">National College of Science and Technology</p>
-        <h1 class="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">Gate Security Admin</h1>
-      </div>
-
-      <!-- Login Form -->
-      <form id="loginForm" class="space-y-3.5" autocomplete="on" novalidate>
-        <div>
-          <label for="loginUsername" class="block text-xs font-semibold text-slate-700 mb-1.5">Username</label>
-          <div class="relative group">
-            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#253475] transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-              </svg>
-            </span>
-            <input id="loginUsername" name="username" type="text" autocomplete="username" placeholder="Enter username" required class="h-11 w-full pl-10 pr-3.5 rounded-xl bg-slate-50/70 hover:bg-slate-50 focus:bg-white border border-slate-200 focus:border-[#253475] text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#253475]/10 transition-all font-medium">
+    <div class="sp-login-page">
+      <header class="sp-login-header">
+        <a class="sp-login-brand" href="./" aria-label="SecurePark home">
+          <span><strong>SecurePark<span class="sp-login-brand-dot">.</span></strong><small>NCST · Campus security</small></span>
+        </a>
+      </header>
+      <main class="sp-login-card" aria-labelledby="loginTitle">
+        <aside class="sp-login-campus" aria-label="NCST campus">
+          <div class="sp-login-photo"><img src="assets/ncst-campus.jpg" alt="Entrance to the National College of Science and Technology" width="1024" height="452"></div>
+          <div class="sp-login-campus-caption"><h2>National College of<br>Science and Technology</h2></div>
+        </aside>
+        <section class="sp-login-form-panel">
+          <div class="sp-login-form-content">
+            <h1 id="loginTitle">Staff sign in</h1>
+            <form id="loginForm" autocomplete="on" novalidate>
+              <div class="sp-login-field"><label for="loginUsername">Username</label><input id="loginUsername" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter your username" required></div>
+              <div class="sp-login-field"><label for="loginPassword">Password</label><div class="sp-login-password-wrap"><input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required aria-describedby="loginCapsLock"><button type="button" id="loginPasswordToggle" aria-label="Show password" aria-pressed="false">Show</button></div><p id="loginCapsLock" class="sp-login-caps hidden" role="status">Caps Lock is on.</p></div>
+              <div class="sp-login-help-row"><button type="button" id="adminForgotBtn" onclick="openAdminForgotModal()">Forgot your password?</button></div>
+              <p id="loginError" class="sp-login-error hidden" role="alert"></p>
+              <button id="loginSubmitBtn" type="submit"><span>Sign in</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+            </form>
           </div>
-        </div>
-
-        <div>
-          <label for="loginPassword" class="block text-xs font-semibold text-slate-700 mb-1.5">Password</label>
-          <div class="relative group">
-            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#253475] transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-              </svg>
-            </span>
-            <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required class="h-11 w-full pl-10 pr-11 rounded-xl bg-slate-50/70 hover:bg-slate-50 focus:bg-white border border-slate-200 focus:border-[#253475] text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-[#253475]/10 transition-all font-medium">
-            <button type="button" onclick="const p=document.getElementById('loginPassword'); p.type = p.type==='password'?'text':'password'; this.classList.toggle('text-[#253475]');" class="absolute inset-y-0 right-0 w-11 flex items-center justify-center text-slate-400 hover:text-slate-600 focus:outline-none transition-colors cursor-pointer" title="Toggle password visibility">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-            </button>
-          </div>
-          <div class="mt-2.5 flex items-center justify-between text-xs">
-            <span class="text-[11.5px] text-slate-400 select-none">Forgot password?</span>
-            <button type="button" id="adminForgotBtn" onclick="openAdminForgotModal()" class="text-[11.5px] font-semibold text-[#253475] hover:text-[#1e2b64] hover:underline transition-colors cursor-pointer bg-transparent border-0 p-0 inline-flex items-center gap-1 group py-0.5">
-              <span>Contact Administrator</span>
-              <svg class="w-3 h-3 text-[#253475]/70 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </button>
-          </div>
-        </div>
-
-        <p id="loginError" class="hidden text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2" role="alert"></p>
-
-        <div class="pt-1">
-          <button id="loginSubmitBtn" type="submit" class="h-11 w-full rounded-xl bg-gradient-to-r from-[#253475] via-[#1E2E6E] to-[#16245C] hover:from-[#2B3D86] hover:to-[#1A2860] active:scale-[0.99] text-white text-sm font-bold shadow-md shadow-[#253475]/25 hover:shadow-lg hover:shadow-[#253475]/35 transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-wait disabled:active:scale-100 focus:outline-none focus:ring-2 focus:ring-[#253475]/30 focus:ring-offset-2">
-            <span>Sign In</span>
-            <svg class="w-4 h-4 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
-            </svg>
-          </button>
-        </div>
-      </form>
+        </section>
+      </main>
     </div>
   </div>
 
   <!-- ==================== ADMIN FORGOT PASSWORD MODAL ==================== -->
-  <div id="adminForgotModal" class="fixed inset-0 z-[75] hidden overflow-y-auto p-4 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center">
+  <div id="adminForgotModal" role="dialog" aria-modal="true" aria-labelledby="adminForgotTitle" class="sp-dialog fixed inset-0 z-[75] hidden overflow-y-auto p-4 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center">
     <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200/80 p-6 sm:p-7 relative m-auto" onclick="event.stopPropagation()">
       <div class="flex items-start gap-3.5 mb-4">
         <div class="w-10 h-10 rounded-xl bg-blue-50 text-ncst-navy flex items-center justify-center flex-shrink-0 border border-blue-100/80">
@@ -2181,7 +2273,7 @@
         </div>
         <div class="flex-1 min-w-0">
           <div class="flex items-center justify-between">
-            <h2 class="text-base font-extrabold text-slate-900 leading-tight">Password Reset Instructions</h2>
+            <h2 id="adminForgotTitle" class="text-base font-extrabold text-slate-900 leading-tight">Reset your password</h2>
             <button type="button" onclick="closeAdminForgotModal()" class="text-slate-400 hover:text-slate-600 p-1 -mr-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer" aria-label="Close dialog">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
@@ -2191,10 +2283,10 @@
       </div>
 
       <div class="space-y-3.5 text-xs text-slate-600 leading-relaxed mb-6">
-        <p>To preserve campus audit integrity and security credentials, officer passwords cannot be reset automatically online.</p>
+        <p>For account safety, ask an administrator to reset your password.</p>
         
         <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2">
-          <div class="font-bold text-slate-700 text-[11.5px] uppercase tracking-wider">How to request credential recovery:</div>
+          <div class="font-bold text-slate-700 text-[11.5px] uppercase tracking-wider">How to reset your password:</div>
           <ul class="space-y-2 text-slate-600">
             <li class="flex items-start gap-2">
               <span class="w-1.5 h-1.5 rounded-full bg-ncst-navy mt-1.5 flex-shrink-0"></span>
@@ -2206,7 +2298,7 @@
             </li>
             <li class="flex items-start gap-2">
               <span class="w-1.5 h-1.5 rounded-full bg-ncst-navy mt-1.5 flex-shrink-0"></span>
-              <span>A temporary access password will be granted for you to sign in and set a permanent credential.</span>
+              <span>You will receive a temporary password. Sign in and change it to your own password.</span>
             </li>
           </ul>
         </div>
@@ -2214,14 +2306,14 @@
 
       <div class="flex items-center justify-end gap-2.5 pt-1">
         <button type="button" onclick="closeAdminForgotModal()" class="h-10 px-5 rounded-xl bg-ncst-navy hover:bg-[#234394] active:bg-[#14295c] text-white text-xs font-bold shadow-sm transition-colors cursor-pointer">
-          Understood, Close
+          Close
         </button>
       </div>
     </div>
   </div>
 
   <!-- ==================== CHANGE PASSWORD MODAL ==================== -->
-  <div id="passwordModal" class="fixed inset-0 z-[70] hidden overflow-y-auto p-4 bg-slate-950/75 backdrop-blur-sm">
+  <div id="passwordModal" class="sp-dialog fixed inset-0 z-[70] hidden overflow-y-auto p-4 bg-slate-950/75 backdrop-blur-sm">
     <div class="m-auto w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
       <div class="px-6 py-5 border-b border-slate-100">
         <h2 class="text-base font-extrabold text-slate-900">Change Security Password</h2>
@@ -2250,11 +2342,25 @@
   </div>
 
   <!-- ==================== STAFF ACCOUNT MODAL (create / edit) ==================== -->
-  <div id="staffModal" class="fixed inset-0 z-50 hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 id="staffModalTitle" class="text-sm font-extrabold text-slate-900">New Staff Account</h2>
-        <p id="staffModalHint" class="text-[11px] text-slate-500 mt-0.5">A temporary password is generated and shown once.</p>
+  <div id="staffModal" class="sp-dialog fixed inset-0 z-50 hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
+    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-ncst-gold">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <circle cx="12" cy="10" r="2.5"/>
+              <path d="M8.5 16c.8-1.6 2-2.4 3.5-2.4s2.7.8 3.5 2.4"/>
+            </svg>
+          </div>
+          <div>
+            <h2 id="staffModalTitle" class="text-sm font-bold text-white tracking-wide">New Staff Account</h2>
+            <p id="staffModalHint" class="text-[11px] text-slate-300 font-mono">Admin and guard accounts</p>
+          </div>
+        </div>
+        <button type="button" id="closeStaffModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <form id="staffForm" class="px-5 py-4 grid grid-cols-2 gap-3" novalidate>
         <input type="hidden" id="staffFormId">
@@ -2284,8 +2390,8 @@
         <div>
           <label for="staffGate" class="block text-[11px] font-bold text-slate-600 mb-1">Assigned gate</label>
           <select id="staffGate" class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/30">
-            <option>Gate 1 (Main Ingress)</option>
-            <option>Gate 2 (Main Egress)</option>
+            <option value="Gate 1 (Main Ingress)">Gate 1 (Main Entry)</option>
+            <option value="Gate 2 (Main Egress)">Gate 2 (Main Exit)</option>
             <option>Gate 3 (Motorcycle &amp; Bike Lane)</option>
             <option>All Gates</option>
           </select>
@@ -2300,11 +2406,24 @@
   </div>
 
   <!-- ==================== ONE-TIME TEMPORARY PASSWORD ==================== -->
-  <div id="tempPasswordModal" class="fixed inset-0 z-[55] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-sm bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 class="text-sm font-extrabold text-slate-900">Temporary Password</h2>
-        <p id="tempPasswordFor" class="text-[11px] text-slate-500 mt-0.5"></p>
+  <div id="tempPasswordModal" class="sp-dialog fixed inset-0 z-[55] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
+    <div class="m-auto w-full max-w-sm bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-ncst-gold">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white tracking-wide">Temporary Password</h2>
+            <p id="tempPasswordFor" class="text-[11px] text-slate-300 font-mono">One-Time Security Passcode</p>
+          </div>
+        </div>
+        <button type="button" id="closeTempPasswordModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <div class="px-5 py-4 space-y-3">
         <div class="flex items-center gap-2">
@@ -2322,11 +2441,26 @@
   </div>
 
   <!-- ==================== FLAG VIOLATION / WARNING MODAL ==================== -->
-  <div id="flagModal" class="fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 class="text-sm font-extrabold text-slate-900">Flag Violation / Warning</h2>
-        <div id="flagVehicleSummary" class="mt-2 text-xs text-slate-600"></div>
+  <div id="flagModal" class="sp-dialog fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
+    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-rose-400">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white tracking-wide">Flag Violation / Warning</h2>
+            <p class="text-[11px] text-slate-300 font-mono">Security Hold &amp; Disciplinary Record</p>
+          </div>
+        </div>
+        <button type="button" id="closeFlagModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="px-5 pt-3 pb-1 border-b border-slate-100 bg-slate-50">
+        <div id="flagVehicleSummary" class="text-xs text-slate-600"></div>
       </div>
       <form id="flagForm" class="px-5 py-4 space-y-3" novalidate>
         <div>
@@ -2362,11 +2496,26 @@
   </div>
 
   <!-- ==================== RESOLVE / DISMISS / RESET MODAL ==================== -->
-  <div id="resolveModal" class="fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 id="resolveModalTitle" class="text-sm font-extrabold text-slate-900">Resolve Violation</h2>
-        <p id="resolveModalSummary" class="mt-1 text-xs text-slate-600"></p>
+  <div id="resolveModal" class="sp-dialog fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
+    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-emerald-400">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <div>
+            <h2 id="resolveModalTitle" class="text-sm font-bold text-white tracking-wide">Resolve Violation</h2>
+            <p class="text-[11px] text-slate-300 font-mono">Case Clearance &amp; Access Restoration</p>
+          </div>
+        </div>
+        <button type="button" id="closeResolveModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="px-5 pt-3 pb-1 border-b border-slate-100 bg-slate-50">
+        <p id="resolveModalSummary" class="text-xs text-slate-600"></p>
       </div>
       <form id="resolveForm" class="px-5 py-4 space-y-3" novalidate>
         <div>
@@ -2383,11 +2532,24 @@
   </div>
 
   <!-- ==================== NEW VISITOR DAY PASS ==================== -->
-  <div id="visitorModal" class="fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 class="text-sm font-extrabold text-slate-900">New Visitor Day Pass</h2>
-        <p id="visitorModalDate" class="text-[11px] text-slate-500 mt-0.5">Valid only today.</p>
+  <div id="visitorModal" class="sp-dialog fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
+    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-ncst-gold">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>
+              <line x1="8" y1="14" x2="13" y2="14"/><line x1="8" y1="17" x2="11" y2="17"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white tracking-wide">New Visitor Day Pass</h2>
+            <p id="visitorModalDate" class="text-[11px] text-slate-300 font-mono">Valid only today.</p>
+          </div>
+        </div>
+        <button type="button" id="closeVisitorModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <form id="visitorForm" class="px-5 py-4 grid grid-cols-2 gap-3" novalidate autocomplete="off">
         <div id="vpDateWrap" class="col-span-2 hidden rounded-lg border border-ncst-navy/20 bg-ncst-navy/5 p-3">
@@ -2435,7 +2597,7 @@
   </div>
 
   <!-- ==================== VISITOR PASS CARD (screenshot-ready) ==================== -->
-  <div id="visitorCardModal" class="fixed inset-0 z-[59] hidden overflow-y-auto p-4 bg-slate-900/80 backdrop-blur-xs">
+  <div id="visitorCardModal" class="sp-dialog fixed inset-0 z-[59] hidden overflow-y-auto p-4 bg-slate-900/80 backdrop-blur-xs">
     <div class="m-auto flex flex-col items-center gap-3">
       <div id="visitorCard" class="w-[340px] bg-white rounded-2xl overflow-hidden shadow-2xl border border-slate-300"></div>
       <div class="flex flex-wrap justify-center gap-2">
@@ -2447,11 +2609,26 @@
   </div>
 
   <!-- ==================== REPORT VISITOR INCIDENT ==================== -->
-  <div id="visitorIncidentModal" class="fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-100">
-        <h2 class="text-sm font-extrabold text-slate-900">Report Visitor Incident</h2>
-        <p id="visitorIncidentSummary" class="mt-1 text-xs text-slate-600"></p>
+  <div id="visitorIncidentModal" class="sp-dialog fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
+    <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-rose-400">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white tracking-wide">Report Visitor Incident</h2>
+            <p class="text-[11px] text-slate-300 font-mono">Flag Discrepancy or Overstay</p>
+          </div>
+        </div>
+        <button type="button" id="closeVisitorIncidentModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="px-5 pt-3 pb-1 border-b border-slate-100 bg-slate-50">
+        <p id="visitorIncidentSummary" class="text-xs text-slate-600"></p>
       </div>
       <form id="visitorIncidentForm" class="px-5 py-4 space-y-3" novalidate>
         <div>
@@ -2513,16 +2690,17 @@
     };
   </script>
   <script src="js/alerts.js?v=20261001c"></script>
-  <script src="js/auth.js?v=20261006a"></script>
-  <script src="js/app.js?v=20261006a"></script>
-  <script src="js/users.js?v=20260930c"></script>
-  <script src="js/cctv.js?v=20260930c"></script>
-  <script src="js/cctvclip.js?v=20260930c"></script>
-  <script src="js/gate.js?v=20260930c"></script>
-  <script src="js/violations.js?v=20260930c"></script>
+  <script src="js/login.js?v=20261007a"></script>
+  <script src="js/auth.js?v=20261007g"></script>
+  <script src="js/app.js?v=20261007h"></script>
+  <script src="js/users.js?v=20261007d"></script>
+  <script src="js/cctv.js?v=20261007a"></script>
+  <script src="js/cctvclip.js?v=20261007f"></script>
+  <script src="js/gate.js?v=20261007e"></script>
+  <script src="js/violations.js?v=20261007e"></script>
   <script src="js/overnight.js?v=20260930c"></script>
-  <script src="js/visitors.js?v=20260930c"></script>
-  <script src="js/oncampus.js?v=20260930c"></script>
+  <script src="js/visitors.js?v=20261007d"></script>
+  <script src="js/oncampus.js?v=20261007f"></script>
   <script>
     window.openAdminForgotModal = function () {
       const modal = document.getElementById('adminForgotModal');
@@ -2533,7 +2711,15 @@
       if (modal) modal.classList.add('hidden');
     };
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') closeAdminForgotModal();
+      if (e.key === 'Escape') {
+        closeAdminForgotModal();
+        modalCloseMap.forEach(({ cancelBtnId, modalId }) => {
+          const m = document.getElementById(modalId);
+          if (m && !m.classList.contains('hidden')) {
+            document.getElementById(cancelBtnId)?.click();
+          }
+        });
+      }
     });
     const afm = document.getElementById('adminForgotModal');
     if (afm) {
@@ -2541,6 +2727,33 @@
         if (e.target === afm) closeAdminForgotModal();
       });
     }
+
+    // Unified Modal (X) and Backdrop Click Handlers
+    const modalCloseMap = [
+      { closeBtnId: 'closeStaffModalBtn', cancelBtnId: 'staffCancelBtn', modalId: 'staffModal' },
+      { closeBtnId: 'closeTempPasswordModalBtn', cancelBtnId: 'tempPasswordDoneBtn', modalId: 'tempPasswordModal' },
+      { closeBtnId: 'closeFlagModalBtn', cancelBtnId: 'flagCancelBtn', modalId: 'flagModal' },
+      { closeBtnId: 'closeResolveModalBtn', cancelBtnId: 'resolveCancelBtn', modalId: 'resolveModal' },
+      { closeBtnId: 'closeVisitorModalBtn', cancelBtnId: 'visitorCancelBtn', modalId: 'visitorModal' },
+      { closeBtnId: 'closeVisitorIncidentModalBtn', cancelBtnId: 'visitorIncidentCancelBtn', modalId: 'visitorIncidentModal' }
+    ];
+
+    modalCloseMap.forEach(({ closeBtnId, cancelBtnId, modalId }) => {
+      const closeBtn = document.getElementById(closeBtnId);
+      const cancelBtn = document.getElementById(cancelBtnId);
+      const modal = document.getElementById(modalId);
+      if (closeBtn && cancelBtn) {
+        closeBtn.addEventListener('click', () => cancelBtn.click());
+      }
+      if (modal && cancelBtn) {
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal) cancelBtn.click();
+        });
+      }
+    });
   </script>
-</body>
+<script src="js/layers.js?v=20261007b"></script>
+<script src="js/workspace.js?v=20261007h"></script></body>
 </html>
+
+

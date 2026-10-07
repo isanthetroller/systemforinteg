@@ -66,20 +66,41 @@
     if ($('sidebarUserName')) $('sidebarUserName').textContent = user.fullName;
     if ($('sidebarUserInitials')) $('sidebarUserInitials').textContent = initials(user.fullName);
     if ($('sidebarUserRole')) {
-      const gate = user.gateAssigned ? ` • ${user.gateAssigned}` : '';
-      const customRole = isGuard2 ? 'Gate 2 Guard (Egress)' : roleLabel(user.role);
+      const gate = user.gateAssigned ? ` • ${user.gateAssigned.replace(/Ingress/g, 'Entry').replace(/Egress/g, 'Exit')}` : '';
+      const customRole = isGuard2 ? 'Gate 2 Guard (Exit)' : roleLabel(user.role);
       $('sidebarUserRole').textContent = `${customRole}${gate}`;
     }
+  }
+
+  function finishSessionCheck() {
+    const loading = $('authLoading');
+    if (loading) loading.hidden = true;
+    document.body.classList.remove('sp-auth-pending');
+  }
+
+  // One brief entrance per page load; data refreshes and navigation do not replay it.
+  const entranceShown = { login: false, dashboard: false };
+  function showEntrance(name, root, className) {
+    if (entranceShown[name] || !root) return;
+    entranceShown[name] = true;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    root.classList.add(className);
+    setTimeout(() => root.classList.remove(className), 650);
   }
 
   function showLogin(message) {
     session.user = null;
     document.body.classList.remove('sp-authed', 'role-admin', 'role-guard', 'role-guard2');
     const overlay = $('loginOverlay');
+    showEntrance('login', overlay, 'sp-login-enter');
     if (overlay) overlay.classList.remove('hidden');
     setError($('loginError'), message || '');
     const pw = $('loginPassword');
-    if (pw) pw.value = '';
+    if (pw) { pw.value = ''; pw.type = 'password'; }
+    const toggle = $('loginPasswordToggle');
+    if (toggle) { toggle.textContent = 'Show'; toggle.setAttribute('aria-label', 'Show password'); toggle.setAttribute('aria-pressed', 'false'); }
+    $('loginCapsLock')?.classList.add('hidden');
+    finishSessionCheck();
     const un = $('loginUsername');
     if (un) setTimeout(() => (un.value ? pw : un).focus(), 50);
   }
@@ -98,10 +119,12 @@
   function onAuthenticated(user) {
     applyUser(user);
     hideLogin();
+    finishSessionCheck();
     if (user.mustChangePassword) {
       openPasswordModal(true);
       return; // data loads only after the temporary password is replaced
     }
+    showEntrance('dashboard', $('appShell'), 'sp-dashboard-enter');
     runCallbacks();
   }
 
@@ -149,6 +172,7 @@
       if (window.SP) SP.showToast('Password updated successfully.');
       if (session.forcedPasswordChange) {
         session.forcedPasswordChange = false;
+        showEntrance('dashboard', $('appShell'), 'sp-dashboard-enter');
         runCallbacks();
       }
     } catch (err) {
@@ -169,7 +193,14 @@
 
     const btn = $('loginSubmitBtn');
     btn.disabled = true;
-    btn.textContent = 'Signing in…';
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = `
+      <svg class="w-4 h-4 animate-spin text-white inline-block" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+      </svg>
+      <span>Signing in…</span>
+    `;
     setError($('loginError'), '');
     try {
       const user = await ApiClient.login(username, password);
@@ -178,7 +209,7 @@
       setError($('loginError'), err.message || 'Sign in failed. Check your connection.');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Sign In';
+      btn.innerHTML = originalHTML;
     }
   }
 
