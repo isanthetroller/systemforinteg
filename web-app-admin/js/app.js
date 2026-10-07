@@ -835,8 +835,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (veh.isBanned) {
         return {
           type: 'banned',
-          badge: 'BANNED',
-          reason: 'Vehicle banned from campus (3+ strikes)',
+          badge: 'VIOLATION HOLD',
+          reason: 'Unresolved violation: the vehicle cannot enter or leave',
           id: veh.id
         };
       }
@@ -1504,8 +1504,7 @@ document.addEventListener('DOMContentLoaded', () => {
         matchesStatus = !!v.isVip;
       } else if (state.vehicleFilter.status === 'Banned') {
         matchesStatus = !!v.isBanned;
-      } else if (state.vehicleFilter.status === 'Strikes') {
-        matchesStatus = (Number(v.warningCount) || 0) > 0;
+
       } else if (state.vehicleFilter.status !== 'All') {
         matchesStatus = v.registrationStatus === state.vehicleFilter.status;
       }
@@ -1682,7 +1681,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="py-2.5 px-3.5 align-middle">
           <div class="flex items-baseline gap-1.5 flex-wrap">
             <span class="font-mono font-bold text-slate-900 text-sm tracking-wide">${escapeHtml(vehicle.plateNumber)}</span>
-            ${strikeChip(vehicle)}
+            ${holdChip(vehicle)}
           </div>
           <div class="inline-flex items-center gap-1.5 text-[11px] text-slate-500 font-mono mt-0.5">
             <span class="px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200/80 text-slate-500 text-[10px] font-semibold">PASS</span>
@@ -1841,7 +1840,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (dropdown) dropdown.classList.add('hidden');
           if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
           const qrData = passPayloadFor(vehicle);
-          if (!qrData) return showToast(PASS_UNAVAILABLE_MSG);
+          if (!qrData) return showToast(passUnavailableMsg(vehicle));
           openZoomQrModal({
             payload: qrData,
             plate: vehicle.plateNumber,
@@ -1888,11 +1887,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vehicle.isBanned) {
       if (window.SPAlert) {
         SPAlert.warning({
-          title: 'Vehicle Banned',
-          text: `${vehicle.plateNumber} is banned by an active violation. Resolve it in Violations & Penalties to lift the suspension.`
+          title: 'Vehicle on Violation Hold',
+          text: `${vehicle.plateNumber} has an unresolved violation. Resolve it in Violations to let it enter and leave again.`
         });
       } else {
-        showToast(`${vehicle.plateNumber} is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.`, 'warning');
+        showToast(`${vehicle.plateNumber} has an unresolved violation. Resolve it in Violations first.`, 'warning');
       }
       return;
     }
@@ -2617,7 +2616,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const qrData = passPayloadFor(v);
     if (!qrData) {
-      showToast(PASS_UNAVAILABLE_MSG);
+      showToast(passUnavailableMsg(v));
       return;
     }
 
@@ -2747,13 +2746,14 @@ document.addEventListener('DOMContentLoaded', () => {
       qrPassCode: qrCode,
       qr_pass_code: qrCode,
       qrPayload: v.qrPayload || null,
+      paymentStatus: v.paymentStatus || 'Paid',
+      feeAmount: Number(v.feeAmount || 0),
       passId: v.passId || null,
       passValidUntil: v.passValidUntil || null,
       passClass: v.passClass || (v.isVip ? 'VIP' : 'Standard'),
       isVip: !!(v.isVip || v.passClass === 'VIP'),
       vipGrantedBy: v.vipGrantedBy || null,
       vipGrantedAt: v.vipGrantedAt || null,
-      warningCount: v.warningCount || 0,
       isBanned: !!v.isBanned,
       entryTime: entryTime,
       gatePoint: gatePoint,
@@ -2941,8 +2941,8 @@ document.addEventListener('DOMContentLoaded', () => {
           </svg>
           <span>Print Pass</span>
         </button>
-<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
-          Flag Violation / Warning
+<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Issue a violation: the vehicle cannot enter or leave until it is resolved">
+          Issue Violation
         </button>
         <button id="drawerStudentLoginBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="Create or reset the owner's student portal login">
           Student Login
@@ -2970,7 +2970,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (drawerQrContainer && typeof QRCode !== 'undefined') {
       const qrData = passPayloadFor(v);
       if (!qrData) {
-        drawerQrContainer.innerHTML = `<div class="w-[200px] h-[200px] flex items-center justify-center text-center text-[11px] text-slate-500 border border-dashed border-slate-300 rounded p-3">${PASS_UNAVAILABLE_MSG}</div>`;
+        drawerQrContainer.innerHTML = `<div class="w-[200px] h-[200px] flex items-center justify-center text-center text-[11px] text-slate-500 border border-dashed border-slate-300 rounded p-3">${escapeHtml(passUnavailableMsg(v))}</div>`;
       } else try {
         drawerQrContainer.innerHTML = '';
         new QRCode(drawerQrContainer, {
@@ -3675,11 +3675,18 @@ document.addEventListener('DOMContentLoaded', () => {
           vehiclePhoto: v.vehiclePhoto,
           authorizedDrivers: v.authorizedDrivers
         }).then((saved) => {
+          const wasUnpaid = v.paymentStatus === 'Unpaid';
           if (saved) applyServerPass(v, saved);
           renderVehiclesTable();
           updateCounts();
           renderDashboard();
-          showToast(`Changes saved for ${v.plateNumber}.`);
+          if (!wasUnpaid && v.paymentStatus === 'Unpaid') {
+            // The edit moved the vehicle into a higher fee class: the difference is due before it can enter again
+            showToast(`Changes saved. ${v.plateNumber} now owes ₱${Number(v.feeAmount).toLocaleString('en-PH')} (fee difference) and cannot enter until it is paid at the Cashier or online.`, 'warning');
+            document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
+          } else {
+            showToast(`Changes saved for ${v.plateNumber}.`);
+          }
           console.log('[App] Vehicle updated on server:', v.plateNumber);
         }).catch(err => {
           console.warn('[App] Update API sync notice:', err.message);
@@ -4082,6 +4089,15 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      // One vehicle per ID number (the server enforces this too)
+      const enteredOwnerId = document.getElementById('ownerIdNumber').value.trim().toUpperCase();
+      const ownerTaken = enteredOwnerId && state.vehicles.find(v => String(v.ownerIdNumber || v.owner_id_number || '').trim().toUpperCase() === enteredOwnerId);
+      if (ownerTaken) {
+        showToast(`ID ${enteredOwnerId} already has a registered vehicle (${ownerTaken.plateNumber}). Only one vehicle can be registered per ID number.`, 'warning');
+        document.getElementById('ownerIdNumber').focus();
+        return;
+      }
+
       const ownerFullName = document.getElementById('ownerFullName').value.trim();
       const ownerRole = document.getElementById('ownerRole').value;
       const department = document.getElementById('department').value.trim();
@@ -4184,7 +4200,14 @@ document.addEventListener('DOMContentLoaded', () => {
           if (res && res.id) newVehicle.id = res.id;
           if (res) applyServerPass(newVehicle, res);
           console.log('[App] Vehicle enrolled on backend:', res);
-          showToast(`Signed pass issued for ${plateNumber}.`);
+          if (res && res.paymentStatus === 'Unpaid') {
+            newVehicle.paymentStatus = 'Unpaid';
+            newVehicle.feeAmount = res.feeAmount;
+            showToast(`${plateNumber}: fee of \u20b1${Number(res.feeAmount).toLocaleString('en-PH')} to pay. The QR pass is issued after payment (Cashier or online).`);
+          } else {
+            showToast(`Signed pass issued for ${plateNumber}.`);
+          }
+          document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
           switchView('vehiclesView');
           openVehicleDrawer(newVehicle);
           const acct = res && res.studentAccount;
@@ -4192,8 +4215,17 @@ document.addEventListener('DOMContentLoaded', () => {
             SPTempPassword(`Student portal login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
           }
         }).catch(err => {
-          console.warn('[App] Local cache saved, API sync notice:', err.message);
-          showToast(`Notice: Saved locally, server sync error: ${err.message}`);
+          console.warn('[App] Registration was not saved:', err.message);
+          if (err.status >= 400 && err.status < 500) {
+            // The server refused it (e.g. the ID already has a vehicle): drop the optimistic local row
+            state.vehicles = state.vehicles.filter(x => x !== newVehicle);
+            updateCounts();
+            renderDashboard();
+            renderVehiclesTable();
+            showToast(`${plateNumber} was not registered: ${err.message}`, 'warning');
+          } else {
+            showToast(`Notice: Saved locally, server sync error: ${err.message}`);
+          }
         });
       }
 
@@ -4790,6 +4822,13 @@ document.addEventListener('DOMContentLoaded', () => {
      9.2 Signed Pass Helpers (payloads are signed by the server, never here)
      ========================================================================== */
   const PASS_UNAVAILABLE_MSG = 'Signed pass not available yet. Save the vehicle online, then reload.';
+  function passUnavailableMsg(v) {
+    if (v && v.paymentStatus === 'Unpaid') {
+      const fee = Number(v.feeAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 });
+      return `Registration fee of \u20b1${fee} is unpaid. The QR pass is issued once it is paid at the Cashier or online.`;
+    }
+    return PASS_UNAVAILABLE_MSG;
+  }
 
   // A gate log the mobile app recorded offline and sent later shows when it reached the server
   function offlineChip(log) {
@@ -4801,15 +4840,16 @@ document.addEventListener('DOMContentLoaded', () => {
     return `<div class="mt-0.5"><span class="inline-block px-1.5 py-0.5 rounded bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20 text-[9px] font-bold tracking-wide" title="Recorded offline at the gate; reached the server at ${escapeHtml(log.syncedAt)}">OFFLINE &middot; synced ${escapeHtml(at)}</span></div>`;
   }
 
-  function strikeChip(v) {
+  function holdChip(v) {
+    if (v.paymentStatus === 'Unpaid') return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold tracking-wide">UNPAID \u20b1' + Number(v.feeAmount || 0).toLocaleString('en-PH') + '</span>';
     if (v.isVip) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/80 text-[10px] font-semibold tracking-wide">VIP</span>';
-    if (v.isBanned) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold tracking-wide">BANNED</span>';
-    const n = Number(v.warningCount || 0);
-    return n > 0 ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">STRIKE ${n}/3</span>` : '';
+    if (v.isBanned) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold tracking-wide">VIOLATION HOLD</span>';
+    return '';
   }
 
   function passPayloadFor(v) {
     if (!v) return null;
+    if (v.paymentStatus === 'Unpaid') return null; // no pass exists until the fee is paid
     if (typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{')) {
       return v.qrPayload;
     }
@@ -4842,6 +4882,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function applyServerPass(target, serverVehicle) {
     target.qrPayload = serverVehicle.qrPayload || target.qrPayload || null;
     target.passId = serverVehicle.passId || target.passId || null;
+    target.paymentStatus = serverVehicle.paymentStatus || target.paymentStatus || 'Paid';
+    if (serverVehicle.feeAmount != null) target.feeAmount = Number(serverVehicle.feeAmount);
     target.passValidUntil = serverVehicle.passValidUntil || target.passValidUntil || null;
     if (serverVehicle.plateNumber) target.plateNumber = serverVehicle.plateNumber;
     if (typeof serverVehicle.isVip === 'boolean') {

@@ -2,7 +2,7 @@
   const headings = {
     tabPass: ['Your campus pass', 'Show your pass and check your vehicle details.'],
     tabActivity: ['Gate activity', 'See when your vehicles entered and left campus.'],
-    tabStrikes: ['Warnings & violations', 'Check your warning count and find out what to do next.'],
+    tabStrikes: ['Violations', 'See any violation on your vehicles and what to do next.'],
     tabAccount: ['Your account', 'Manage your password and view your registered details.']
   };
   let currentTab = '';

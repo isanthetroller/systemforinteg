@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css?v=20261001b">
-<link rel="stylesheet" href="css/portal.css?v=20261007d"></head>
+<link rel="stylesheet" href="css/portal.css?v=20261009a"></head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
   <main id="screenLogin" class="screen auth-screen" hidden>
@@ -146,6 +146,10 @@
           <h2 class="card-title">My account</h2>
           <dl id="accountDetails" class="details"></dl>
         </div>
+        <div class="card" id="receiptsCard" hidden>
+          <h2 class="card-title">Payments &amp; receipts</h2>
+          <ul id="receiptList" class="receipts"></ul>
+        </div>
         <div class="card">
           <h2 class="card-title">Change password</h2>
           <form id="passwordForm" novalidate>
@@ -166,8 +170,8 @@
           <ul class="bullets">
             <li>Show the QR on the <strong>My Pass</strong> tab at the gate when entering and leaving campus.</li>
             <li>The guard confirms that the driver is on your authorized drivers list.</li>
-            <li>Each warning is one strike. At <strong>3 strikes</strong> your vehicle is banned until the Security Office resolves it.</li>
-            <li>Parking overnight or past curfew (22:00) adds a strike.</li>
+            <li>If your vehicle is given a <strong>violation</strong>, it cannot enter or leave campus until the Security Office resolves it.</li>
+            <li>Parking overnight or past curfew (22:00): the guard will try to contact you first.</li>
             <li>Changes to your vehicle or drivers are done at the Security Office. A new pass replaces the old one.</li>
           </ul>
         </div>
@@ -187,7 +191,7 @@
       </button>
       <button type="button" id="navStrikes" class="tabbar-btn" data-tab="tabStrikes">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
-        <span>Warnings</span>
+        <span>Violations</span>
         <span id="strikesBadge" class="tabbar-badge" hidden></span>
       </button>
       <button type="button" id="navAccount" class="tabbar-btn" data-tab="tabAccount">
@@ -226,7 +230,7 @@
   <script src="js/config.js?v=20261001b"></script>
   <script src="js/aes.js?v=20261001b"></script>
   <script src="js/qrcode.min.js?v=20261001b"></script>
-  <script src="js/api.js?v=20261001b"></script>
+  <script src="js/api.js?v=20261010a"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -244,8 +248,8 @@
     };
   </script>
   <script src="js/alerts.js?v=20261001b"></script>
-  <script src="js/app.js?v=20261007d"></script>
-<script src="js/portal.js?v=20261007e"></script></body>
+  <script src="js/app.js?v=20261010a"></script>
+<script src="js/portal.js?v=20261009a"></script></body>
 </html>
 
 

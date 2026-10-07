@@ -14,6 +14,7 @@ import '../../../services/local_cache_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../../visitor/screens/visitor_registration_screen.dart';
 import '../dialogs/block_reason_dialog.dart';
+import '../dialogs/issue_violation_dialog.dart';
 import '../dialogs/manual_qr_dialog.dart';
 import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
@@ -302,7 +303,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           }
         }
 
-        if (visitor == null && decodedJson != null && (decodedJson['visitorName'] != null || decodedJson['visitor_name'] != null)) {
+        if (visitor == null && MockData.isTestEnvironment && decodedJson != null && (decodedJson['visitorName'] != null || decodedJson['visitor_name'] != null)) {
           final vName = (decodedJson['visitorName'] ?? decodedJson['visitor_name'] ?? 'Visitor').toString();
           final vPlate = (decodedJson['plateNumber'] ?? decodedJson['plate_number'] ?? 'UNKNOWN').toString();
           final pId = (decodedJson['passId'] ?? decodedJson['pass_code'] ?? 'VP-LOCAL').toString();
@@ -356,6 +357,25 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 statusBadge: 'INSIDE CAMPUS',
                 reason: visitor.reason.isNotEmpty ? visitor.reason : 'Anti-passback: Vehicle must exit before entering again.',
                 visitor: visitor,
+              );
+            });
+            return;
+          }
+
+          // The server did not accept this visitor pass (not yet valid, expired, already used...): no approval from here
+          if (!visitor.accepted) {
+            final refusal = visitor.reason.isNotEmpty ? visitor.reason : 'The server did not accept this visitor pass (${visitor.result}).';
+            setState(() {
+              _isValidating = false;
+              _scannedVehicle = null;
+              _rejectionDetails = ScanRejectionDetails(
+                type: ScanRejectionType.blocked,
+                title: 'Visitor Pass Not Accepted',
+                message: refusal,
+                plateNumber: visitor!.plateNumber,
+                ownerName: visitor.visitorName,
+                statusBadge: visitor.result.isEmpty ? 'REFUSED' : visitor.result,
+                reason: refusal,
               );
             });
             return;
@@ -481,6 +501,28 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         return;
       }
 
+      // 1b. Obey the server's decision. Anything it did not accept (registration fee unpaid, pass expired, not
+      // registered...) stops here: the guard cannot approve it from this screen. (A vehicle already inside is the
+      // anti-passback case handled just below.)
+      if (vData != null && vData['accepted'] == false && !isServerBanned && vData['currentlyInside'] != true) {
+        final serverResult = (vData['result'] ?? '').toString();
+        final serverReason = (vData['reason'] ?? vData['message'] ?? 'The server did not accept this pass.').toString();
+        setState(() {
+          _isValidating = false;
+          _scannedVehicle = null;
+          _rejectionDetails = ScanRejectionDetails(
+            type: serverResult == 'NOT_FOUND' ? ScanRejectionType.notFound : ScanRejectionType.blocked,
+            title: _serverRefusalTitle(serverResult),
+            message: serverReason,
+            plateNumber: remoteVehicle!.plateNumber,
+            ownerName: remoteVehicle.ownerName,
+            statusBadge: serverResult.isEmpty ? 'REFUSED' : serverResult,
+            reason: serverReason,
+          );
+        });
+        return;
+      }
+
       // 2. Strict Duplicate Entry Check (Anti-passback): Vehicle is already inside campus
       if (remoteVehicle.isInsideCampus) {
         setState(() {
@@ -494,7 +536,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ownerName: remoteVehicle.ownerName,
             statusBadge: remoteVehicle.campusStatus ?? 'Inside Campus',
             reason: 'Anti-passback protection: Vehicle must exit through Guard 2 before another entry can be recorded.',
-            vehicle: remoteVehicle,
+            vehicle: _withOnCampusDetails(remoteVehicle, vData),
           );
         });
         return;
@@ -523,6 +565,81 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           );
         });
       }
+    }
+  }
+
+  /// Adds the server's "where is it and who to call" block (verify.php `onCampus`) to a vehicle that is already inside.
+  VehicleRecord _withOnCampusDetails(VehicleRecord vehicle, Map<String, dynamic>? data) {
+    final oc = data?['onCampus'];
+    if (oc is! Map) return vehicle;
+    String? text(dynamic v) {
+      final t = (v ?? '').toString().trim();
+      return t.isEmpty || t == 'null' ? null : t;
+    }
+    final entry = text(oc['entryTime']);
+    return vehicle.copyWith(
+      ownerPhone: text(oc['ownerPhone']),
+      onCampusSince: entry != null ? DateTime.tryParse(entry.replaceFirst(' ', 'T')) : null,
+      hoursInside: double.tryParse((oc['hoursInside'] ?? '').toString()),
+      entryGate: text(oc['gatePoint']),
+      enteredBy: text(oc['enteredBy']),
+      admittedBy: text(oc['admittedBy']),
+    );
+  }
+
+  /// "Issue violation" from the already-inside screen: the vehicle is put on hold and the owner is notified.
+  void _showIssueViolationDialog() {
+    final vehicle = _rejectionDetails?.vehicle;
+    if (vehicle == null) return;
+    IssueViolationDialog.show(
+      context,
+      plateNumber: vehicle.plateNumber,
+      onSubmit: (type, notes) async {
+        final messenger = ScaffoldMessenger.of(context);
+        final error = await ApiService.issueViolation(plateNumber: vehicle.plateNumber, type: type, notes: notes);
+        if (!mounted) return;
+        if (error != null) {
+          messenger.showSnackBar(SnackBar(
+            backgroundColor: NcstColors.crimson,
+            duration: const Duration(seconds: 6),
+            content: Text('NOT RECORDED: $error', style: const TextStyle(fontWeight: FontWeight.w700)),
+          ));
+          return;
+        }
+        widget.onDecision(AuditLogEntry(
+          id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+          plateNumber: vehicle.plateNumber,
+          vehicleType: vehicle.vehicleType,
+          ownerName: vehicle.ownerName,
+          driverName: vehicle.enteredBy ?? vehicle.ownerName,
+          timeIn: DateTime.now(),
+          status: GateStatus.blocked,
+          blockReason: 'Violation: $type',
+        ));
+        final held = vehicle.copyWith(isBanned: true);
+        MockData.upsertVehicle(held);
+        LocalCacheService.upsertVehicle(held);
+        messenger.showSnackBar(SnackBar(
+          backgroundColor: NcstColors.green,
+          duration: const Duration(seconds: 4),
+          content: Text('Violation recorded. ${vehicle.plateNumber} is on hold and the owner was notified.',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+        ));
+        _resetScanner();
+      },
+    );
+  }
+
+  String _serverRefusalTitle(String result) {
+    switch (result) {
+      case 'UNPAID':
+        return 'Registration Fee Unpaid';
+      case 'EXPIRED':
+        return 'Pass Expired';
+      case 'NOT_FOUND':
+        return 'Not Registered';
+      default:
+        return 'Entry Not Allowed';
     }
   }
 
@@ -1007,6 +1124,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         ),
       );
     } else if (_rejectionDetails != null) {
+      final alreadyInside = _rejectionDetails!.type == ScanRejectionType.duplicateEntry && _rejectionDetails!.vehicle != null;
       content = ScanRejectionView(
         details: _rejectionDetails!,
         onScanAnother: _resetScanner,
@@ -1015,6 +1133,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ? _startPatrolInspection
             : null,
         inspectButtonLabel: 'INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT',
+        onIssueViolation: alreadyInside ? _showIssueViolationDialog : null,
       );
     } else if (_scannedVehicle == null && _visitorPass == null) {
       content = _buildViewfinderSection();

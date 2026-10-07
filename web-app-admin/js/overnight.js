@@ -3,12 +3,12 @@
  *
  * InfinityFree has no cron, so this panel runs the server check (POST overnight_check.php)
  * when a staff member signs in and every 10 minutes while the portal is open. The server
- * records at most one overnight strike per vehicle per night, so repeated runs are safe.
+ * only lists vehicles; nothing is recorded automatically. The guard first calls the owner and, if the owner
+ * cannot be reached, reports the vehicle to the police. A violation is issued only with "Issue Violation".
  */
 (function () {
   const $ = (id) => document.getElementById(id);
   const INTERVAL_MS = 10 * 60 * 1000;
-  const STRIKE_LIMIT = 3;
   let timer = null;
   let running = false;
   let report = null;
@@ -26,11 +26,8 @@
     return digits ? `tel:${digits}` : '';
   }
 
-  function strikeLabel(item) {
-    if (item.isBanned) return '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">BANNED</span>';
-    const n = Math.min(Number(item.warningCount || 0), STRIKE_LIMIT);
-    const cls = n === 0 ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-slate-100 text-slate-600 border-slate-200';
-    return `<span class="px-1.5 py-0.5 rounded border text-[10px] font-extrabold ${cls}">Strike ${n} of ${STRIKE_LIMIT}</span>`;
+  function holdLabel(item) {
+    return item.onHold ? '<span class="px-1.5 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">VIOLATION HOLD</span>' : '';
   }
 
   function render() {
@@ -62,7 +59,7 @@
         <div class="flex flex-wrap items-center gap-2">
           <span class="sp-plate text-xs tracking-wider">${esc(item.plateNumber)}</span>
           <span class="sp-status ${overnight ? 'sp-status-navy' : 'sp-status-amber'}">${overnight ? 'OVERNIGHT' : 'OVERTIME'}</span>
-          ${strikeLabel(item)}
+          ${holdLabel(item)}
           <span class="ml-auto text-[11px] font-bold ${overnight ? 'text-ncst-navy' : 'text-amber-950'}">${esc(item.elapsedHours)} h inside</span>
         </div>
         <div class="sp-parking-details">
@@ -74,8 +71,8 @@
           ${item.ownerPhone ? '<button type="button" data-act="copy" class="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer">Copy Number</button>' : ''}
           ${tel ? `<a href="${esc(tel)}" class="sp-call-owner">Call Owner</a>` : ''}
           ${item.flaggedThisNight
-            ? `<span class="ml-auto text-[11px] font-semibold text-slate-500">Strike recorded ${formatTime(item.flaggedAt)}</span>`
-            : '<button type="button" data-act="flag" class="ml-auto px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">Record Strike</button>'}
+            ? `<span class="ml-auto text-[11px] font-semibold text-slate-500">Violation issued ${formatTime(item.flaggedAt)}</span>`
+            : '<button type="button" data-act="flag" class="ml-auto px-2.5 py-1 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">Issue Violation</button>'}
         </div>`;
 
       const copyBtn = row.querySelector('[data-act="copy"]');
@@ -94,26 +91,18 @@
   }
 
   async function flag(item, btn) {
-    const next = Number(item.warningCount || 0) + 1;
-    const willBan = !item.isBanned && next >= STRIKE_LIMIT;
+    const text = `Issue a violation to ${item.plateNumber} for overnight / overtime parking? Do this only after the owner could not be reached. ` +
+      `The vehicle will not be able to leave campus until an administrator resolves the violation.`;
     const confirmed = window.SPAlert
-      ? await SPAlert.confirm({
-          title: 'Record Overnight Strike?',
-          text: `Record an overnight / overtime strike for ${item.plateNumber}?` +
-                (willBan ? ` WARNING: This is strike ${next} of ${STRIKE_LIMIT} — ${item.plateNumber} will be automatically BANNED from campus.` : ` (Strike ${next} of ${STRIKE_LIMIT})`),
-          confirmText: willBan ? 'Issue Strike & Ban' : 'Record Strike',
-          icon: willBan ? 'error' : 'warning',
-          isDanger: willBan,
-          isWarning: !willBan
-        })
-      : confirm(`Record an overnight / overtime strike for ${item.plateNumber}?${!item.isBanned && next >= STRIKE_LIMIT ? `\n\nThis is strike ${next} of ${STRIKE_LIMIT}: the vehicle will be BANNED.` : ''}`);
+      ? await SPAlert.confirm({ title: 'Issue Violation?', text, confirmText: 'Issue Violation', icon: 'warning', isDanger: true })
+      : confirm(text);
     if (!confirmed) return;
     btn.disabled = true;
     try {
       const res = await ApiClient.flagOvernight(item.vehicleId);
       report = res.report;
       render();
-      SP.showToast(res.message, willBan ? 'error' : 'warning');
+      SP.showToast(res.message, 'warning');
       if (SP.reload) SP.reload();
     } catch (err) {
       SP.showToast(err.message, 'error');
@@ -130,13 +119,7 @@
       const res = await ApiClient.runOvernightCheck();
       report = res;
       render();
-      if (res.flagged && res.flagged.length) {
-        const banned = res.flagged.filter(f => f.banned).map(f => f.plateNumber);
-        SP.showToast(`${res.flagged.length} overnight strike(s) recorded.` + (banned.length ? ` BANNED: ${banned.join(', ')}.` : ''));
-        if (SP.reload) SP.reload();
-      } else if (showToast) {
-        SP.showToast('Overnight check complete. No new strikes.');
-      }
+      if (showToast) SP.showToast(res.items && res.items.length ? `${res.items.length} vehicle(s) overnight or overtime.` : 'No overnight or overtime vehicles.');
     } catch (err) {
       if (err.status !== 401 && $('overnightList')) {
         $('overnightList').innerHTML = `<div class="px-4 py-4 text-center text-xs text-ncst-crimson">${esc(err.message)}</div>`;

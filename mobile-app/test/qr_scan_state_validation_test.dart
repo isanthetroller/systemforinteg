@@ -16,6 +16,8 @@ void main() {
   // In-memory backend database for our test server
   final Map<String, Map<String, dynamic>> dbVehicles = {};
   final List<Map<String, dynamic>> dbLogs = [];
+  final List<Map<String, dynamic>> dbViolations = [];
+  int violationStatus = 201;
   bool simulateNetworkFailure = false;
 
   final guard1 = GuardUser(
@@ -42,6 +44,8 @@ void main() {
     simulateNetworkFailure = false;
     dbVehicles.clear();
     dbLogs.clear();
+    dbViolations.clear();
+    violationStatus = 201;
     LocalCacheService.clearMemoryCache();
     ApiConstants.baseUrl = 'http://mock-api.local/api';
 
@@ -54,6 +58,8 @@ void main() {
       'owner_name': 'Prof. John Smith',
       'owner_role': 'Faculty Member',
       'owner_id_number': 'NCST-FAC-01',
+      'owner_phone': '0917 555 0100',
+      'department': 'College of Computing',
       'qr_pass_code': 'ABC-1111',
       'sticker_year': '2026',
       'registration_status': 'Active',
@@ -118,6 +124,39 @@ void main() {
           final isBlocked = isBanned || isSuspended || status.toLowerCase().contains('block');
           final currentlyInside = status.toLowerCase().contains('inside');
 
+          if (!isBlocked && gateType == 'Ingress' && veh['payment_status'] == 'Unpaid') {
+            return http.Response(
+              jsonEncode({
+                'status': 'success',
+                'data': {
+                  'result': 'UNPAID',
+                  'accepted': false,
+                  'currentlyInside': false,
+                  'reason': 'Registration fee not paid. The owner must pay online or at the cashier before this vehicle can enter.',
+                  'vehicle': veh,
+                },
+              }),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          if (!isBlocked && gateType == 'Ingress' && veh['pass_expired'] == true) {
+            return http.Response(
+              jsonEncode({
+                'status': 'success',
+                'data': {
+                  'result': 'EXPIRED',
+                  'accepted': false,
+                  'currentlyInside': false,
+                  'reason': 'Pass expired on 2025-12-31. Renew it at the Security Office.',
+                  'vehicle': veh,
+                },
+              }),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+
           if (isBlocked) {
             return http.Response(
               jsonEncode({
@@ -142,6 +181,14 @@ void main() {
                   'accepted': false,
                   'currentlyInside': true,
                   'reason': 'Vehicle is already inside campus.',
+                  'onCampus': {
+                    'entryTime': '2026-10-08 08:15:00',
+                    'hoursInside': 3.5,
+                    'gatePoint': 'Gate 1 (Main Ingress)',
+                    'enteredBy': 'Prof. John Smith',
+                    'admittedBy': 'Officer Reyes',
+                    'ownerPhone': '0917 555 0100',
+                  },
                   'vehicle': veh,
                 },
               }),
@@ -192,6 +239,25 @@ void main() {
             headers: {'content-type': 'application/json'},
           );
         }
+      }
+
+      if (path.contains('violations.php') && method == 'POST') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        if (violationStatus != 201) {
+          return http.Response(
+            jsonEncode({'status': 'error', 'message': 'VIP vehicles are exempt from violations.'}),
+            violationStatus,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        dbViolations.add(body);
+        final plate = (body['plate'] ?? '').toString().toUpperCase();
+        if (dbVehicles.containsKey(plate)) dbVehicles[plate]!['is_banned'] = 1;
+        return http.Response(
+          jsonEncode({'status': 'success', 'data': {'onHold': true}, 'message': 'Violation recorded.'}),
+          201,
+          headers: {'content-type': 'application/json'},
+        );
       }
 
       if (path.contains('logs.php') && method == 'POST') {
@@ -306,6 +372,91 @@ void main() {
       // Status remained Inside Campus
       expect(dbVehicles['ABC-1111']!['status'], 'Inside Campus');
     });
+    Future<void> scanVehicleAlreadyInside(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      await tester.pumpWidget(MaterialApp(home: QrScannerScreen(onDecision: (_) {})));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(QrScannerScreen));
+      state.testProcessRawQrCode('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Test 2b: scanning a vehicle that is already inside shows who it belongs to and how to contact them', (tester) async {
+      await scanVehicleAlreadyInside(tester);
+
+      expect(find.text('Duplicate Entry Attempt'), findsOneWidget);
+      final details = find.byKey(const Key('onCampusDetails'));
+      await tester.ensureVisible(details);
+      expect(details, findsOneWidget);
+      expect(find.descendant(of: details, matching: find.text('0917 555 0100')), findsOneWidget);
+      expect(find.descendant(of: details, matching: find.text('Prof. John Smith')), findsWidgets);
+      expect(find.descendant(of: details, matching: find.text('College of Computing')), findsOneWidget);
+      expect(find.descendant(of: details, matching: find.textContaining('3.5 h')), findsOneWidget);
+      expect(find.descendant(of: details, matching: find.text('Gate 1 (Main Ingress)')), findsOneWidget);
+      expect(find.descendant(of: details, matching: find.text('Officer Reyes')), findsOneWidget);
+      expect(find.descendant(of: details, matching: find.textContaining('Self (Owner)')), findsOneWidget);
+      expect(find.byKey(const Key('copyPhoneButton')), findsOneWidget);
+      expect(find.text('INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT'), findsOneWidget);
+      await tester.ensureVisible(find.byKey(const Key('issueViolationButton')));
+      expect(find.byKey(const Key('issueViolationButton')), findsOneWidget);
+    });
+
+    testWidgets('Test 2c: the guard issues a violation to the vehicle that is already inside', (tester) async {
+      await scanVehicleAlreadyInside(tester);
+
+      await tester.ensureVisible(find.byKey(const Key('issueViolationButton')));
+      await tester.tap(find.byKey(const Key('issueViolationButton')));
+      await tester.pumpAndSettle();
+
+      // a type is required
+      await tester.tap(find.byKey(const Key('issueViolationSubmit')));
+      await tester.pumpAndSettle();
+      expect(find.text('Choose the type of violation.'), findsOneWidget);
+      expect(dbViolations, isEmpty);
+
+      await tester.tap(find.byKey(const Key('violationTypeField')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Parking in Fire Lane / Restricted Zone').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('violationNotesField')), 'Blocking the hydrant');
+      await tester.tap(find.byKey(const Key('issueViolationSubmit')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(dbViolations.length, 1);
+      expect(dbViolations.first['plate'], 'ABC-1111');
+      expect(dbViolations.first['type'], 'Parking in Fire Lane / Restricted Zone');
+      expect(dbViolations.first['notes'], 'Blocking the hydrant');
+      expect(find.textContaining('Violation recorded. ABC-1111 is on hold'), findsOneWidget);
+      expect(find.byType(ScanRejectionView), findsNothing); // back to scanning
+    });
+
+    testWidgets('Test 2d: a refused violation is reported loudly and not shown as recorded', (tester) async {
+      violationStatus = 409;
+      await scanVehicleAlreadyInside(tester);
+
+      await tester.ensureVisible(find.byKey(const Key('issueViolationButton')));
+      await tester.tap(find.byKey(const Key('issueViolationButton')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('violationTypeField')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Unauthorized Driver at Helm').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('issueViolationSubmit')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(dbViolations, isEmpty);
+      expect(find.textContaining('NOT RECORDED: VIP vehicles are exempt from violations.'), findsOneWidget);
+      expect(find.byType(ScanRejectionView), findsOneWidget); // still on the vehicle's screen
+    });
+
   });
 
   group('Exit State Checking & QR Validation (Guard 2)', () {
@@ -486,6 +637,39 @@ void main() {
   });
 
   group('Invalid QR & Network Error Handling', () {
+    for (final scenario in const [
+      {'name': 'UNPAID registration fee', 'flag': 'payment_status', 'value': 'Unpaid', 'title': 'Registration Fee Unpaid'},
+      {'name': 'EXPIRED pass', 'flag': 'pass_expired', 'value': true, 'title': 'Pass Expired'},
+    ]) {
+      testWidgets('Test 7b: the guard cannot approve a vehicle the server refused (${scenario['name']})', (tester) async {
+        await tester.binding.setSurfaceSize(const Size(800, 1000));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        dbVehicles['ABC-1111']![scenario['flag'] as String] = scenario['value'];
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: QrScannerScreen(
+              onDecision: (_) {},
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final dynamic state = tester.state(find.byType(QrScannerScreen));
+        state.testProcessRawQrCode('ABC-1111');
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ScanRejectionView), findsOneWidget);
+        expect(find.text(scenario['title'] as String), findsOneWidget);
+        expect(find.text('ACCESS DENIED'), findsOneWidget);
+        expect(find.textContaining('Confirm'), findsNothing);
+        expect(dbLogs.isEmpty, isTrue);
+        expect(dbVehicles['ABC-1111']!['status'], 'Outside');
+      });
+    }
+
     testWidgets('Test 7: Scan an invalid / nonexistent QR shows Not Found rejection', (tester) async {
       await tester.binding.setSurfaceSize(const Size(800, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));

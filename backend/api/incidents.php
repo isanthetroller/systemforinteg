@@ -134,6 +134,9 @@ function handleCreateIncident($pdo, $actor) {
         $upd = $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `plate_number` = ?");
         $upd->execute([$plateNumber]);
 
+        // The registered owner is told (portal notice + e-mail); an unregistered plate has no owner to tell
+        noticeVehicleBlocked($pdo, $plateNumber, $reason, $gatePoint, $caseNumber, (int)$newId);
+
         $pdo->commit();
 
         sendResponse(201, [
@@ -164,7 +167,7 @@ function handleResolveIncident($pdo, $admin) {
 
     $plate = $row['plate_number'];
 
-    // Bans from the 3-strike policy / violations are lifted only by resolving the violation
+    // A violation hold is lifted only by resolving the violation
     $linked = $pdo->prepare("SELECT `id` FROM `vehicle_violations` WHERE `incident_id` = ? AND `status` = 'Pending' LIMIT 1");
     $linked->execute([$id]);
     if ($linkedId = $linked->fetchColumn()) {

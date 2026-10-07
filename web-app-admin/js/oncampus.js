@@ -9,7 +9,6 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const STRIKE_LIMIT = 3;
   const view = {
     data: null,
     filter: 'all',
@@ -75,12 +74,10 @@
       return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300" title="Active Security Hold / Exit Blocked">Blocked</span>';
     }
     if (kind === 'vehicle') {
-      if (item.isBanned) return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">Banned</span>';
+      if (item.isBanned) return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">Violation hold</span>';
       if (item.timeFlag === 'overnight') return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">Overnight</span>';
       if (item.timeFlag === 'overtime') return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300">Overtime</span>';
       if (item.isVip) return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">VIP</span>';
-      const n = Math.min(Number(item.warningCount || 0), STRIKE_LIMIT);
-      if (n > 0) return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300">Strike ${n}/${STRIKE_LIMIT}</span>`;
       return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200/80"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Inside</span>';
     } else {
       if (item.revoked) return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">Cancelled</span>';
@@ -118,7 +115,7 @@
     $('ocTotal').textContent = d.counts.total;
     $('ocRegistered').textContent = d.counts.registered;
     $('ocVisitors').textContent = d.counts.visitors;
-    $('ocAttention').textContent = d.counts.flagged + d.vehicles.filter(v => (v.warningCount > 0 || v.isBanned) && !v.timeFlag).length;
+    $('ocAttention').textContent = d.counts.flagged + d.vehicles.filter(v => v.isBanned && !v.timeFlag).length;
     $('onCampusUpdated').textContent = `Updated ${fmtTime(d.now)}`;
 
     document.querySelectorAll('#ocFilter .oc-filter').forEach(b => {
@@ -132,7 +129,7 @@
     const match = (...fields) => !q || fields.some(f => String(f || '').toLowerCase().includes(q));
 
     const vehicles = d.vehicles.filter(v =>
-      (view.filter === 'all' || view.filter === 'registered' || (view.filter === 'attention' && (v.timeFlag || v.warningCount > 0 || v.isBanned || v.activeHold || v.exitDenied))) &&
+      (view.filter === 'all' || view.filter === 'registered' || (view.filter === 'attention' && (v.timeFlag || v.isBanned || v.activeHold || v.exitDenied))) &&
       match(v.plateNumber, v.ownerName, v.enteredBy, v.makeModelColor, v.department));
 
     const visitors = d.visitors.filter(p =>
@@ -212,7 +209,7 @@
     } else if (isVehicle) {
       if (item.isBanned) accentBorder = 'border-l-4 border-l-rose-600 bg-rose-50/25';
       else if (item.timeFlag === 'overnight') accentBorder = 'border-l-4 border-l-ncst-navy bg-blue-50/20';
-      else if (item.timeFlag === 'overtime' || item.warningCount > 0) accentBorder = 'border-l-4 border-l-amber-500 bg-amber-50/25';
+      else if (item.timeFlag === 'overtime') accentBorder = 'border-l-4 border-l-amber-500 bg-amber-50/25';
     } else {
       if (item.revoked || item.overstayed) accentBorder = 'border-l-4 border-l-rose-600 bg-rose-50/25';
     }
@@ -297,7 +294,7 @@
                 </button>
                 <button type="button" data-menu="flag" class="w-full text-left px-3 py-1.5 text-rose-700 hover:bg-rose-50 transition-colors flex items-center gap-2 cursor-pointer">
                   <svg class="w-3.5 h-3.5 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
-                  <span>Flag Warning</span>
+                  <span>Issue Violation</span>
                 </button>
               ` : `
                 <button type="button" data-menu="pass" class="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-slate-50 hover:text-ncst-navy transition-colors flex items-center gap-2 cursor-pointer">
@@ -364,7 +361,7 @@
         if (!window.SPViolations) return;
         SPViolations.openFlagModal({
           id: item.vehicleId, plateNumber: item.plateNumber, ownerName: item.ownerName,
-          warningCount: item.warningCount, isBanned: item.isBanned
+          isBanned: item.isBanned
         }, {
           context: `On campus since ${fmtTime(item.entryTime).replace(/&[^;]+;/g, '')}, driven in by ${item.enteredBy || 'unknown driver'}`,
           onDone: () => load()
@@ -597,7 +594,7 @@
             <div>
               <div class="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">Vehicle Status</div>
               <div class="text-xs font-bold mt-0.5">
-                ${item.isBanned ? '<span class="text-rose-700">Banned from Campus</span>' : (item.warningCount > 0 ? `<span class="text-amber-700">Strike ${item.warningCount} of ${STRIKE_LIMIT}</span>` : '<span class="text-emerald-700">Clear (0 strikes)</span>')}
+                ${item.isBanned ? '<span class="text-rose-700">Violation hold: cannot leave until resolved</span>' : '<span class="text-emerald-700">Clear</span>'}
               </div>
             </div>
             <div>
@@ -634,7 +631,7 @@
           <div class="flex items-center gap-2">
             <button type="button" id="ocDrawerSecondaryBtn" class="flex-1 h-8 rounded-lg border border-rose-200 bg-rose-50/80 hover:bg-rose-100 text-rose-800 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
               <svg class="w-3.5 h-3.5 text-rose-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
-              <span>Flag Warning</span>
+              <span>Issue Violation</span>
             </button>
             ${clipButton(item, item.plateNumber, 'Entry Recorded')}
           </div>
@@ -681,7 +678,7 @@
           if (!window.SPViolations) return;
           SPViolations.openFlagModal({
             id: item.vehicleId, plateNumber: item.plateNumber, ownerName: item.ownerName,
-            warningCount: item.warningCount, isBanned: item.isBanned
+            isBanned: item.isBanned
           }, {
             context: `On campus since ${fmtTime(item.entryTime).replace(/&[^;]+;/g, '')}, driven in by ${item.enteredBy || 'unknown driver'}`,
             onDone: () => load()

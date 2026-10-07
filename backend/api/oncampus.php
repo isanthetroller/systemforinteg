@@ -6,7 +6,7 @@
  *
  * Registered vehicles with status "Inside Campus" and visitors who entered on a day pass
  * but have not exited, with how long they have been inside, who drove in, owner contact,
- * strike standing and any items the visitor brought in.
+ * violation hold and any items the visitor brought in.
  *
  * Both lists come back in arrival order: the vehicle that entered first is first, so the
  * guard can monitor them in the order they came in. `entryLogId` is the gate log of that entry
@@ -101,7 +101,6 @@ foreach ($candidateVehicles as $v) {
         'hoursInside' => $hours,
         'isVip' => isVipVehicle($v),
         'timeFlag' => isVipVehicle($v) ? null : ($overnight ? 'overnight' : ($hours !== null && $hours >= SP_OVERTIME_HOURS ? 'overtime' : null)),
-        'warningCount' => (int)$v['warning_count'],
         'isBanned' => (int)$v['is_banned'] === 1,
         'registrationStatus' => $v['registration_status'],
         'status' => $v['status'],
@@ -184,7 +183,7 @@ sendResponse(200, [
         'registered' => count($vehicles),
         'visitors' => count($visitors),
         'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null || !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => $v['overstayed'] || $v['revoked'] || !empty($v['activeHold']) || $v['exitDenied'])),
-        'withStrikes' => count(array_filter($vehicles, fn($v) => $v['warningCount'] > 0 || $v['isBanned'])),
+        'onHold' => count(array_filter($vehicles, fn($v) => $v['isBanned'])),
         'blocked' => count(array_filter($vehicles, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])),
     ],
     'vehicles' => $vehicles,

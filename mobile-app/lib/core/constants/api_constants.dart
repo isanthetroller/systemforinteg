@@ -17,6 +17,7 @@ class ApiConstants {
   static const String logsEndpoint = '/logs.php';
   static const String statsEndpoint = '/stats.php';
   static const String incidentsEndpoint = '/incidents.php';
+  static const String violationsEndpoint = '/violations.php';
   static const String authEndpoint = '/auth.php';
   static const String visitorsEndpoint = '/visitors.php';
   static const String verifyEndpoint = '/verify.php';

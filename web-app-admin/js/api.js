@@ -168,6 +168,26 @@ const ApiClient = (function() {
       return res.data;
     },
 
+    // Cashier (admin only)
+    getUnpaidVehicles: async () => {
+      const res = await request('payments.php?view=unpaid');
+      return res.data;
+    },
+
+    getPayments: async ({ q = '', status = '', method = '' } = {}) => {
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (status) params.set('status', status);
+      if (method) params.set('method', method);
+      const res = await request('payments.php' + (params.toString() ? '?' + params : ''));
+      return res.data;
+    },
+
+    receiveCashPayment: async (vehicleId, tendered) => {
+      const res = await request('payments.php', { method: 'POST', body: { action: 'cash', vehicleId, tendered } });
+      return res.data;
+    },
+
     // Staff Accounts (admin only)
     getUsers: async () => {
       const res = await request('users.php');
@@ -270,26 +290,26 @@ const ApiClient = (function() {
       return res.data;
     },
 
-    // Violations & 3-strike policy
+    // Violations (a pending violation blocks the vehicle's entry and exit)
     getViolations: async (params = {}) => {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
       const res = await request(`violations.php${qs ? '?' + qs : ''}`);
       return res.data;
     },
 
-    // { vehicle_id | plate, type, severity, notes } -> { violation, strikes, banned, vehicle, ... }
+    // { vehicle_id | plate, type, notes } -> { violation, onHold, vehicle, ... }
     createViolation: async (payload) => {
       const res = await request('violations.php', { method: 'POST', body: payload });
       return { ...res.data, message: res.message };
     },
 
-    // { violation_id, action: 'resolve' | 'dismiss', notes } or { vehicle_id, action: 'reset', notes }
+    // { violation_id, action: 'resolve' | 'dismiss', notes }
     updateViolation: async (payload) => {
       const res = await request('violations.php', { method: 'PUT', body: payload });
       return { ...res.data, message: res.message };
     },
 
-    // Overtime / overnight parking (server records at most one strike per vehicle per night)
+    // Overtime / overnight parking list (nothing is recorded automatically)
     runOvernightCheck: async () => {
       const res = await request('overnight_check.php', { method: 'POST', body: {} });
       return { ...res.data, message: res.message };

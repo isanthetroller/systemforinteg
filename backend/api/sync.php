@@ -202,6 +202,10 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
         if ($vehicle) {
             if ((int)$vehicle['is_banned'] === 1) $flags[] = 'BANNED';
             elseif ($vehicle['registration_status'] === 'Suspended') $flags[] = 'SUSPENDED';
+            if (($vehicle['payment_status'] ?? 'Paid') === 'Unpaid') $flags[] = 'UNPAID';
+            if (vehiclePassExpired($vehicle, $eventDay)) $flags[] = 'EXPIRED_PASS';
+            $syncDriver = trim((string)($p['driverName'] ?? $p['driver_name'] ?? ''));
+            if (!$isVip && !findAuthorizedDriverByName($pdo, $vehicle['id'], $syncDriver)) $flags[] = 'DRIVER_NOT_LISTED';
         } elseif ($visitor) {
             $insideNow = !empty($visitor['entry_time']) && empty($visitor['exit_time']);
             if ($visitor['status'] === 'Revoked' && empty($visitor['exit_time'])) $flags[] = 'REVOKED';
@@ -329,6 +333,7 @@ function syncIncident($pdo, $actor, $ref, $ts, array $p, $offlineNote) {
         'notes' => $notes,
         'reportedAt' => date('Y-m-d H:i:s', $ts),
         'clientRef' => $ref,
+        'notifyOwner' => true,
     ]);
     if ($vehicle && $vehicle['status'] === 'Inside Campus') {
         $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `id` = ?")->execute([$vehicle['id']]);

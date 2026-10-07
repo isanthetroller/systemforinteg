@@ -326,6 +326,15 @@
               <span>Register Vehicle</span>
             </button>
 
+            <!-- Cashier (registration fees) -->
+            <button type="button" id="navCashierBtn" class="admin-only nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
+              <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>
+              </svg>
+              <span class="flex-1">Cashier</span>
+              <span id="cashierSidebarCount" class="sp-sidebar-count hidden">0</span>
+            </button>
+
             <!-- 5. Visitor Day Passes -->
             <button type="button" id="navVisitorsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -358,13 +367,13 @@
               </span>
             </button>
 
-            <!-- 8. Violations & Penalties (Citations & Strikes) -->
+            <!-- 8. Violations -->
             <button type="button" id="navViolationsBtn" class="nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                 <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
               </svg>
-              <span class="flex-1">Violations &amp; Penalties</span>
+              <span class="flex-1">Violations</span>
               <span id="violationsSidebarCount" class="sp-sidebar-count">0</span>
             </button>
 
@@ -865,8 +874,7 @@
                   <option value="Active">Active Pass</option>
                   <option value="Suspended">Suspended Pass</option>
                   <option value="VIP">VIP Passes</option>
-                  <option value="Banned">Banned / Blocked</option>
-                  <option value="Strikes">With Strikes / Violations</option>
+                  <option value="Banned">On Violation Hold</option>
                 </select>
                 <div class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
                   <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -1260,9 +1268,11 @@
                 <select id="vehicleCategory" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
                   <option value="4-Wheel">4-Wheel (Car / SUV / Van)</option>
                   <option value="Motorcycle">Motorcycle / Scooter</option>
+                  <option value="3-Wheel">3-Wheel (Tricycle)</option>
                   <option value="Bicycle">Bicycle / Non-Plated</option>
                   <option value="Campus Fleet">Campus Fleet / Shuttle</option>
                 </select>
+                <p id="vehicleFeeHint" class="mt-1.5 text-[11px] font-semibold text-slate-600" aria-live="polite"></p>
               </div>
 
               <div>
@@ -1534,27 +1544,114 @@
       </section>
 
 
+      <!-- ==================== VIEW: CASHIER (ADMIN) ==================== -->
+      <section id="cashierView" class="admin-only view-panel space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Cashier</h1>
+            <p class="text-xs text-slate-500 mt-1">Registration fees. A vehicle&rsquo;s QR pass is issued the moment its fee is paid, here or online</p>
+          </div>
+          <button type="button" id="cashierRefreshBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer self-start sm:self-auto">Refresh</button>
+        </div>
+
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div class="bg-white border border-amber-200 rounded-lg p-4 shadow-2xs">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-amber-700">Awaiting payment</div>
+            <div id="cashStatAwaiting" class="text-2xl font-extrabold text-slate-900 mt-1">0</div>
+            <div id="cashStatAwaitingAmt" class="text-[11px] text-slate-500 mt-0.5">&nbsp;</div>
+          </div>
+          <div class="bg-white border border-slate-200 rounded-lg p-4 shadow-2xs">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Collected today</div>
+            <div id="cashStatToday" class="text-2xl font-extrabold text-slate-900 mt-1">&#8369;0.00</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">Cash + online</div>
+          </div>
+          <div class="bg-white border border-slate-200 rounded-lg p-4 shadow-2xs">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Cash today</div>
+            <div id="cashStatCash" class="text-2xl font-extrabold text-slate-900 mt-1">&#8369;0.00</div>
+            <div id="cashStatCashN" class="text-[11px] text-slate-500 mt-0.5">&nbsp;</div>
+          </div>
+          <div class="bg-white border border-slate-200 rounded-lg p-4 shadow-2xs">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Online today</div>
+            <div id="cashStatOnline" class="text-2xl font-extrabold text-slate-900 mt-1">&#8369;0.00</div>
+            <div id="cashStatOnlineN" class="text-[11px] text-slate-500 mt-0.5">&nbsp;</div>
+          </div>
+        </div>
+
+        <div id="cashierGatewayNote" class="hidden"></div>
+        <div id="cashierDuplicateNote" class="hidden"></div>
+
+        <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 border-b border-slate-200">
+          <div class="flex" role="tablist" aria-label="Cashier lists">
+            <button type="button" role="tab" id="cashierTabAwaiting" aria-selected="true" class="px-3.5 py-2 text-xs font-bold border-b-2 border-ncst-navy text-ncst-navy cursor-pointer">Awaiting payment <span id="cashierTabAwaitingCount" class="ml-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px]">0</span></button>
+            <button type="button" role="tab" id="cashierTabHistory" aria-selected="false" class="px-3.5 py-2 text-xs font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-800 cursor-pointer">Payment history</button>
+          </div>
+          <div class="pb-2">
+            <label for="cashierSearch" class="sr-only">Search plate, owner, ID or receipt</label>
+            <input type="search" id="cashierSearch" placeholder="Search plate, owner, ID or receipt" class="w-full sm:w-72 h-9 px-3 rounded-lg border border-slate-200 bg-slate-50/50 text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/20 focus:border-ncst-navy">
+          </div>
+        </div>
+
+        <div id="cashierAwaitingWrap" class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
+                <tr>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Plate</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Owner</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Vehicle</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Fee</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Registered</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Online</th>
+                  <th scope="col" class="text-right font-bold px-4 py-2.5">Action</th>
+                </tr>
+              </thead>
+              <tbody id="cashierAwaitingBody" class="divide-y divide-slate-100">
+                <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Loading&hellip;</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="cashierHistoryWrap" class="hidden bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+              <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
+                <tr>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Receipt</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Date</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Plate</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Owner</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Method</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Amount</th>
+                  <th scope="col" class="text-left font-bold px-4 py-2.5">Status</th>
+                  <th scope="col" class="text-right font-bold px-4 py-2.5">&nbsp;</th>
+                </tr>
+              </thead>
+              <tbody id="cashierHistoryBody" class="divide-y divide-slate-100">
+                <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Loading&hellip;</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- ==================== VIEW 7: VIOLATIONS & PENALTIES ==================== -->
       <section id="violationsView" class="view-panel space-y-4">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
-            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Violations &amp; Penalties</h1>
-            <p class="text-xs text-slate-500 mt-1">Every warning is a strike. The 3rd strike bans the vehicle until an administrator resolves the violation</p>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Violations</h1>
+            <p class="text-xs text-slate-500 mt-1">A vehicle with a pending violation can neither enter nor leave campus until an administrator resolves it</p>
           </div>
           <button type="button" id="violationsRefreshBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">Refresh</button>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div class="bg-white border border-rose-200 rounded-lg p-4 shadow-2xs">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-ncst-crimson">Banned vehicles</div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-ncst-crimson">Vehicles on hold</div>
             <div id="violStatBanned" class="text-2xl font-extrabold text-slate-900 mt-1">0</div>
           </div>
-          <div class="bg-white border border-amber-200 rounded-lg p-4 shadow-2xs">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-amber-700">Vehicles with strikes</div>
-            <div id="violStatStrikes" class="text-2xl font-extrabold text-slate-900 mt-1">0</div>
-          </div>
           <div class="bg-white border border-slate-200 rounded-lg p-4 shadow-2xs">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Pending records</div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Pending violations</div>
             <div id="violStatPending" class="text-2xl font-extrabold text-slate-900 mt-1">0</div>
           </div>
         </div>
@@ -1562,21 +1659,21 @@
         <!-- Vehicles on watch -->
         <div class="bg-white border border-slate-200 rounded-lg shadow-2xs">
           <div class="px-4 py-2.5 border-b border-slate-100">
-            <h2 class="text-xs font-extrabold uppercase tracking-wider text-slate-600">Vehicles on watch</h2>
+            <h2 class="text-xs font-extrabold uppercase tracking-wider text-slate-600">Vehicles on hold</h2>
           </div>
           <div id="violWatchList" class="divide-y divide-slate-100"></div>
         </div>
 
         <!-- Violation ledger -->
         <div class="sp-violations-ledger bg-white border border-slate-200 rounded-lg overflow-hidden">
-          <div class="sp-violations-heading"><div><h2>Violation records</h2><p>Review warnings, violations, and their resolution history.</p></div><span id="violRecordsCount" class="sp-status sp-status-navy">0 records</span></div>
+          <div class="sp-violations-heading"><div><h2>Violation records</h2><p>Review violations and their resolution history.</p></div><span id="violRecordsCount" class="sp-status sp-status-navy">0 records</span></div>
           <div class="sp-violations-filters">
             <div><label for="violSearch">Search records</label><input id="violSearch" type="search" placeholder="Plate, owner, issue, or officer" /></div>
             <div><label for="violStatusFilter">Record status</label><select id="violStatusFilter"><option value="Pending">Pending</option><option value="Resolved">Resolved</option><option value="Dismissed">Dismissed</option><option value="">All statuses</option></select></div>
           </div>
           <div id="violRecordsRegion" class="overflow-x-auto" role="region" aria-label="Violation records" tabindex="0" aria-busy="false">
             <table class="sp-violations-table w-full text-left">
-              <caption class="sr-only">Warnings and violations recorded against registered vehicles</caption>
+              <caption class="sr-only">Violations recorded against registered vehicles</caption>
               <colgroup><col style="width:19%"><col style="width:34%"><col style="width:20%"><col style="width:12%"><col class="admin-only" style="width:15%"></colgroup>
               <thead><tr><th scope="col">Vehicle &amp; owner</th><th scope="col">Issue</th><th scope="col">Recorded</th><th scope="col">Status</th><th scope="col" class="admin-only">Actions</th></tr></thead>
               <tbody id="violTableBody"></tbody>
@@ -2065,6 +2162,7 @@
               <select id="editVehicleCategory" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
                 <option value="4-Wheel">4-Wheel (Car / SUV / Van)</option>
                 <option value="Motorcycle">Motorcycle / Scooter</option>
+                <option value="3-Wheel">3-Wheel (Tricycle)</option>
                 <option value="Bicycle">Bicycle / Non-Plated</option>
                 <option value="Campus Fleet">Campus Fleet / Shuttle</option>
               </select>
@@ -2451,8 +2549,8 @@
             </svg>
           </div>
           <div>
-            <h2 class="text-sm font-bold text-white tracking-wide">Flag Violation / Warning</h2>
-            <p class="text-[11px] text-slate-300 font-mono">Security Hold &amp; Disciplinary Record</p>
+            <h2 class="text-sm font-bold text-white tracking-wide">Issue Violation</h2>
+            <p class="text-[11px] text-slate-300 font-mono">Vehicle hold until resolved</p>
           </div>
         </div>
         <button type="button" id="closeFlagModalBtn" class="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Close dialog">
@@ -2467,35 +2565,21 @@
           <label for="flagType" class="block text-[11px] font-bold text-slate-600 mb-1">Violation type</label>
           <select id="flagType" class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ncst-navy/30"></select>
         </div>
-        <fieldset>
-          <legend class="block text-[11px] font-bold text-slate-600 mb-1">Severity</legend>
-          <div class="grid grid-cols-2 gap-2">
-            <label class="flex items-start gap-2 p-2.5 rounded-md border border-slate-300 cursor-pointer has-[:checked]:border-ncst-gold has-[:checked]:bg-ncst-goldLight/30">
-              <input type="radio" name="flagSeverity" value="Warning" checked class="mt-0.5">
-              <span><span class="block text-xs font-bold text-slate-800">Warning</span><span class="block text-[10px] text-slate-500">Adds 1 strike. 3 strikes = ban.</span></span>
-            </label>
-            <label id="flagSeverityViolationLabel" class="flex items-start gap-2 p-2.5 rounded-md border border-slate-300 cursor-pointer has-[:checked]:border-ncst-crimson has-[:checked]:bg-ncst-crimsonLight/50">
-              <input type="radio" name="flagSeverity" value="Violation" class="mt-0.5">
-              <span><span class="block text-xs font-bold text-slate-800">Violation</span><span class="block text-[10px] text-slate-500">Bans the vehicle immediately.</span></span>
-            </label>
-          </div>
-          <p id="flagGuardNote" class="hidden mt-1.5 text-[10px] text-slate-500">Guards can issue warnings. Ask an administrator for a violation.</p>
-        </fieldset>
         <div>
           <label for="flagNotes" class="block text-[11px] font-bold text-slate-600 mb-1">Notes</label>
           <textarea id="flagNotes" rows="3" class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30" placeholder="What happened, where and when?"></textarea>
         </div>
-        <p id="flagStrikeHint" class="hidden text-[11px] font-semibold text-ncst-crimson bg-ncst-crimsonLight border border-ncst-crimson/30 rounded px-2.5 py-1.5"></p>
+        <p id="flagHoldHint" class="text-[11px] font-semibold text-ncst-crimson bg-ncst-crimsonLight border border-ncst-crimson/30 rounded px-2.5 py-1.5"></p>
         <p id="flagError" class="hidden text-[11px] font-semibold text-ncst-crimson bg-ncst-crimsonLight border border-ncst-crimson/30 rounded px-2.5 py-1.5" role="alert"></p>
         <div class="flex items-center justify-end gap-2 pt-1">
           <button type="button" id="flagCancelBtn" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">Cancel</button>
-          <button type="submit" id="flagSubmitBtn" class="px-4 py-2 rounded-md bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-xs font-bold cursor-pointer disabled:opacity-60 transition-colors">Record</button>
+          <button type="submit" id="flagSubmitBtn" class="px-4 py-2 rounded-md bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-xs font-bold cursor-pointer disabled:opacity-60 transition-colors">Issue Violation</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- ==================== RESOLVE / DISMISS / RESET MODAL ==================== -->
+  <!-- ==================== RESOLVE / DISMISS MODAL ==================== -->
   <div id="resolveModal" class="sp-dialog fixed inset-0 z-[58] hidden overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center">
     <div class="m-auto w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
       <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-ncst-navy text-white">
@@ -2646,7 +2730,7 @@
           <label for="viNotes" class="block text-[11px] font-bold text-slate-600 mb-1">Notes</label>
           <textarea id="viNotes" rows="3" class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm" placeholder="Where, when and what you observed"></textarea>
         </div>
-        <p class="text-[10px] text-slate-500">Visitors are not in the strike system. This opens a security case in Flagged &amp; Blocked for an administrator to follow up.</p>
+        <p class="text-[10px] text-slate-500">Visitors do not get violations. This opens a security case in Flagged &amp; Blocked for an administrator to follow up.</p>
         <p id="visitorIncidentError" class="hidden text-[11px] font-semibold text-ncst-crimson bg-ncst-crimsonLight border border-ncst-crimson/30 rounded px-2.5 py-1.5" role="alert"></p>
         <div class="flex items-center justify-end gap-2 pt-1">
           <button type="button" id="visitorIncidentCancelBtn" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">Cancel</button>
@@ -2661,7 +2745,7 @@
   <!-- Scripts -->
   <script src="js/qrcode.min.js?v=20260930c"></script>
   <script src="js/data.js?v=20260930c"></script>
-  <script src="js/api.js?v=20260930c"></script>
+  <script src="js/api.js?v=20261009a"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -2692,15 +2776,16 @@
   <script src="js/alerts.js?v=20261001c"></script>
   <script src="js/login.js?v=20261007a"></script>
   <script src="js/auth.js?v=20261007g"></script>
-  <script src="js/app.js?v=20261007h"></script>
+  <script src="js/app.js?v=20261009b"></script>
   <script src="js/users.js?v=20261007d"></script>
+  <script src="js/payments.js?v=20261008b"></script>
   <script src="js/cctv.js?v=20261007a"></script>
   <script src="js/cctvclip.js?v=20261007f"></script>
-  <script src="js/gate.js?v=20261007e"></script>
-  <script src="js/violations.js?v=20261007e"></script>
-  <script src="js/overnight.js?v=20260930c"></script>
+  <script src="js/gate.js?v=20261009a"></script>
+  <script src="js/violations.js?v=20261009a"></script>
+  <script src="js/overnight.js?v=20261009a"></script>
   <script src="js/visitors.js?v=20261007d"></script>
-  <script src="js/oncampus.js?v=20261007f"></script>
+  <script src="js/oncampus.js?v=20261009a"></script>
   <script>
     window.openAdminForgotModal = function () {
       const modal = document.getElementById('adminForgotModal');
@@ -2753,7 +2838,7 @@
     });
   </script>
 <script src="js/layers.js?v=20261007b"></script>
-<script src="js/workspace.js?v=20261007h"></script></body>
+<script src="js/workspace.js?v=20261008a"></script></body>
 </html>
 
 

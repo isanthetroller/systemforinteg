@@ -88,6 +88,13 @@ const StudentApi = (function () {
     async violations() { return (await request('student.php?action=violations')).data; },
     async activity(limit = 60) { return (await request(`student.php?action=activity&limit=${limit}`)).data; },
     async alerts() { return (await request('student.php?action=alerts')).data; },
+    async payments() { return (await request('student.php?action=payments')).data; },
+    async notices() { return (await request('student.php?action=notices')).data; },
+    // Starts a PayMongo checkout for one of my unpaid vehicles; returnUrl is where the checkout sends me back
+    async startPayment(vehicleId, returnUrl) {
+      return (await request('student_pay.php', { method: 'POST', body: { vehicleId, returnUrl } })).data;
+    },
+    async paymentStatus(paymentId) { return (await request(`student_pay.php?paymentId=${encodeURIComponent(paymentId)}`)).data; },
 
     async changePassword(current, next) {
       return request('auth.php?action=change_password', { method: 'POST', body: { current_password: current, new_password: next } });

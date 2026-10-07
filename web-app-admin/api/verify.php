@@ -15,7 +15,7 @@
  *   EXPIRED       Permanent pass past its validity date
  *   EXPIRED_TEMP  Visitor day pass scanned after its date ("EXPIRED TEMPORARY PASS")
  *   NOT_YET_VALID Visitor day pass scheduled for a later date
- *   BANNED        Vehicle banned by the 3-strike policy / violation
+ *   BANNED        Vehicle on hold: unresolved violation (cannot enter or leave until an administrator resolves it)
  *   SUSPENDED     Registration suspended by an administrator
  *   NOT_FOUND     No matching vehicle or visitor pass
  *
@@ -27,6 +27,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/campus.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendResponse(405, null, 'Method not allowed');
@@ -251,7 +252,9 @@ if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
         $caseNum = $activeVehIncident ? $activeVehIncident['case_number'] : 'HOLD';
         $holdReason = $activeVehIncident ? $activeVehIncident['reason'] : 'Security hold on vehicle';
         $result = 'BANNED';
-        $reasonDetail = "Security Incident Hold [Case #{$caseNum}]: {$holdReason}. The vehicle cannot proceed until cleared by administration.";
+        $reasonDetail = (int)$vehicle['is_banned'] === 1
+            ? "Violation hold [Case #{$caseNum}]: {$holdReason}. The vehicle cannot enter or leave campus until an administrator resolves the violation."
+            : "Security Incident Hold [Case #{$caseNum}]: {$holdReason}. The vehicle cannot proceed until cleared by administration.";
         if ($activeVehIncident) {
             $incident = [
                 'id' => (int)$activeVehIncident['id'],
@@ -262,10 +265,18 @@ if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
         }
     } elseif ((int)$vehicle['is_banned'] === 1) {
         $result = 'BANNED';
-        $reasonDetail = 'Vehicle is banned under the 3-strike / violation policy until an administrator resolves it.';
+        $reasonDetail = 'This vehicle has an unresolved violation. It cannot enter or leave campus until the violation is resolved at the Security Office.';
     } elseif ($vehicle['registration_status'] === 'Suspended') {
         $result = 'SUSPENDED';
         $reasonDetail = 'Vehicle registration is suspended.';
+    } elseif ($gateType !== 'Egress' && vehiclePassExpired($vehicle, $today)) {
+        // The pass date is checked for every lookup, not only for scanned signed QR codes
+        $result = 'EXPIRED';
+        $reasonDetail = "Pass expired on {$vehicle['pass_valid_until']}. Renew it at the Security Office.";
+    } elseif (($vehicle['payment_status'] ?? 'Paid') === 'Unpaid' && $gateType !== 'Egress') {
+        // Entry needs a paid registration; a vehicle already inside is never trapped by this
+        $result = 'UNPAID';
+        $reasonDetail = 'Registration fee not paid. The owner must pay online (student portal) or at the cashier before this vehicle can enter.';
     } else {
         $result = $prior;
     }
@@ -310,10 +321,6 @@ if ($vehicle) {
     if ($accepted && $gateType === 'Egress' && !$currentlyInside) {
         $warnings[] = 'No entry record: this vehicle is not recorded as inside campus.';
     }
-    $strikes = (int)$vehicle['warning_count'];
-    if ($strikes > 0 && (int)$vehicle['is_banned'] === 0 && !isVipVehicle($vehicle)) {
-        $warnings[] = "Strike {$strikes} of 3 on record for this vehicle.";
-    }
 } elseif ($visitor) {
     $currentlyInside = !empty($visitor['entry_time']) && empty($visitor['exit_time']);
 }
@@ -338,6 +345,7 @@ if (!$accepted && $result !== 'NOT_FOUND') {
             'reason' => 'Revoked / Forged QR',
             'gatePoint' => defaultGatePoint($gateType),
             'notes' => "{$result}: {$reasonDetail}",
+            'notifyOwner' => true,
         ], 10);
     }
 
@@ -367,8 +375,9 @@ $messages = [
     'EXPIRED' => 'EXPIRED PASS.',
     'EXPIRED_TEMP' => 'EXPIRED TEMPORARY PASS.',
     'NOT_YET_VALID' => 'PASS NOT YET VALID.',
-    'BANNED' => 'VEHICLE BANNED.',
+    'BANNED' => 'VIOLATION HOLD - unresolved violation.',
     'SUSPENDED' => 'REGISTRATION SUSPENDED.',
+    'UNPAID' => 'REGISTRATION FEE UNPAID.',
     'NOT_FOUND' => 'No matching vehicle or pass.',
 ];
 
@@ -386,10 +395,24 @@ sendResponse(200, [
     'autoLogged' => $autoLogged,
     'incident' => $incident,
     'currentlyInside' => $currentlyInside,
+    // Where it is and who to call: shown to the guard when a vehicle that is already inside is scanned again
+    'onCampus' => ($vehicle && $currentlyInside) ? onCampusDetails($pdo, $vehicle, $now) : null,
     'vehicle' => $vehicle ? vehicleForOutput($pdo, $vehicle, false) : null,
     'visitor' => $visitor ? formatVisitorForGate($pdo, $visitor) : null,
     'checkedAt' => date('Y-m-d H:i:s'),
 ]);
+
+function onCampusDetails($pdo, $vehicle, $now) {
+    $entry = lastEntryLog($pdo, $vehicle);
+    return [
+        'entryTime' => $entry ? date('Y-m-d H:i:s', $entry['time']) : null,
+        'hoursInside' => $entry ? round(max(0, ($now - $entry['time']) / 3600), 1) : null,
+        'gatePoint' => $entry['gatePoint'] ?? null,
+        'enteredBy' => $entry['driver'] ?? null,
+        'admittedBy' => $entry['guard'] ?? null,
+        'ownerPhone' => $vehicle['owner_phone'] ?: null,
+    ];
+}
 
 function formatVisitorForGate($pdo, $v) {
     return [

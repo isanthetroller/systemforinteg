@@ -5,7 +5,7 @@
  *   php tests/demo_seed.php
  *
  * Deletes the local SQLite database (web-app-admin/data/securepark.sqlite) and fills it with
- * demo vehicles, strikes, a banned vehicle, vehicles inside campus, visitor passes and logins.
+ * demo vehicles, a vehicle on violation hold, vehicles inside campus, visitor passes and logins.
  * Generated demo passwords are written to web-app-admin/data/DEMO_CREDENTIALS.txt
  * (data/ is git-ignored and never deployed). The admin keeps the default first-login password.
  */
@@ -25,7 +25,7 @@ putenv('DB_DRIVER=sqlite');
 ob_start();
 require $root . '/web-app-admin/config/db.php';
 require_once $root . '/web-app-admin/lib/vehicles.php';
-require_once $root . '/web-app-admin/lib/strikes.php';
+require_once $root . '/web-app-admin/lib/violations.php';
 require_once $root . '/web-app-admin/lib/students.php';
 ob_end_clean();
 
@@ -107,12 +107,8 @@ $curfewToday = strtotime(date('Y-m-d', $now) . ' ' . SP_CURFEW_TIME . ':00');
 $nightStart = $now >= $curfewToday ? $curfewToday : strtotime('-1 day', $curfewToday);
 logGate($pdo, 'MC 9012', 'Kevin Tan', 'Kevin Tan', 'Self (Owner)', 'Entry Recorded', max($now - 13 * 3600, $nightStart + 600));
 
-/* ---------- Strikes ---------- */
-addWarning($pdo, $guardActor, $maria, 'Parking in Fire Lane / Restricted Zone', 'Parked beside the gym fire exit.');
-addWarning($pdo, $guardActor, $maria, 'Unauthorized Driver at Helm', 'Driven by an unlisted relative; turned back at Gate 1.');
-foreach (['Parking in Fire Lane / Restricted Zone', 'Reckless / Prohibited Driving on Campus', 'Refusal of Inspection / Gate Bypass'] as $t) {
-    addWarning($pdo, $guardActor, findVehicleById($pdo, $carlo['id']), $t, 'Recorded by patrol.');
-}
+/* ---------- Violations (the vehicle is on hold until an admin resolves it) ---------- */
+issueViolation($pdo, $guardActor, findVehicleById($pdo, $carlo['id']), 'Parking in Fire Lane / Restricted Zone', 'Parked beside the gym fire exit.');
 
 /* ---------- Visitor passes (today) ---------- */
 $today = date('Y-m-d', $now);

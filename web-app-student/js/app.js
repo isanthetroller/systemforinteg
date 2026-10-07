@@ -4,7 +4,7 @@
  * Screens: sign in -> (first sign-in) set password -> app with four tabs:
  *   My Pass   signed QR pass per vehicle, standing, authorized drivers, save as image
  *   Activity  gate audit log (entries, exits, refused passages) and flag history of the owner's vehicles
- *   Strikes   3-strike meter, warnings / violations history
+ *   Violations   violations on my vehicles: a pending one blocks entry and exit until the Security Office resolves it
  *   Account   profile, change password, how the pass works
  * Every entry, exit and refused passage has a 5 second gate clip (simulated: one shared clip, or
  * cctv_clips/log-<id>.mp4 when the school supplies one); a flag's clip is the refused passage that raised it.
@@ -15,7 +15,6 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const STRIKE_LIMIT = 3;
   const data = { me: null, vehicles: [], violations: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
   const POLL_MS = 15000;
   const DEFAULT_TITLE = document.title;
@@ -133,10 +132,9 @@
 
   function vehicleStanding(v) {
     if (activeAlertsFor(v).length) return { cls: 'bad', label: 'FLAGGED · HELD AT GATE', blocked: false, flagged: true };
-    if (v.isBanned) return { cls: 'bad', label: 'BANNED — ENTRY BLOCKED', blocked: true };
+    if (v.isBanned) return { cls: 'bad', label: 'VIOLATION HOLD — CANNOT ENTER OR LEAVE', blocked: true };
     if (v.registrationStatus === 'Suspended') return { cls: 'bad', label: 'REGISTRATION SUSPENDED', blocked: true };
     if (v.passExpired) return { cls: 'bad', label: 'PASS EXPIRED', blocked: true };
-    if (v.warningCount > 0) return { cls: 'warn', label: `ACTIVE · STRIKE ${v.warningCount} OF ${STRIKE_LIMIT}`, blocked: false };
     return { cls: 'ok', label: 'ACTIVE PASS', blocked: false };
   }
 
@@ -253,21 +251,22 @@
   async function enterApp() {
     showScreen('screenApp');
     $('tabPass').innerHTML = '<div class="card empty">Loading your pass&hellip;</div>';
-    const [me, vehicles, violations, activity, alerts] = await Promise.all([
-      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts()
+    const [me, vehicles, violations, activity, alerts, payments, notices] = await Promise.all([
+      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices()
     ]);
-    Object.assign(data, { me, vehicles, violations, activity, alerts });
+    Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices });
     data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
     $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
     renderAll();
     startPolling();
+    handlePaymentReturn();
   }
 
   function renderAll() {
-    const strikes = data.me.summary.strikes + data.me.summary.banned;
-    $('strikesBadge').textContent = data.me.summary.banned ? '!' : String(data.me.summary.strikes);
-    $('strikesBadge').hidden = strikes === 0;
-    $('strikesBadge').classList.toggle('is-blocked', Boolean(data.me.summary.banned));
+    const open = data.me.summary.openViolations || 0;
+    $('strikesBadge').textContent = String(open);
+    $('strikesBadge').hidden = open === 0;
+    $('strikesBadge').classList.add('is-blocked');
     renderAlerts();
     renderPass();
     renderActivity();
@@ -289,20 +288,24 @@
   async function refresh() {
     if (!data.me || document.hidden || $('screenApp').hidden) return;
     try {
-      const [me, alerts, activity] = await Promise.all([StudentApi.me(), StudentApi.alerts(), StudentApi.activity()]);
-      const before = JSON.stringify([data.me.summary, data.alerts, data.activity.slice(0, 20)]);
-      if (before === JSON.stringify([me.summary, alerts, activity.slice(0, 20)])) return;
+      const [me, alerts, activity, notices] = await Promise.all([StudentApi.me(), StudentApi.alerts(), StudentApi.activity(), StudentApi.notices()]);
+      const before = JSON.stringify([data.me.summary, data.alerts, data.activity.slice(0, 20), (data.notices || []).map(n => n.id)]);
+      if (before === JSON.stringify([me.summary, alerts, activity.slice(0, 20), notices.map(n => n.id)])) return;
+
+      const knownNotices = new Set((data.notices || []).map(n => n.id));
+      const newNotice = notices.find(n => !knownNotices.has(n.id));
 
       const known = new Set(data.alerts.active.map(a => a.id));
       const raised = alerts.active.filter(a => !known.has(a.id));
       const standingChanged = JSON.stringify(me.summary) !== JSON.stringify(data.me.summary);
-      Object.assign(data, { me, alerts, activity });
-      if (standingChanged || raised.length || alerts.active.length !== known.size) {
-        const [vehicles, violations] = await Promise.all([StudentApi.vehicles(), StudentApi.violations()]);
-        Object.assign(data, { vehicles, violations });
+      Object.assign(data, { me, alerts, activity, notices });
+      if (standingChanged || raised.length || alerts.active.length !== known.size || newNotice) {
+        const [vehicles, violations, payments] = await Promise.all([StudentApi.vehicles(), StudentApi.violations(), StudentApi.payments()]);
+        Object.assign(data, { vehicles, violations, payments });
       }
       renderAll();
       if (raised.length) notifyFlag(raised[0]);
+      else if (newNotice) toast(`${newNotice.title} (${newNotice.plateNumber})`, 'error');
     } catch (_) { /* a missed check is retried on the next tick; sign-out is handled by the API client */ }
   }
 
@@ -334,17 +337,18 @@
       ? `<div class="chips" role="group" aria-label="Choose vehicle">${data.vehicles.map((x, i) =>
           `<button type="button" class="chip" data-index="${i}" aria-pressed="${i === data.selected}">${esc(x.plateNumber)}</button>`).join('')}</div>`
       : '';
+    if (v.paymentStatus === 'Unpaid') return renderPaymentDue(tab, v, chips);
     const flags = activeAlertsFor(v);
     const flagNotice = flags.length
       ? `<div class="notice bad">This vehicle is being <strong>held at the gate</strong> (${esc(flags[0].gatePoint)}). If you did not authorize this, contact the guard or the Campus Security Office right away. See the <strong>Activity</strong> tab.<div class="alert-clip">${clipButton({ logId: flags[0].logId, plate: flags[0].plateNumber, action: '', gatePoint: flags[0].gatePoint, loggedAt: flags[0].reportedAt }, 'Watch gate clip', 'danger')}</div></div>`
       : '';
     const blockNotice = v.isBanned
-      ? `<div class="notice bad">Your vehicle reached ${STRIKE_LIMIT} strikes or received a violation and is banned from entering campus. Go to the Campus Security Office to settle it. See the <strong>Warnings</strong> tab for details.</div>`
+      ? `<div class="notice bad">Your vehicle has an unresolved <strong>violation</strong>. It cannot enter or leave campus until the Campus Security Office resolves it. Go to the Security Office to settle it. See the <strong>Violations</strong> tab for details.</div>`
       : v.registrationStatus === 'Suspended'
         ? '<div class="notice bad">Your registration is suspended. Please visit the Campus Security Office.</div>'
         : v.passExpired
           ? '<div class="notice bad">This pass has expired. Renew your sticker at the Campus Security Office to get a new pass.</div>'
-          : (v.warningCount > 0 ? `<div class="notice warn">You have ${v.warningCount} of ${STRIKE_LIMIT} strikes. At ${STRIKE_LIMIT} strikes your vehicle is banned.</div>` : '');
+          : '';
 
     tab.innerHTML = `
       ${chips}
@@ -356,7 +360,7 @@
           <div class="pass-vehicle">${esc(v.makeModelColor || v.vehicleType || '')}</div>
           <button type="button" id="passQr" class="pass-qr ${st.blocked ? 'dim' : ''}" aria-label="Show QR full screen" ${qrReady ? '' : 'disabled'}>
             ${qrReady ? '' : '<span class="pass-qr-empty">Pass unavailable<span>Please contact the Security Office.</span></span>'}
-            ${st.blocked ? `<span class="pass-qr-stamp"><span>${v.isBanned ? 'BANNED' : v.passExpired ? 'EXPIRED' : 'SUSPENDED'}</span></span>` : ''}
+            ${st.blocked ? `<span class="pass-qr-stamp"><span>${v.isBanned ? 'ON HOLD' : v.passExpired ? 'EXPIRED' : 'SUSPENDED'}</span></span>` : ''}
           </button>
           <div class="pass-id">${esc(v.passId || '')}</div>
           <div class="pass-actions">
@@ -366,7 +370,8 @@
           <dl class="pass-meta">
             <div><dt>Valid until</dt><dd>${esc(fmtDate(v.passValidUntil))}</dd></div>
             <div><dt>Sticker year</dt><dd>${esc(v.stickerYear || '—')}</dd></div>
-            <div><dt>Warning count</dt><dd>${v.isBanned ? 'Banned' : v.isVip ? 'Not applied to VIP' : `${v.warningCount} of ${STRIKE_LIMIT}`}</dd></div>
+            <div><dt>Registration fee</dt><dd>${v.paymentStatus === 'Waived' ? 'No fee' : v.feeAmount > 0 ? `Paid ${peso(v.feeAmount)}` : 'Paid'}</dd></div>
+            <div><dt>Violations</dt><dd>${v.isBanned ? 'On hold (unresolved)' : v.isVip ? 'Not applied to VIP' : 'None pending'}</dd></div>
             <div><dt>Campus status</dt><dd>${(v.status || '').toLowerCase().includes('inside') ? '<span class="status-on">On Campus</span>' : '<span class="status-off">Outside Campus</span>'}</dd></div>
           </dl>
         </div>
@@ -391,6 +396,83 @@
     $('passQr').addEventListener('click', () => openZoom(v));
     tab.querySelector('[data-action="zoom"]').addEventListener('click', () => openZoom(v));
     tab.querySelector('[data-action="save"]').addEventListener('click', () => savePassImage(v));
+  }
+
+  /* ---- Registration fee: no pass until it is paid ---- */
+  const peso = (n) => '\u20b1' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function renderPaymentDue(tab, v, chips) {
+    tab.innerHTML = `
+      ${chips}
+      <article class="card pass pay-due" aria-label="Registration fee for ${esc(v.plateNumber)}">
+        <div class="pass-banner warn"><span>PAYMENT REQUIRED</span><span>NO PASS YET</span></div>
+        <div class="pass-body">
+          <div class="pass-kind">Registration fee</div>
+          <span class="plate">${esc(v.plateNumber)}</span>
+          <div class="pass-vehicle">${esc(v.makeModelColor || v.vehicleType || '')}</div>
+          <div class="pay-amount">${peso(v.feeAmount)}</div>
+          <p class="pay-note">Your QR pass appears here as soon as the fee is paid. Until then this vehicle cannot enter campus.</p>
+          <div class="pass-actions">
+            <button type="button" class="btn btn-gold" data-action="pay">Pay ${peso(v.feeAmount)} online</button>
+          </div>
+          <p class="hint" id="payError" role="alert" hidden></p>
+        </div>
+      </article>
+      <div class="pass-support">
+        <div class="card gate-help"><h2 class="card-title">Two ways to pay</h2><ol>
+          <li><span>1</span><div><strong>Online</strong><p>Pay with GCash, Maya or a card through PayMongo. Your pass is ready within moments of paying.</p></div></li>
+          <li><span>2</span><div><strong>In person</strong><p>Go to the cashier at the Campus Security Office and give your plate number (${esc(v.plateNumber)}) or ID. Your pass appears here right after.</p></div></li>
+        </ol></div>
+      </div>`;
+    tab.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => { data.selected = Number(c.dataset.index); renderPass(); }));
+    tab.querySelector('[data-action="pay"]').addEventListener('click', (e) => startPayment(v, e.currentTarget));
+  }
+
+  async function startPayment(v, button) {
+    const err = $('payError');
+    err.hidden = true;
+    button.disabled = true;
+    const label = button.textContent;
+    button.textContent = 'Opening secure checkout\u2026';
+    try {
+      const r = await StudentApi.startPayment(v.id, location.origin + location.pathname);
+      window.location.href = r.checkoutUrl;
+    } catch (e) {
+      err.textContent = e.message || 'Could not start the payment. Please try again.';
+      err.hidden = false;
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
+  /* Back from the PayMongo checkout (?payment=success|cancelled&p=<id>) */
+  async function handlePaymentReturn() {
+    const params = new URLSearchParams(location.search);
+    const outcome = params.get('payment');
+    if (!outcome) return;
+    const id = params.get('p');
+    history.replaceState(null, '', location.pathname);
+    selectTab('tabPass');
+    if (outcome !== 'success' || !id) {
+      toast('Payment was cancelled. You can pay again anytime.');
+      return;
+    }
+    toast('Confirming your payment\u2026');
+    let payment = null;
+    for (let i = 0; i < 8; i++) {
+      try { payment = await StudentApi.paymentStatus(id); } catch (_) { break; }
+      if (payment.status !== 'Pending') break;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    try {
+      const [me, vehicles, payments] = await Promise.all([StudentApi.me(), StudentApi.vehicles(), StudentApi.payments()]);
+      Object.assign(data, { me, vehicles, payments });
+      const paidIndex = payment ? vehicles.findIndex(x => x.id === payment.vehicleId) : -1;
+      if (paidIndex >= 0) data.selected = paidIndex; // land on the vehicle that was just paid for
+      renderAll();
+    } catch (_) { /* the next poll refreshes */ }
+    if (payment && payment.status === 'Paid') toast(`Payment received (${payment.receiptNumber}). Your pass is ready.`, 'success');
+    else toast('We have not received the payment yet. If you paid, your pass will appear shortly.');
   }
 
   function openZoom(v) {
@@ -549,34 +631,38 @@
     tab.querySelectorAll('[data-filter]').forEach(c => c.addEventListener('click', () => { data.activityFilter = c.dataset.filter; renderActivity(); }));
   }
 
-  /* ---- Strikes ---- */
-  function meter(count, banned) {
-    const n = Math.min(Number(count || 0), STRIKE_LIMIT);
-    const pips = Array.from({ length: STRIKE_LIMIT }, (_, i) =>
-      `<span class="pip ${i < n ? (banned || n >= STRIKE_LIMIT ? 'full' : 'on') : ''}"></span>`).join('');
-    return `<span class="meter" role="img" aria-label="${banned ? 'Banned' : `${n} of ${STRIKE_LIMIT} strikes`}">${pips}<span class="meter-label">${banned ? 'Banned' : `${n} / ${STRIKE_LIMIT}`}</span></span>`;
-  }
-
+  /* ---- Violations ---- */
   function renderStrikes() {
     const standing = data.vehicles.map(v => `
-      <div class="standing-row"><span class="plate" style="font-size:16px">${esc(v.plateNumber)}</span>${meter(v.warningCount, v.isBanned)}</div>`).join('');
+      <div class="standing-row"><span class="plate" style="font-size:16px">${esc(v.plateNumber)}</span>
+        <span class="hold-label ${v.isBanned ? 'on' : ''}">${v.isBanned ? 'On hold — cannot enter or leave' : 'Clear'}</span></div>`).join('');
     const history = data.violations.length
       ? `<ul class="history">${data.violations.map(r => `
           <li>
             <div class="row1"><span class="type">${esc(r.violationType)}</span><span class="date">${esc(fmtDateTime(r.createdAt))}</span></div>
             <div class="desc">${esc(r.plateNumber)}${r.description ? ' · ' + esc(r.description) : ''}</div>
-            <span class="badge ${r.severity === 'Violation' ? 'violation' : 'warning'}">${esc(r.severity)}</span>
             <span class="badge ${esc(r.status.toLowerCase())}">${esc(r.status)}</span>
             ${r.resolutionNotes ? `<div class="desc" style="color:var(--muted)">${esc(r.resolutionNotes)}</div>` : ''}
           </li>`).join('')}</ul>`
-      : '<p class="empty" style="padding:12px 0">No warnings or violations recorded.</p>';
-    const anyBanned = data.vehicles.some(v => v.isBanned);
+      : '<p class="empty" style="padding:12px 0">No violations recorded.</p>';
+    const anyHeld = data.vehicles.some(v => v.isBanned);
+    const notices = (data.notices || []).length
+      ? `<ul class="history">${data.notices.map(n => `
+          <li>
+            <div class="row1"><span class="type">${esc(n.title)}</span><span class="date">${esc(fmtDateTime(n.createdAt))}</span></div>
+            <div class="desc">${esc(n.plateNumber)} · ${esc(n.message).replace(/\n/g, '<br>')}</div>
+            <span class="badge ${n.kind === 'Violation' ? 'violation' : 'warning'}">${n.kind === 'Violation' ? 'Violation' : 'Blocked at gate'}</span>
+            ${n.emailed ? '<span class="badge resolved">Also emailed to you</span>' : ''}
+          </li>`).join('')}</ul>`
+      : '<p class="empty" style="padding:12px 0">No notices.</p>';
 
     $('tabStrikes').innerHTML = `
-      ${anyBanned ? '<div class="notice bad">A vehicle is banned. Visit the Campus Security Office to resolve the violation; the ban and your strikes are cleared once it is resolved.</div>' : ''}
-      <div class="card"><h2 class="card-title">Warning count</h2>${standing || '<p class="hint">No vehicles.</p>'}
-        <p class="hint">Warnings and overnight / after-curfew parking each add one strike. ${STRIKE_LIMIT} strikes = automatic ban.</p></div>
-      <div class="card"><h2 class="card-title">Warnings &amp; violations</h2>${history}</div>`;
+      ${anyHeld ? '<div class="notice bad">A vehicle has an unresolved violation and cannot enter or leave campus. Visit the Campus Security Office to resolve it; the vehicle is released as soon as it is resolved.</div>' : ''}
+      <div class="card"><h2 class="card-title">Vehicle status</h2>${standing || '<p class="hint">No vehicles.</p>'}
+        <p class="hint">A vehicle with a pending violation cannot enter or leave campus until the Security Office resolves it.</p></div>
+      <div class="card"><h2 class="card-title">Notices</h2>${notices}
+        <p class="hint">You get a notice here, and an email when we have your address, whenever a vehicle of yours is blocked at the gate or given a violation.</p></div>
+      <div class="card"><h2 class="card-title">Violations</h2>${history}</div>`;
   }
 
   /* ---- Account ---- */
@@ -587,6 +673,11 @@
       <dt>ID number</dt><dd>${esc(s.ownerIdNumber)}</dd>
       <dt>Email</dt><dd>${esc(s.email || '—')}</dd>
       <dt>Vehicles</dt><dd>${data.me.summary.vehicles}</dd>`;
+    const paid = (data.payments || []).filter(p => p.status === 'Paid');
+    $('receiptsCard').hidden = !paid.length;
+    $('receiptList').innerHTML = paid.map(p => `
+      <li><div><div class="name">${esc(p.plateNumber)} \u00b7 ${peso(p.amount)}</div>
+        <div class="sub">${esc(p.receiptNumber)} \u00b7 ${p.method === 'Cash' ? 'Cash at cashier' : 'Online'} \u00b7 ${esc(fmtDateTime(p.paidAt))}</div></div></li>`).join('');
   }
 
   /* ---------------- wiring ---------------- */

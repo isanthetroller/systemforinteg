@@ -2,7 +2,7 @@
 
 Campus vehicle gate system for the National College of Science and Technology (NCST).
 Vehicles carry a **signed QR pass**; guards verify the pass and the driver at the gate,
-every entry and exit is logged, repeat offenders are banned by a **3-strike policy**, and
+every entry and exit is logged, a vehicle with an unresolved **violation** can neither enter nor leave, and
 visitors get **single-day passes**.
 
 | Part | Folder | Users |
@@ -22,18 +22,18 @@ visitors get **single-day passes**.
   mandatory driver confirmation, approve / deny (denials open a security case).
 - **Signed QR passes** (HMAC-SHA256, server-side only). Reissuing a pass revokes every older QR.
   Forged / tampered / revoked passes are rejected and flagged automatically.
-- **Violations & 3-strike policy**: every warning is a strike; the 3rd strike (or a manual violation)
-  bans the vehicle until an admin resolves it with written notes.
+- **Violations**: guards and admins issue violations (there are no warnings or strikes). A vehicle with a pending
+  violation can neither enter nor leave campus until an admin resolves it with written notes.
 - **On Campus Now**: every vehicle currently inside (registered and visitors) with entry time, hours inside,
-  who drove in, who admitted it, contact and strike standing; flag a warning / violation or report a visitor
+  who drove in, who admitted it, contact and violation hold; issue a violation or report a visitor
   incident straight from the list.
-- **Overtime & overnight detection** after the 22:00 curfew, with an attention panel (call owner, flag strike).
+- **Overtime & overnight detection** after the 22:00 curfew, with an attention panel (call the owner first; staff issue a violation only if needed, otherwise the vehicle is reported to the police).
 - **Visitor day passes**: valid all day on one date. Guards issue passes for today; an admin can pick a later day
   (up to 60 days ahead) and the QR is refused as "not yet valid" before it. Screenshot-ready card / PNG. Passes can list the
   **items the visitor brings in** (e.g. 40 event chairs); guards must tick them off on entry and exit and the
   item list is written to the gate log.
 - **VIP passes** (permanent vehicles, e.g. the school president): an administrator ticks "VIP pass" when registering or
-  editing a vehicle. VIP vehicles are exempt from strikes and bans, overnight / overtime checks and the gate's
+  editing a vehicle. VIP vehicles are exempt from violations, overnight / overtime checks and the gate's
   driver-confirmation step, and show a gold VIP banner. The pass is still signed and can be revoked, and every passage
   is logged as a VIP passage. The class is stored in the database (not in the QR), with who granted it and when.
 - **Offline sync**: when the gate has no connection the mobile app keeps each event with the time it happened and sends it

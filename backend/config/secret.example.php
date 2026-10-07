@@ -45,6 +45,27 @@ define('SP_OFFLINE_MAX_HOURS', 24);
 define('SP_STAFF_TOKEN_HOURS', 12);
 define('SP_STUDENT_TOKEN_HOURS', 168);
 
+// E-mail (SMTP) for owner notices: sent when a vehicle is blocked at the gate or given a violation.
+// Leave these out until you have an SMTP account; notices still appear in the student portal.
+// define('SP_SMTP_HOST', 'smtp.gmail.com');
+// define('SP_SMTP_PORT', 587);              // 587 = STARTTLS, 465 = SSL
+// define('SP_SMTP_SECURE', 'tls');          // 'tls' | 'ssl' | 'none'
+// define('SP_SMTP_USER', 'securepark@example.com');
+// define('SP_SMTP_PASS', 'app-password');
+// define('SP_MAIL_FROM', 'securepark@example.com');
+// define('SP_MAIL_FROM_NAME', 'NCST SecurePark');
+// define('SP_PUBLIC_URL', 'http://ncstparking-test.rf.gd');   // adds a portal link to the e-mail
+// Note: free hosts (InfinityFree) may block outbound SMTP; a failed send is recorded on the notice, never fatal.
+
+// PayMongo (online payment of the vehicle registration fee). Leave these out until you have the keys.
+//   SP_PAYMONGO_SECRET_KEY     sk_test_... while testing, sk_live_... in production
+//   SP_PAYMONGO_WEBHOOK_SECRET whsk_... from Developers > Webhooks (event: checkout_session.payment.paid,
+//                              URL: https://<your-site>/api/paymongo_webhook.php)
+// With no secret key and SP_DEBUG = true (local development) a built-in fake checkout page is used instead.
+// define('SP_PAYMONGO_SECRET_KEY', 'sk_test_XXXXXXXXXXXXXXXX');
+// define('SP_PAYMONGO_WEBHOOK_SECRET', 'whsk_XXXXXXXXXXXXXXXX');
+// define('SP_PAYMONGO_METHODS', ['gcash', 'paymaya', 'card']);   // only methods activated on your PayMongo account
+
 // Local development only: use the SQLite fallback without trying MySQL first.
 // define('SP_FORCE_SQLITE', true);
 

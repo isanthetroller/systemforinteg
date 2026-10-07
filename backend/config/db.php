@@ -286,6 +286,48 @@ function initializeSqliteSchema($pdo) {
             `description` TEXT NULL,
             `updated_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS `payments` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `receipt_number` TEXT NULL UNIQUE,
+            `vehicle_id` INTEGER NOT NULL,
+            `plate_number` TEXT NOT NULL,
+            `owner_id_number` TEXT NOT NULL,
+            `owner_name` TEXT NOT NULL,
+            `sticker_year` TEXT NULL,
+            `amount` REAL NOT NULL,
+            `method` TEXT NOT NULL,
+            `status` TEXT NOT NULL DEFAULT 'Pending',
+            `provider_session_id` TEXT NULL,
+            `provider_payment_id` TEXT NULL,
+            `provider_method` TEXT NULL,
+            `cash_tendered` REAL NULL,
+            `recorded_by` TEXT NULL,
+            `recorded_by_user_id` INTEGER NULL,
+            `notes` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `paid_at` TEXT NULL
+        );
+        CREATE TABLE IF NOT EXISTS `owner_notices` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `owner_id_number` TEXT NOT NULL,
+            `vehicle_id` INTEGER NULL,
+            `plate_number` TEXT NOT NULL,
+            `kind` TEXT NOT NULL,
+            `title` TEXT NOT NULL,
+            `message` TEXT NOT NULL,
+            `email_to` TEXT NULL,
+            `email_status` TEXT NOT NULL DEFAULT 'Pending',
+            `email_error` TEXT NULL,
+            `emailed_at` TEXT NULL,
+            `violation_id` INTEGER NULL,
+            `incident_id` INTEGER NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS `idx_notices_owner` ON `owner_notices` (`owner_id_number`, `id`);
+        CREATE INDEX IF NOT EXISTS `idx_payments_vehicle` ON `payments` (`vehicle_id`);
+        CREATE INDEX IF NOT EXISTS `idx_payments_owner` ON `payments` (`owner_id_number`);
+        CREATE INDEX IF NOT EXISTS `idx_payments_session` ON `payments` (`provider_session_id`);
     ");
 
     // Bring older SQLite databases up to the v2 structure
@@ -298,6 +340,10 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'vehicles', 'pass_class', "TEXT NOT NULL DEFAULT 'Standard'");
     ensureColumn($pdo, 'vehicles', 'pass_class_by', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_class_at', 'TEXT NULL');
+    // Existing vehicles stay usable: 'Paid' by default (mirrors migrations/007_payments.sql)
+    ensureColumn($pdo, 'vehicles', 'payment_status', "TEXT NOT NULL DEFAULT 'Paid'");
+    ensureColumn($pdo, 'vehicles', 'fee_amount', 'REAL NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'paid_at', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_id', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_valid_until', 'TEXT NULL');
     ensureColumn($pdo, 'gate_logs', 'verified_driver_name', 'TEXT NULL');
@@ -412,7 +458,22 @@ function sendResponse($statusCode, $data = null, $message = '') {
     if ($data !== null) {
         $response['data'] = $data;
     }
-    echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $deferred = !empty($GLOBALS['sp_pending_notices']);
+    if ($deferred && !headers_sent()) {
+        header('Content-Length: ' . strlen($json));
+        header('Connection: close');
+    }
+    echo $json;
+    if ($deferred) {
+        // Let the client finish before the e-mails go out (see lib/notices.php)
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        } else {
+            while (ob_get_level() > 0) @ob_end_flush();
+            flush();
+        }
+    }
     exit;
 }
 

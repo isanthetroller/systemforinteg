@@ -1,11 +1,12 @@
 <?php
 /**
  * SecurePark - Shared writers for gate logs and security incidents
- * Used by verify.php (automatic denials) and the violations / strike engine.
+ * Used by verify.php (automatic denials) and the violations library.
  */
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/qr.php';
+require_once __DIR__ . '/notices.php';
 
 /**
  * Inserts a gate_logs row. $f keys: plate, vehicleType, ownerName, driverName,
@@ -89,7 +90,13 @@ function openSecurityIncident($pdo, $actor, array $f, $dedupeMinutes = 0) {
         $f['notes'] ?? '',
         $f['reportedAt'] ?? date('Y-m-d H:i:s'),
     ], !empty($f['clientRef']) ? [$f['clientRef']] : []));
-    return ['id' => (int)$pdo->lastInsertId(), 'caseNumber' => $caseNumber, 'duplicate' => false];
+    $incidentId = (int)$pdo->lastInsertId();
+    // Callers that block a vehicle at the gate pass 'notifyOwner' => true; internal review cases and violation holds do not
+    // (a violation sends its own notice).
+    if (!empty($f['notifyOwner'])) {
+        noticeVehicleBlocked($pdo, $f['plate'] ?? '', $reason, $f['gatePoint'] ?? 'Gate 1 (Main Ingress)', $caseNumber, $incidentId);
+    }
+    return ['id' => $incidentId, 'caseNumber' => $caseNumber, 'duplicate' => false];
 }
 
 /**

@@ -617,6 +617,22 @@ class ApiService {
     return (await _postForOutcome(ApiConstants.incidentsEndpoint, payload)) == WriteOutcome.accepted;
   }
 
+  /// Issues a violation to a vehicle (the vehicle is then on hold and the owner is notified). Online only: a
+  /// violation is never queued. Returns null on success, otherwise a message the guard can read.
+  static Future<String?> issueViolation({required String plateNumber, required String type, String notes = ''}) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.violationsEndpoint}');
+      final res = await _post(uri, jsonEncode({'plate': plateNumber, 'type': type, 'notes': notes}));
+      if (res.statusCode == 200 || res.statusCode == 201) return null;
+      if (res.statusCode == 401) return 'Your session expired. Sign in again to issue a violation.';
+      if (res.statusCode >= 500) return 'No connection to the server. Try again.';
+      return _messageOf(res) ?? 'The violation could not be recorded (HTTP ${res.statusCode}).';
+    } catch (e) {
+      debugPrint('[ApiService] issueViolation note: $e');
+      return 'No connection to the server. Try again.';
+    }
+  }
+
   /// Post a security incident hold; queued with its real time when offline
   static Future<bool> reportIncident({
     required String plateNumber,

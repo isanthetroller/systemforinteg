@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (previous) active.classList.add('sp-page-enter');
     currentView = active.id;
     document.getElementById('workspacePage').textContent = active.querySelector('h1')?.textContent || 'Campus operations';
-    const destinations = {dashboardView:'navDashboardBtn',gateView:'navGateBtn',onCampusView:'navOnCampusBtn',vehiclesView:'navVehiclesBtn',visitorsView:'navVisitorsBtn',accountView:'navAccountBtn',flaggedView:'navFlaggedBtn',violationsView:'navViolationsBtn',auditView:'navAuditBtn',staffView:'navStaffBtn'};
+    const destinations = {dashboardView:'navDashboardBtn',gateView:'navGateBtn',onCampusView:'navOnCampusBtn',vehiclesView:'navVehiclesBtn',visitorsView:'navVisitorsBtn',accountView:'navAccountBtn',flaggedView:'navFlaggedBtn',violationsView:'navViolationsBtn',auditView:'navAuditBtn',staffView:'navStaffBtn',cashierView:'navCashierBtn'};
     sidebar.querySelectorAll('.nav-item').forEach(button => {
       if (button.id === destinations[currentView]) button.setAttribute('aria-current','page');
       else button.removeAttribute('aria-current');

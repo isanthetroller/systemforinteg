@@ -13,6 +13,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/students.php';
+require_once __DIR__ . '/../lib/payments.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -117,6 +118,11 @@ function handleRegisterVehicle($pdo, $admin) {
         sendResponse(400, null, "Missing required fields: plateNumber, ownerName, and ownerIdNumber are required.");
     }
 
+    // One vehicle per student / employee ID
+    if ($existingOwner = findVehicleByOwnerId($pdo, $ownerIdNumber)) {
+        ownerHasVehicleResponse($existingOwner);
+    }
+
     // Check if plate already registered
     $checkStmt = $pdo->prepare("SELECT `id` FROM `vehicles` WHERE `plate_number` = ? LIMIT 1");
     $checkStmt->execute([$plateNumber]);
@@ -138,20 +144,27 @@ function handleRegisterVehicle($pdo, $admin) {
     $passId = newPassId();
     $passValidUntil = isValidDate($data['passValidUntil'] ?? '') ? $data['passValidUntil'] : defaultPassValidUntil($stickerYear);
     $passClass = requestedPassClass($data) ?? 'Standard';
+    // Registration fee: unpaid vehicles get no usable QR until the cashier or PayMongo settles it.
+    // Free vehicles (bicycles) and VIP passes are waived.
+    $fee = registrationFee($vehicleType, $category);
+    $paymentStatus = ($passClass === 'VIP' || $fee <= 0) ? 'Waived' : 'Unpaid';
+    $feeAmount = $paymentStatus === 'Waived' ? 0 : $fee;
 
     $pdo->beginTransaction();
     try {
         $sql = "INSERT INTO `vehicles` (
             `plate_number`, `vehicle_type`, `category`, `make_model_color`, `owner_name`, 
             `owner_role`, `department`, `owner_id_number`, `owner_phone`, `owner_email`, 
-            `owner_photo`, `vehicle_photo`, `pass_id`, `pass_valid_until`, `status`, `registration_status`, `sticker_year`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Outside', 'Active', ?)";
+            `owner_photo`, `vehicle_photo`, `pass_id`, `pass_valid_until`, `status`, `registration_status`, `sticker_year`,
+            `payment_status`, `fee_amount`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Outside', 'Active', ?, ?, ?)";
 
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             $plateNumber, $vehicleType, $category, $makeModelColor, $ownerName,
             $ownerRole, $department, $ownerIdNumber, $ownerPhone, $ownerEmail,
-            $ownerPhoto, $vehiclePhoto, $passId, $passValidUntil, $stickerYear
+            $ownerPhoto, $vehiclePhoto, $passId, $passValidUntil, $stickerYear,
+            $paymentStatus, $feeAmount
         ]);
         $newVehicleId = $pdo->lastInsertId();
         if ($passClass === 'VIP') {
@@ -284,6 +297,14 @@ function handleUpdateVehicle($pdo, $admin) {
         sendResponse(404, null, "Vehicle not found");
     }
 
+    // Re-assigning a vehicle to an ID that already has another vehicle is refused
+    $newOwnerId = $data['ownerIdNumber'] ?? $data['owner_id_number'] ?? null;
+    if ($newOwnerId !== null && strtoupper(trim((string)$newOwnerId)) !== strtoupper(trim((string)$current['owner_id_number']))) {
+        if ($existingOwner = findVehicleByOwnerId($pdo, $newOwnerId, $id)) {
+            ownerHasVehicleResponse($existingOwner);
+        }
+    }
+
     // A ban can only be lifted through the violations workflow
     $requestedReg = $data['registrationStatus'] ?? $data['registration_status'] ?? null;
     if ((int)$current['is_banned'] === 1 && $requestedReg !== null && $requestedReg !== 'Suspended') {
@@ -319,6 +340,40 @@ function handleUpdateVehicle($pdo, $admin) {
         $params[] = $newClass === 'VIP' ? actorLabel($admin) : null;
         $fields[] = "`pass_class_at` = ?";
         $params[] = $newClass === 'VIP' ? date('Y-m-d H:i:s') : null;
+    }
+
+    // The fee follows the vehicle: an edit that changes the fee class re-prices it.
+    //   - Unpaid: the amount due follows the edit (a zero fee waives it).
+    //   - Waived or Paid: if the new fee is higher than what was paid (e.g. a free bicycle re-typed as a car, or VIP
+    //     withdrawn), the DIFFERENCE becomes due and the vehicle is Unpaid again until it is settled. A lower fee
+    //     is never refunded. Vehicles that pre-date payments (Paid, no payment on record) are left alone.
+    $feeChanged = false;
+    $payStatus = $current['payment_status'] ?? 'Paid';
+    $finalVip = $newClass !== null ? $newClass === 'VIP' : isVipVehicle($current);
+    $newType = $data['vehicleType'] ?? $data['vehicle_type'] ?? $current['vehicle_type'];
+    $newCategory = $data['category'] ?? $current['category'];
+    $newFee = $finalVip ? 0.0 : registrationFee($newType, $newCategory);
+    if ($payStatus === 'Unpaid') {
+        if ($newFee <= 0) {
+            $fields[] = "`payment_status` = 'Waived'";
+            $fields[] = "`fee_amount` = 0";
+            $feeChanged = true;
+        } elseif (abs($newFee - (float)$current['fee_amount']) > 0.001) {
+            $fields[] = "`fee_amount` = ?";
+            $params[] = $newFee;
+            $feeChanged = true;
+        }
+    } elseif (!$finalVip && in_array($payStatus, ['Waived', 'Paid'], true)) {
+        $typeChanged = registrationFee($newType, $newCategory) !== registrationFee($current['vehicle_type'], $current['category']);
+        $vipWithdrawn = isVipVehicle($current) && !$finalVip;
+        $paidTotal = paidTotalForVehicle($pdo, $id);
+        $legacy = $payStatus === 'Paid' && $paidTotal <= 0; // grandfathered: registered before payments existed
+        if (($typeChanged || $vipWithdrawn) && !$legacy && $newFee > $paidTotal + 0.001) {
+            $fields[] = "`payment_status` = 'Unpaid'";
+            $fields[] = "`fee_amount` = ?";
+            $params[] = round($newFee - $paidTotal, 2);
+            $feeChanged = true;
+        }
     }
 
     $drivers = isset($data['authorizedDrivers']) && is_array($data['authorizedDrivers'])
@@ -378,6 +433,7 @@ function handleUpdateVehicle($pdo, $admin) {
         }
 
         $pdo->commit();
+        if ($feeChanged) cancelPendingPayments($pdo, $id); // an open checkout still shows the old amount
 
         sendResponse(200, vehicleForOutput($pdo, findVehicleById($pdo, $id), true), "Vehicle record updated successfully");
     } catch (Exception $e) {
@@ -391,6 +447,32 @@ function handleDeleteVehicle($pdo) {
     if ($id <= 0) {
         sendResponse(400, null, "Missing or invalid vehicle id");
     }
+    $vehicle = findVehicleById($pdo, $id);
+    if (!$vehicle) {
+        sendResponse(404, null, "Vehicle not found");
+    }
+
+    // A vehicle with any history cannot be deleted: removing it would also erase its violations and hold
+    // (deleting and re-registering the same plate would give a clean record). Suspend the registration instead.
+    $normPlate = normalizePlate($vehicle['plate_number']);
+    $count = function ($sql, $params) use ($pdo) {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        return (int)$stmt->fetchColumn();
+    };
+    $violations = $count("SELECT COUNT(*) FROM `vehicle_violations` WHERE `vehicle_id` = ?", [$id]);
+    $payments = $count("SELECT COUNT(*) FROM `payments` WHERE `vehicle_id` = ? AND `status` = 'Paid'", [$id]);
+    $passages = $count("SELECT COUNT(*) FROM `gate_logs` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?", [$normPlate]);
+    if ($violations > 0 || $payments > 0 || $passages > 0) {
+        $parts = [];
+        if ($violations) $parts[] = "{$violations} violation(s)";
+        if ($payments) $parts[] = "{$payments} payment(s)";
+        if ($passages) $parts[] = "{$passages} gate passage(s)";
+        sendResponse(409, ['code' => 'VEHICLE_HAS_HISTORY', 'violations' => $violations, 'payments' => $payments, 'gatePassages' => $passages],
+            "{$vehicle['plate_number']} has " . implode(', ', $parts) . " on record and cannot be deleted, so its history is kept. Suspend the registration instead.");
+    }
+
+    cancelPendingPayments($pdo, $id); // an open online checkout must not outlive the vehicle
     $stmt = $pdo->prepare("DELETE FROM `vehicles` WHERE `id` = ?");
     $stmt->execute([$id]);
     sendResponse(200, ['id' => $id], "Vehicle deleted successfully");

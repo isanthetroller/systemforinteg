@@ -45,7 +45,22 @@ passed = 0
 failed = 0
 
 
+AUTO_PAY = True  # newly registered vehicles are Unpaid; most tests just need a working pass, so the cashier "pays" them
+
+
 def call(method, path, body=None, token=None, headers=None):
+    code, res = _call(method, path, body, token, headers)
+    if (AUTO_PAY and method == 'POST' and path == 'vehicles.php' and code == 201
+            and res.get('data', {}).get('paymentStatus') == 'Unpaid'):
+        c2, paid = _call('POST', 'payments.php', {'action': 'cash', 'vehicleId': res['data']['id']}, token)
+        if c2 == 201:
+            account = res['data'].get('studentAccount')
+            res['data'] = paid['data']['vehicle']
+            res['data']['studentAccount'] = account
+    return code, res
+
+
+def _call(method, path, body=None, token=None, headers=None):
     req = urllib.request.Request(f'{BASE}/{path}', method=method)
     req.add_header('Accept', 'application/json')
     if body is not None:
@@ -365,7 +380,7 @@ def test_gate_flow(admin):
     call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
     check('entry for suspended vehicle refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_SUSPENDED', res)
-    code, res = call('POST', 'logs.php', {'plateNumber': 'NDK 4821', 'driverName': 'Juan', 'action': 'Entry Recorded'}, headers=SCANNER)
+    code, res = call('POST', 'logs.php', {'plateNumber': 'NDK 4821', 'driverName': 'Juan Dela Cruz', 'action': 'Entry Recorded'}, headers=SCANNER)
     check('mobile entry for suspended vehicle also refused', code == 403, res)
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
     check('exit for suspended vehicle still allowed', code == 201, res)
@@ -373,92 +388,113 @@ def test_gate_flow(admin):
 
 
 def test_violations(admin):
-    section('Violations & 3-strike policy')
+    section('Violations (hold until resolved, no strikes)')
+    import sqlite3
     guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
     code, res = call('POST', 'vehicles.php', {'plateNumber': 'STR 3001', 'ownerName': 'Rico Santos', 'ownerIdNumber': 'NCST-2024-3001',
                                              'authorizedDrivers': [{'fullName': 'Rico Santos', 'relationship': 'Self (Owner)'}]}, admin)
     veh = res['data']
     payload = veh['qrPayload']
     driver_id = int(veh['authorizedDrivers'][0]['id'])
+    check('vehicle output has no strike counter', 'warningCount' not in veh, sorted(k for k in veh if 'arn' in k))
 
-    def warn(token, type_='Parking in Fire Lane / Restricted Zone', severity='Warning', notes='Observed by patrol'):
-        return call('POST', 'violations.php', {'vehicle_id': veh['id'], 'type': type_, 'severity': severity, 'notes': notes}, token)
+    def issue(token, type_='Parking in Fire Lane / Restricted Zone', notes='Observed by patrol', **extra):
+        return call('POST', 'violations.php', {'vehicle_id': veh['id'], 'type': type_, 'notes': notes, **extra}, token)
 
-    code, res = warn(guard, severity='Violation')
-    check('guard cannot issue a Violation -> 403', code == 403, res)
-    code, res = warn(guard, type_='Speeding Wildly')
+    code, res = issue(guard, type_='Speeding Wildly')
     check('unknown violation type rejected -> 400', code == 400, res)
-    code, res = warn(guard, type_='Other', notes='')
+    code, res = issue(guard, type_='Other', notes='')
     check('"Other" requires notes -> 400', code == 400, res)
+    code, res = call('POST', 'violations.php', {'vehicle_id': veh['id'], 'type': 'Parking in Fire Lane / Restricted Zone'})
+    check('issuing a violation requires sign-in -> 401', code == 401, code)
 
-    code, res = warn(guard)
-    check('1st warning -> strike 1, not banned', code == 201 and res['data']['strikes'] == 1 and not res['data']['banned'], res)
-    code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
-    check('verify shows "Strike 1 of 3"', any('Strike 1 of 3' in w for w in v['warnings']), v)
-    code, res = warn(guard, type_='Unauthorized Driver at Helm')
-    check('2nd warning -> strike 2', res['data']['strikes'] == 2 and not res['data']['banned'], res)
-    code, res = warn(admin, type_='Overnight / Unauthorized Overtime Parking')
-    check('3rd warning -> automatic violation + ban', res['data']['strikes'] == 3 and res['data']['banned'] and res['data']['autoViolationId'], res)
-    auto_id = res['data']['autoViolationId']
-    check('banned vehicle registration Suspended', res['data']['vehicle']['isBanned'] and res['data']['vehicle']['registrationStatus'] == 'Suspended', res['data']['vehicle'])
-    check('ban opens "3-Strike Policy Enforced" incident', any(i['reason'] == '3-Strike Policy Enforced' for i in open_incidents_for(admin, 'STR 3001')), '')
+    # A guard can issue a violation; the vehicle is on hold
+    code, res = issue(guard, severity='Warning')  # an old client still sending "severity" gets a violation, never a warning
+    check('guard issues a violation -> 201, vehicle on hold', code == 201 and res['data']['onHold'] and res['data']['vehicle']['isBanned']
+          and res['data']['vehicle']['registrationStatus'] == 'Suspended' and res['data']['violation']['status'] == 'Pending', res)
+    check('no strike fields anywhere in the response', 'strikes' not in res['data'] and 'warningCount' not in res['data']['vehicle']
+          and 'severity' not in res['data']['violation'], res['data'])
+    first_id = res['data']['violation']['id']
+    check('the hold opens a Held incident', any(i['reason'] == 'Parking in Fire Lane / Restricted Zone' for i in open_incidents_for(admin, 'STR 3001')), '')
 
     code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
-    check('banned vehicle entry -> BANNED, denied, logged', v.get('result') == 'BANNED' and not v['accepted'] and v['autoLogged'], v)
+    check('entry -> BANNED (violation hold), denied, logged', v.get('result') == 'BANNED' and not v['accepted'] and v['autoLogged'], v)
+    check('  ...message says violation hold', 'VIOLATION' in v['message'].upper() and 'violation' in v['reason'], v)
     code, res = call('POST', 'logs.php', {'plate': 'STR 3001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver_id}, guard)
-    check('entry for banned vehicle refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_BANNED', res)
+    check('entry refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_BANNED', res)
+
+    # ... and it cannot leave either
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicles SET status = 'Inside Campus' WHERE id = ?", (veh['id'],))
+    db.commit()
+    db.close()
+    code, v = verify({'qr_code': payload, 'gate_type': 'Egress'}, guard)
+    check('exit -> denied while the violation is pending', v.get('result') == 'BANNED' and not v['accepted'] and v['autoLogged'], v)
+    code, res = call('POST', 'logs.php', {'plate': 'STR 3001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': driver_id}, guard)
+    check('exit approval refused server-side -> 403', code == 403 and res['data']['code'] == 'VEHICLE_BANNED', res)
 
     code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
-    check('suspend/activate toggle cannot lift a ban -> 409', code == 409, res)
+    check('suspend/activate toggle cannot lift the hold -> 409', code == 409, res)
     code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'registrationStatus': 'Active'}, admin)
-    check('editing registration to Active cannot lift a ban -> 409', code == 409, res)
-    inc = [i for i in open_incidents_for(admin, 'STR 3001') if i['reason'] == '3-Strike Policy Enforced'][0]
+    check('editing registration to Active cannot lift the hold -> 409', code == 409, res)
+    inc = [i for i in open_incidents_for(admin, 'STR 3001') if i['reason'] == 'Parking in Fire Lane / Restricted Zone'][0]
     code, res = call('PUT', 'incidents.php', {'id': inc['id'], 'notes': 'cleared'}, admin)
     check('clearing the incident directly is refused -> 409', code == 409 and res['data']['code'] == 'VIOLATION_PENDING', res)
 
-    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': 'x'}, guard)
+    # A second violation: both must be resolved
+    code, res = issue(admin, type_='Reckless / Prohibited Driving on Campus', notes='Overspeeding near the chapel')
+    second_id = res['data']['violation']['id']
+    check('a second violation is accepted while on hold', code == 201, res)
+    _, res = call('GET', f"violations.php?vehicle_id={veh['id']}&status=Pending", token=guard)
+    check('guard can list the pending violations', len(res['data']) == 2, res)
+
+    code, res = call('PUT', 'violations.php', {'violation_id': first_id, 'action': 'resolve', 'notes': 'x'}, guard)
     check('guard cannot resolve -> 403', code == 403, code)
-    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': ''}, admin)
+    code, res = call('PUT', 'violations.php', {'violation_id': first_id, 'action': 'resolve', 'notes': ''}, admin)
     check('resolution notes are mandatory -> 400', code == 400, res)
-    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': 'Fine paid / clearance signed (OR #1234)'}, admin)
-    check('resolving the violation lifts the ban and resets strikes', code == 200 and res['data']['banLifted']
-          and res['data']['vehicle']['warningCount'] == 0 and not res['data']['vehicle']['isBanned']
+    code, res = call('PUT', 'violations.php', {'vehicle_id': veh['id'], 'action': 'reset', 'notes': 'x'}, admin)
+    check('the old "reset strikes" action no longer exists -> 400', code == 400, res)
+    code, res = call('PUT', 'violations.php', {'violation_id': first_id, 'action': 'resolve', 'notes': 'Cleared at the Security Office (OR #1234)'}, admin)
+    check('resolving one of two keeps the hold', code == 200 and res['data']['holdLifted'] is False and res['data']['vehicle']['isBanned'], res)
+    code, v = verify({'qr_code': payload, 'gate_type': 'Egress'}, guard)
+    check('  ...still cannot leave', v.get('result') == 'BANNED' and not v['accepted'], v)
+    code, res = call('PUT', 'violations.php', {'violation_id': second_id, 'action': 'resolve', 'notes': 'Apology letter and fine settled'}, admin)
+    check('resolving the last one lifts the hold', code == 200 and res['data']['holdLifted'] and not res['data']['vehicle']['isBanned']
           and res['data']['vehicle']['registrationStatus'] == 'Active', res)
-    _, res = call('GET', f"violations.php?vehicle_id={veh['id']}", token=admin)
-    warnings = [x for x in res['data'] if x['severity'] == 'Warning']
-    check('the 3 strike warnings are marked cleared by the violation',
-          len(warnings) == 3 and all(w['status'] == 'Resolved' and w['clearedByViolationId'] == auto_id for w in warnings), warnings)
-    check('3-strike incident closed with the violation', not any(i['reason'] == '3-Strike Policy Enforced' for i in open_incidents_for(admin, 'STR 3001')), '')
+    check('incidents closed with the violations', not open_incidents_for(admin, 'STR 3001'), open_incidents_for(admin, 'STR 3001'))
+    code, v = verify({'qr_code': payload, 'gate_type': 'Egress'}, guard)
+    check('the vehicle can leave after resolution', v.get('result') == 'VALID' and v['accepted'], v)
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicles SET status = 'Outside' WHERE id = ?", (veh['id'],))
+    db.commit()
+    db.close()
     code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
-    check('vehicle can enter again after resolution', v.get('result') == 'VALID' and v['accepted'], v)
-    code, res = call('PUT', 'violations.php', {'violation_id': auto_id, 'action': 'resolve', 'notes': 'again'}, admin)
+    check('...and enter again', v.get('result') == 'VALID' and v['accepted'], v)
+    code, res = call('PUT', 'violations.php', {'violation_id': first_id, 'action': 'resolve', 'notes': 'again'}, admin)
     check('resolving twice -> 409', code == 409, res)
 
-    # Dismissing a mistaken warning gives the strike back
-    code, res = warn(guard)
-    wid = res['data']['violation']['id']
-    code, res = call('PUT', 'violations.php', {'violation_id': wid, 'action': 'resolve', 'notes': 'n/a'}, admin)
-    check('warnings cannot be resolved individually -> 400', code == 400, res)
-    code, res = call('PUT', 'violations.php', {'violation_id': wid, 'action': 'dismiss', 'notes': 'Wrong plate noted by patrol'}, admin)
-    check('dismissing a warning removes its strike', code == 200 and res['data']['vehicle']['warningCount'] == 0, res)
-
-    # Manual violation bans immediately
-    code, res = warn(admin, type_='Reckless / Prohibited Driving on Campus', severity='Violation', notes='Overspeeding near the chapel')
-    check('manual violation bans immediately', code == 201 and res['data']['banned'] and res['data']['vehicle']['isBanned'], res)
+    # Dismissing a violation issued by mistake lifts the hold
+    code, res = issue(guard, notes='Wrong plate noted by patrol')
     vid = res['data']['violation']['id']
     code, res = call('PUT', 'violations.php', {'violation_id': vid, 'action': 'dismiss', 'notes': 'Issued to the wrong vehicle'}, admin)
-    check('dismissing a mistaken violation lifts the ban', code == 200 and res['data']['banLifted'] and not res['data']['vehicle']['isBanned'], res)
-
-    # Reset strikes
-    warn(guard)
-    warn(guard)
-    code, res = call('PUT', 'violations.php', {'vehicle_id': veh['id'], 'action': 'reset', 'notes': 'Clearance signed by the Dean of Students'}, admin)
-    check('reset strikes & lift suspension', code == 200 and res['data']['vehicle']['warningCount'] == 0 and not res['data']['vehicle']['isBanned'], res)
+    check('dismissing a mistaken violation lifts the hold', code == 200 and res['data']['holdLifted'] and not res['data']['vehicle']['isBanned'], res)
     _, res = call('GET', 'violations.php?status=Pending&plate=STR3001', token=guard)
-    check('guard can list active violations; none pending after reset', isinstance(res['data'], list) and len(res['data']) == 0, res)
+    check('nothing pending afterwards', isinstance(res['data'], list) and len(res['data']) == 0, res)
+
+    # Records left by the retired strike system are history only: not listed, never blocking
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("INSERT INTO vehicle_violations (vehicle_id, plate_number, violation_type, severity, logged_by, status, counts_as_strike, created_at) "
+               "VALUES (?, 'STR 3001', 'Parking in Fire Lane / Restricted Zone', 'Warning', 'old', 'Pending', 1, '2026-09-01 08:00:00')", (veh['id'],))
+    db.commit()
+    db.close()
+    _, res = call('GET', 'violations.php?status=Pending&plate=STR3001', token=admin)
+    check('an old pending warning row is not listed', len(res['data']) == 0, res)
+    code, v = verify({'qr_code': payload, 'gate_type': 'Ingress'}, guard)
+    check('  ...and does not block or warn', v.get('result') == 'VALID' and v['accepted'] and not any('trike' in w for w in v['warnings']), v)
+
 
 def test_overnight(admin):
-    section('Overtime & overnight parking detection')
+    section('Overtime & overnight parking list (staff decide, nothing automatic)')
     import sqlite3
     guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
 
@@ -484,33 +520,30 @@ def test_overnight(admin):
     items = {i['plateNumber']: i for i in res['data']['items']}
     check('before curfew: long stay listed as overtime only', 'OVN 1001' not in items and items.get('OVT 2002', {}).get('category') == 'overtime', res['data'])
     check('list includes owner phone and elapsed hours', items['OVT 2002']['ownerPhone'] == '0917 555 0000' and items['OVT 2002']['elapsedHours'] == 13.0, items)
-
-    code, res = report('2026-09-20 19:00:00', 'POST')
-    check('automatic run does not strike overtime vehicles', code == 200 and res['data']['flagged'] == [], res)
-
-    code, res = report('2026-09-20 19:00:00', 'POST', {'vehicle_id': over_id})
-    check('manual "Flag Overnight Strike" on overtime vehicle -> 201', code == 201 and res['data']['strikes'] == 1, res)
-    code, res = report('2026-09-20 19:30:00', 'POST', {'vehicle_id': over_id})
-    check('flagging the same stay twice -> 409', code == 409 and res['data']['code'] == 'ALREADY_FLAGGED', res)
+    check('list has no strike counter', 'warningCount' not in items['OVT 2002'] and items['OVT 2002']['onHold'] is False, items['OVT 2002'])
 
     code, res = report('2026-09-20 23:00:00', 'POST')
-    flagged = {f['plateNumber'] for f in res['data']['flagged']}
-    check('after curfew: both vehicles get an overnight strike', flagged == {'OVN 1001', 'OVT 2002'}, res['data'])
-    check('strike count shown as "Strike N of 3"', {i['plateNumber']: i['warningCount'] for i in res['data']['items']} == {'OVN 1001': 1, 'OVT 2002': 2}, res['data']['items'])
-
-    code, res = report('2026-09-20 23:30:00', 'POST')
-    check('running again the same night adds nothing (idempotent)', res['data']['flagged'] == [], res['data'])
-    code, res = report('2026-09-21 01:00:00', 'POST')
-    check('after midnight is still the same night', res['data']['flagged'] == [], res['data'])
-
-    code, res = report('2026-09-21 22:30:00', 'POST')
-    check('next night -> one more strike each', {f['plateNumber'] for f in res['data']['flagged']} == {'OVN 1001', 'OVT 2002'}, res['data'])
-    banned = {f['plateNumber']: f['banned'] for f in res['data']['flagged']}
-    check('3rd strike from overnight check bans the vehicle', banned.get('OVT 2002') is True and banned.get('OVN 1001') is False, banned)
-
+    items = {i['plateNumber']: i for i in res['data']['items']}
+    check('after curfew: both vehicles are listed as overnight', items['OVN 1001']['category'] == 'overnight' and items['OVT 2002']['category'] == 'overnight', res['data'])
+    check('the run only lists: no violation was recorded', all(not i['flaggedThisNight'] and not i['onHold'] for i in items.values()), items)
     _, res = call('GET', f'violations.php?vehicle_id={night_id}', token=admin)
-    check('overnight strikes are logged by "System (Overnight Check)"',
-          all(v['loggedBy'] == 'System (Overnight Check)' and v['violationType'].startswith('Overnight') for v in res['data']), res['data'])
+    check('  ...nothing in the violations ledger', res['data'] == [], res['data'])
+
+    code, res = report('2026-09-20 23:00:00', 'POST', {'vehicle_id': over_id})
+    check('guard issues a violation for a listed vehicle -> 201, on hold', code == 201 and res['data']['onHold'] is True, res)
+    _, res = call('GET', f'violations.php?vehicle_id={over_id}', token=admin)
+    check('  ...recorded as an overnight violation by the guard', len(res['data']) == 1 and res['data'][0]['violationType'].startswith('Overnight')
+          and res['data'][0]['loggedBy'] != 'System (Overnight Check)' and res['data'][0]['status'] == 'Pending', res['data'])
+    code, res = report('2026-09-20 23:30:00')
+    items = {i['plateNumber']: i for i in res['data']['items']}
+    check('list shows it issued and on hold; the other vehicle untouched', items['OVT 2002']['flaggedThisNight'] and items['OVT 2002']['onHold']
+          and not items['OVN 1001']['onHold'], items)
+    code, res = report('2026-09-20 23:45:00', 'POST', {'vehicle_id': over_id})
+    check('issuing twice for the same night -> 409', code == 409 and res['data']['code'] == 'ALREADY_FLAGGED', res)
+    code, res = report('2026-09-21 01:00:00')
+    check('after midnight it is still the same night', {i['plateNumber']: i['flaggedThisNight'] for i in res['data']['items']}['OVT 2002'] is True, res['data'])
+    code, res = report('2026-09-21 22:30:00')
+    check('next night -> can be issued again', {i['plateNumber']: i['flaggedThisNight'] for i in res['data']['items']}['OVT 2002'] is False, res['data'])
 
     # A vehicle that exits is no longer reported
     db = sqlite3.connect(SQLITE_DB)
@@ -518,7 +551,9 @@ def test_overnight(admin):
     db.commit()
     db.close()
     code, res = report('2026-09-22 23:00:00', 'POST')
-    check('exited vehicle is not flagged again', 'OVN 1001' not in {f['plateNumber'] for f in res['data']['flagged']}, res['data'])
+    check('exited vehicle is not listed', 'OVN 1001' not in {i['plateNumber'] for i in res['data']['items']}, res['data'])
+    code, res = report('2026-09-22 23:00:00', 'POST', {'vehicle_id': night_id})
+    check('issuing for a vehicle that is not listed -> 404', code == 404, res)
 
     code, _ = call('GET', 'overnight_check.php')
     check('overnight report requires sign-in -> 401', code == 401, code)
@@ -611,8 +646,15 @@ def test_student_portal(admin):
     check('registering a vehicle creates the owner portal login', code == 201 and acct['created'] and acct['tempPassword'], acct)
     temp = acct['tempPassword']
     code, res = call('POST', 'vehicles.php', {'plateNumber': 'STU 7002', 'ownerName': 'Sam Student', 'ownerIdNumber': owner_id}, admin)
-    check('second vehicle of the same owner reuses the account (no new password)', res['data']['studentAccount']['created'] is False
-          and res['data']['studentAccount']['tempPassword'] is None, res['data']['studentAccount'])
+    check('second vehicle for the same ID is refused (one vehicle per ID)', code == 409 and res['data']['code'] == 'OWNER_HAS_VEHICLE'
+          and res['data']['plateNumber'] == 'STU 7001', res)
+    # An owner who already had two vehicles before that rule existed (legacy data) must keep working: insert it directly
+    import sqlite3
+    db = sqlite3.connect(SQLITE_DB)
+    cur = db.execute("INSERT INTO vehicles (plate_number, make_model_color, owner_name, owner_id_number) VALUES ('STU 7002', 'Legacy second car', 'Sam Student', ?)", (owner_id,))
+    db.execute("INSERT INTO authorized_drivers (vehicle_id, full_name, relationship) VALUES (?, 'Sam Student', 'Self (Owner)')", (cur.lastrowid,))
+    db.commit()
+    db.close()
     stranger_payload = call('GET', 'vehicles.php?plate=NDK4821', token=admin)[1]['data']['qrPayload']
 
     code, res = login(owner_id, temp)
@@ -632,21 +674,29 @@ def test_student_portal(admin):
     check('vehicles: only own vehicles', plates == ['STU 7001', 'STU 7002'], plates)
     own = res['data'][0]
     check('own vehicle includes signed QR, drivers, standing', own['qrPayload'] and own['authorizedDrivers'][0]['fullName'] == 'Sam Student'
-          and 'warningCount' in own and 'isBanned' in own and 'ownerPhone' not in own, own)
+          and 'warningCount' not in own and 'isBanned' in own and 'ownerPhone' not in own, own)
     code, v = verify({'qr_code': own['qrPayload'], 'gate_type': 'Ingress'}, guard)
     check('pass shown in the student portal verifies at the gate', v.get('result') == 'VALID', v)
     code, res = call('GET', 'student.php?action=vehicles&owner_id_number=NCST-2024-0001', token=tok)
     check('client-supplied owner ID is ignored', sorted(x['plateNumber'] for x in res['data']) == ['STU 7001', 'STU 7002'], res)
 
-    call('POST', 'violations.php', {'plate': 'STU 7001', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'Blocking hydrant'}, guard)
-    code, res = call('GET', 'student.php?action=violations', token=tok)
-    check('violations: own warnings visible', code == 200 and len(res['data']) == 1 and res['data'][0]['plateNumber'] == 'STU 7001', res)
-    code, res = call('GET', 'student.php?action=me', token=tok)
-    check('summary shows strike count', res['data']['summary']['strikes'] == 1, res['data']['summary'])
     call('POST', 'logs.php', {'plate': 'STU 7001', 'action': 'Entry Recorded', 'gate_type': 'Ingress',
                               'driver_id': int(own['authorizedDrivers'] and call('GET', 'vehicles.php?plate=STU7001', token=admin)[1]['data']['authorizedDrivers'][0]['id'])}, guard)
     code, res = call('GET', 'student.php?action=activity', token=tok)
     check('activity: own gate history', code == 200 and res['data'] and all(a['plateNumber'].startswith('STU') for a in res['data']), res)
+
+    code, res = call('GET', 'student.php?action=me', token=tok)
+    check('summary: nothing on hold yet', res['data']['summary']['openViolations'] == 0 and res['data']['summary']['banned'] == 0
+          and 'strikes' not in res['data']['summary'], res['data']['summary'])
+    call('POST', 'violations.php', {'plate': 'STU 7001', 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'Blocking hydrant'}, guard)
+    code, res = call('GET', 'student.php?action=violations', token=tok)
+    check('violations: own violation visible, no severity / strike fields', code == 200 and len(res['data']) == 1 and res['data'][0]['plateNumber'] == 'STU 7001'
+          and res['data'][0]['status'] == 'Pending' and 'severity' not in res['data'][0] and 'countsAsStrike' not in res['data'][0], res)
+    code, res = call('GET', 'student.php?action=me', token=tok)
+    check('summary: one open violation, one vehicle on hold', res['data']['summary']['openViolations'] == 1 and res['data']['summary']['banned'] == 1, res['data']['summary'])
+    code, res = call('GET', 'student.php?action=vehicles', token=tok)
+    check('vehicle shows the hold and has no strike counter', [x for x in res['data'] if x['plateNumber'] == 'STU 7001'][0]['isBanned'] is True
+          and 'warningCount' not in res['data'][0], res['data'][0])
 
     # Token separation
     for path in ['vehicles.php', 'vehicles.php?plate=NDK4821', 'logs.php', 'violations.php', 'visitors.php', 'stats.php']:
@@ -905,12 +955,10 @@ def test_vip_passes(admin):
     check('the reissued VIP pass works', v.get('result') == 'VALID', v)
 
     # --- no strikes, no violations, no ban
-    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
-    check('a warning against a VIP is refused -> 409', code == 409 and res['data']['code'] == 'VIP_EXEMPT', res)
-    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Reckless / Prohibited Driving on Campus', 'severity': 'Violation', 'notes': 'x'}, admin)
-    check('a violation against a VIP is refused -> 409', code == 409 and res['data']['code'] == 'VIP_EXEMPT', res)
-    code, res = call('POST', 'violations.php', {'plate': 'VIP 0002', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
-    check('a Standard vehicle still gets warnings', code == 201, res)
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'x'}, guard)
+    check('a violation against a VIP (guard) is refused -> 409', code == 409 and res['data']['code'] == 'VIP_EXEMPT', res)
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Reckless / Prohibited Driving on Campus', 'notes': 'x'}, admin)
+    check('a violation against a VIP (admin) is refused -> 409', code == 409 and res['data']['code'] == 'VIP_EXEMPT', res)
 
     # --- overnight / overtime: the VIP is not listed, flagged or struck
     db = sqlite3.connect(SQLITE_DB)
@@ -925,8 +973,13 @@ def test_vip_passes(admin):
     listed = {i['plateNumber'] for i in res['data']['items']}
     check('overnight report lists the Standard vehicle, not the VIP', 'VIP 0002' in listed and 'VIP 0001' not in listed, listed)
     code, res = call('POST', night, {}, guard)
-    flagged = {f['plateNumber'] for f in res['data']['flagged']}
-    check('the automatic run strikes the Standard vehicle only', 'VIP 0002' in flagged and 'VIP 0001' not in flagged, flagged)
+    listed = {i['plateNumber'] for i in res['data']['items']}
+    check('the list-only run still skips the VIP', 'VIP 0002' in listed and 'VIP 0001' not in listed, listed)
+    std2 = call('GET', 'vehicles.php?plate=VIP0002', token=admin)[1]['data']
+    code, res = call('POST', night, {'vehicle_id': std2['id']}, guard)
+    check('a violation can be issued for the listed Standard vehicle', code == 201 and res['data']['onHold'], res)
+    pending = call('GET', f"violations.php?vehicle_id={std2['id']}&status=Pending", token=admin)[1]['data']
+    call('PUT', 'violations.php', {'violation_id': pending[0]['id'], 'action': 'resolve', 'notes': 'Owner reached; cleared (test cleanup)'}, admin)
     code, res = call('POST', night, {'vehicle_id': vip['id']}, guard)
     check('a manual overnight flag on a VIP -> 404 (not listed)', code == 404, res)
     code, res = call('GET', 'oncampus.php?now=' + urllib.parse.quote('2026-09-21 09:00:00'), token=guard)
@@ -934,14 +987,13 @@ def test_vip_passes(admin):
     check('On Campus Now shows the VIP, with no time flag', rows['VIP 0001']['isVip'] is True and rows['VIP 0001']['timeFlag'] is None, rows.get('VIP 0001'))
     check('  ...while the Standard vehicle is flagged overnight', rows['VIP 0002']['timeFlag'] == 'overnight', rows.get('VIP 0002'))
     _, res = call('GET', 'vehicles.php?plate=VIP0001', token=admin)
-    check('the VIP still has 0 strikes and is not banned', res['data']['warningCount'] == 0 and res['data']['isBanned'] is False, res['data'])
+    check('the VIP has no violation hold', res['data']['isBanned'] is False, res['data'])
 
     # --- a banned vehicle cannot be made VIP; withdrawing VIP restores the rules
     code, res = register('VIP 0003', 'Ban Candidate')
-    for _ in range(3):
-        call('POST', 'violations.php', {'plate': 'VIP 0003', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
+    call('POST', 'violations.php', {'plate': 'VIP 0003', 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'x'}, guard)
     _, res = call('GET', 'vehicles.php?plate=VIP0003', token=admin)
-    check('(setup) three strikes ban the vehicle', res['data']['isBanned'] is True, res['data'])
+    check('(setup) a violation puts the vehicle on hold', res['data']['isBanned'] is True, res['data'])
     banned_id = res['data']['id']
     code, res = call('PUT', 'vehicles.php', {'id': banned_id, 'passClass': 'VIP'}, admin)
     check('a banned vehicle cannot be made VIP -> 409', code == 409 and res['data']['code'] == 'VEHICLE_BANNED', res)
@@ -951,8 +1003,8 @@ def test_vip_passes(admin):
     code, res = call('PUT', 'vehicles.php', {'id': std['id'], 'passClass': 'Standard'}, admin)
     check('admin withdraws VIP', code == 200 and res['data']['isVip'] is False and res['data']['vipGrantedBy'] is None, res)
     code, res = call('PUT', 'vehicles.php', {'id': vip['id'], 'passClass': 'Standard'}, admin)
-    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
-    check('once VIP is withdrawn the vehicle can be warned again', code == 201, res)
+    code, res = call('POST', 'violations.php', {'plate': 'VIP 0001', 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'x'}, guard)
+    check('once VIP is withdrawn the vehicle can get a violation again', code == 201, res)
     code, res = call('PUT', 'vehicles.php', {'id': vip['id'], 'ownerRole': 'Faculty'}, admin)
     check('editing other fields does not change the class', code == 200, res)
 
@@ -980,9 +1032,12 @@ def test_offline_sync(admin):
     def sync(events, headers=SCANNER, token=None):
         return call('POST', 'sync.php', {'events': events}, token, headers=None if token else headers)
 
+    owners = {}
+
     def register(plate, owner):
         code, res = call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': owner, 'ownerIdNumber': 'ID-' + plate.replace(' ', ''),
                                                  'authorizedDrivers': [{'fullName': owner, 'relationship': 'Self (Owner)'}]}, admin)
+        owners[plate] = owner
         return res['data']
 
     def vehicle(plate):
@@ -992,10 +1047,10 @@ def test_offline_sync(admin):
         return [l for l in call('GET', f'logs.php?limit=200', token=admin)[1]['data'] if l['plateNumber'] == plate][:limit]
 
     def entry(plate, **extra):
-        return dict({'plate': plate, 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driverName': 'Guard-checked Driver'}, **extra)
+        return dict({'plate': plate, 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driverName': owners.get(plate, 'Guard-checked Driver')}, **extra)
 
     def exit_(plate, **extra):
-        return dict({'plate': plate, 'action': 'Exit Approved', 'gate_type': 'Egress', 'driverName': 'Guard-checked Driver'}, **extra)
+        return dict({'plate': plate, 'action': 'Exit Approved', 'gate_type': 'Egress', 'driverName': owners.get(plate, 'Guard-checked Driver')}, **extra)
 
     # --- access and shape
     code, _ = call('POST', 'sync.php', {'events': [ev('gate_log', ago(1), entry('SYN 1001'))]})
@@ -1051,9 +1106,8 @@ def test_offline_sync(admin):
 
     # --- events that already happened are recorded even when the server would have refused them
     b = register('SYN 1005', 'Ben Banned')
-    for _ in range(3):
-        call('POST', 'violations.php', {'plate': 'SYN 1005', 'type': 'Parking in Fire Lane / Restricted Zone', 'severity': 'Warning', 'notes': 'x'}, guard)
-    check('(setup) vehicle is banned', vehicle('SYN 1005')['isBanned'] is True, vehicle('SYN 1005'))
+    call('POST', 'violations.php', {'plate': 'SYN 1005', 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'x'}, guard)
+    check('(setup) vehicle is on violation hold', vehicle('SYN 1005')['isBanned'] is True, vehicle('SYN 1005'))
     code, res = call('POST', 'logs.php', {'plate': 'SYN 1005', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': int(vehicle('SYN 1005')['authorizedDrivers'][0]['id'])}, guard)
     check('(live) the same entry would be refused', code == 403, res)
     code, res = sync([ev('gate_log', ago(hours=2), entry('SYN 1005'))])
@@ -1269,6 +1323,538 @@ def test_offline_sync(admin):
     check('  ...and the vehicle is still on the On Campus list', any(x['plateNumber'] == 'SYN 4002' for x in res['data']['vehicles']), res['data']['counts'])
 
 
+def test_loophole_fixes(admin):
+    """Gate loopholes closed: unpaid / expired entries, free-text drivers, deleting history, re-pricing."""
+    global AUTO_PAY
+    import datetime, sqlite3
+    section('Gate loopholes closed (payment, expiry, drivers, deletion, re-pricing)')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def reg(plate, owner_id, vtype='4-Wheel', **extra):
+        code, res = call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': 'Lia Loophole', 'ownerIdNumber': owner_id, 'vehicleType': vtype,
+                                                 'authorizedDrivers': [{'fullName': 'Lia Loophole', 'relationship': 'Self (Owner)', 'licenseNo': 'N/A'}], **extra}, admin)
+        return res['data']
+
+    def pay(vehicle_id):
+        return call('POST', 'payments.php', {'action': 'cash', 'vehicleId': vehicle_id}, admin)
+
+    def phone_entry(plate, driver='Lia Loophole', action='Entry Recorded', **extra):
+        gate = 'Egress' if action == 'Exit Approved' else 'Ingress'
+        return call('POST', 'logs.php', {'plateNumber': plate, 'driverName': driver, 'action': action, 'gate_type': gate, **extra}, headers=SCANNER)
+
+    def set_status(vehicle_id, status):
+        db = sqlite3.connect(SQLITE_DB)
+        db.execute("UPDATE vehicles SET status = ? WHERE id = ?", (status, vehicle_id))
+        db.commit()
+        db.close()
+
+    # --- 1. unpaid vehicles cannot be admitted, whatever the client does
+    u = reg('LPX 1001', 'LP-X1')
+    code, res = phone_entry('LPX 1001')
+    check('phone entry of an UNPAID vehicle (plate only) -> 403 VEHICLE_UNPAID', code == 403 and res['data']['code'] == 'VEHICLE_UNPAID', res)
+    code, res = call('POST', 'logs.php', {'plate': 'LPX 1001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': int(u['authorizedDrivers'][0]['id'])}, guard)
+    check('web gate monitor entry of an UNPAID vehicle -> 403 VEHICLE_UNPAID', code == 403 and res['data']['code'] == 'VEHICLE_UNPAID', res)
+    code, v = verify({'plate': 'LPX 1001', 'gate_type': 'Ingress'}, guard)
+    check('manual plate lookup says UNPAID', v.get('result') == 'UNPAID' and not v['accepted'], v)
+    code, res = pay(u['id'])
+    code, res = phone_entry('LPX 1001')
+    check('after payment the same entry is recorded', code == 201, res)
+
+    # --- 2. expired passes cannot be admitted (every lookup path), but may still leave
+    e = reg('LPX 2002', 'LP-X2')
+    pay(e['id'])
+    call('PUT', 'vehicles.php', {'id': e['id'], 'passValidUntil': '2025-01-01'}, admin)
+    code, res = phone_entry('LPX 2002')
+    check('phone entry with an EXPIRED pass -> 403 PASS_EXPIRED', code == 403 and res['data']['code'] == 'PASS_EXPIRED', res)
+    code, v = verify({'plate': 'LPX 2002', 'gate_type': 'Ingress'}, guard)
+    check('manual plate lookup says EXPIRED (not MANUAL / accepted)', v.get('result') == 'EXPIRED' and not v['accepted'], v)
+    set_status(e['id'], 'Inside Campus')
+    code, res = phone_entry('LPX 2002', action='Exit Approved')
+    check('an expired pass may still leave campus', code == 201, res)
+    call('PUT', 'vehicles.php', {'id': e['id'], 'passValidUntil': '2026-12-31'}, admin)
+    code, res = phone_entry('LPX 2002')
+    check('entry works again once the pass is valid', code == 201, res)
+
+    # --- 3. only a listed driver may be admitted, from the phone too
+    d = reg('LPX 3003', 'LP-X3')
+    pay(d['id'])
+    code, res = phone_entry('LPX 3003', driver='Totally Unlisted Person')
+    check('phone entry by an unlisted driver -> 400 DRIVER_NOT_AUTHORIZED', code == 400 and res['data']['code'] == 'DRIVER_NOT_AUTHORIZED', res)
+    code, res = phone_entry('LPX 3003', driver='')
+    check('phone entry with no driver -> 400 DRIVER_CONFIRMATION_REQUIRED', code == 400 and res['data']['code'] == 'DRIVER_CONFIRMATION_REQUIRED', res)
+    code, res = phone_entry('LPX 3003', driver='Unverified')
+    check('"Unverified" is not a driver either -> 400', code == 400, res)
+    code, res = phone_entry('LPX 3003', driver='  lia   LOOPHOLE ')
+    check('a listed driver (case / spacing ignored) is admitted and verified', code == 201, res)
+    _, logs = call('GET', 'logs.php?limit=5', token=admin)
+    check('  ...logged as the verified driver', logs['data'][0]['verifiedDriverName'] == 'Lia Loophole', logs['data'][0])
+    set_status(d['id'], 'Outside')
+    code, res = phone_entry('LPX 3003', driver='Someone Else', action='Exit Approved')
+    check('exit by an unlisted driver -> 400 DRIVER_NOT_AUTHORIZED', code == 400 and res['data']['code'] == 'DRIVER_NOT_AUTHORIZED', res)
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'LPX 3033', 'ownerName': 'Vee Ip', 'ownerIdNumber': 'LP-X33', 'passClass': 'VIP'}, admin)
+    code, res = phone_entry('LPX 3033', driver='Any Chauffeur')
+    check('VIP vehicles keep their exemption from the driver check', code == 201, res)
+
+    # --- offline sync: the server flags what the phone could not know
+    now = datetime.datetime.now(datetime.timezone.utc)
+    unpaid = reg('LPX 3500', 'LP-X35')
+    code, res = call('POST', 'sync.php', {'events': [{'client_ref': 'T-loophole-flags-0001', 'type': 'gate_log', 'occurred_at': (now - datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                                      'payload': {'plate': 'LPX 3500', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driverName': 'Stranger'}}]}, headers=SCANNER)
+    flags = res['data']['results'][0]['flags'] if code == 200 else None
+    check('offline entry of an unpaid vehicle by an unlisted driver is recorded and FLAGGED', flags is not None and 'UNPAID' in flags and 'DRIVER_NOT_LISTED' in flags, res)
+
+    # --- 4. a vehicle with history cannot be deleted
+    clean = reg('LPX 4004', 'LP-X4')
+    code, res = call('DELETE', f"vehicles.php?id={clean['id']}", token=admin)
+    check('a vehicle with no history can still be deleted (registered by mistake)', code == 200, res)
+    code, res = call('DELETE', f"vehicles.php?id={clean['id']}", token=admin)
+    check('deleting a missing vehicle -> 404', code == 404, res)
+    h = reg('LPX 4040', 'LP-X40')
+    pay(h['id'])
+    call('POST', 'violations.php', {'vehicle_id': h['id'], 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'probe'}, guard)
+    code, res = call('DELETE', f"vehicles.php?id={h['id']}", token=admin)
+    check('a vehicle on violation hold cannot be deleted -> 409 VEHICLE_HAS_HISTORY', code == 409 and res['data']['code'] == 'VEHICLE_HAS_HISTORY' and res['data']['violations'] == 1, res)
+    code, res = call('GET', 'violations.php?status=Pending&plate=LPX4040', token=admin)
+    check('  ...the violation and the hold are still there', len(res['data']) == 1, res)
+    r = reg('LPX 4141', 'LP-X41')
+    pay(r['id'])
+    code, res = call('DELETE', f"vehicles.php?id={r['id']}", token=admin)
+    check('a vehicle that has paid cannot be deleted either', code == 409 and res['data']['payments'] == 1, res)
+    code, res = call('DELETE', f"vehicles.php?id={u['id']}", token=admin)
+    check('a vehicle with gate passages cannot be deleted', code == 409 and res['data']['gatePassages'] >= 1, res)
+    code, _ = call('DELETE', f"vehicles.php?id={clean['id']}", token=guard)
+    check('guards cannot delete -> 403', code == 403, code)
+
+    # --- 5. the fee follows the vehicle when its class changes
+    b = reg('LPX 5005', 'LP-X5', 'Bicycle')
+    check('(setup) bicycle is free', b['paymentStatus'] == 'Waived' and b['qrPayload'], b)
+    code, res = call('PUT', 'vehicles.php', {'id': b['id'], 'makeModelColor': 'Blue'}, admin)
+    check('an unrelated edit does not re-price', res['data']['paymentStatus'] == 'Waived', res['data'])
+    code, res = call('PUT', 'vehicles.php', {'id': b['id'], 'vehicleType': '4-Wheel'}, admin)
+    check('bicycle re-typed as a car -> Unpaid, fee 500, no QR', code == 200 and res['data']['paymentStatus'] == 'Unpaid' and res['data']['feeAmount'] == 500
+          and res['data']['qrPayload'] is None, res)
+    code, res = phone_entry('LPX 5005')
+    check('  ...and it cannot enter until paid', code == 403 and res['data']['code'] == 'VEHICLE_UNPAID', res)
+    code, res = pay(b['id'])
+    check('  ...paying settles it', code == 201 and res['data']['payment']['amount'] == 500 and res['data']['vehicle']['paymentStatus'] == 'Paid'
+          and res['data']['vehicle']['qrPayload'], res)
+
+    m = reg('LPX 5050', 'LP-X50', 'Motorcycle')
+    pay(m['id'])
+    code, res = call('PUT', 'vehicles.php', {'id': m['id'], 'vehicleType': '4-Wheel'}, admin)
+    check('motorcycle (250 paid) re-typed as a car -> only the 250 difference is due', res['data']['paymentStatus'] == 'Unpaid' and res['data']['feeAmount'] == 250, res['data'])
+    code, res = pay(m['id'])
+    check('  ...the receipt is for the difference, the vehicle shows 500 paid in total', res['data']['payment']['amount'] == 250 and res['data']['vehicle']['feeAmount'] == 500, res)
+    code, res = call('PUT', 'vehicles.php', {'id': m['id'], 'vehicleType': 'Motorcycle'}, admin)
+    check('re-typing to a cheaper class never refunds or re-bills', res['data']['paymentStatus'] == 'Paid', res['data'])
+
+    vip = reg('LPX 5555', 'LP-X55', passClass='VIP')
+    check('(setup) VIP registered free', vip['paymentStatus'] == 'Waived', vip)
+    code, res = call('PUT', 'vehicles.php', {'id': vip['id'], 'passClass': 'Standard'}, admin)
+    check('withdrawing VIP bills the normal fee', res['data']['paymentStatus'] == 'Unpaid' and res['data']['feeAmount'] == 500, res['data'])
+
+    # vehicles that pre-date payments (grandfathered Paid, no payment on record) are left alone
+    db = sqlite3.connect(SQLITE_DB)
+    cur = db.execute("INSERT INTO vehicles (plate_number, vehicle_type, make_model_color, owner_name, owner_id_number) VALUES ('LPX 6006', '4-Wheel (Sedan)', 'Old car', 'Old Timer', 'LP-X6')")
+    db.commit()
+    old_id = cur.lastrowid
+    db.close()
+    code, res = call('PUT', 'vehicles.php', {'id': old_id, 'vehicleType': '4-Wheel'}, admin)
+    check('a grandfathered vehicle edited later stays Paid', code == 200 and res['data']['paymentStatus'] == 'Paid', res)
+    AUTO_PAY = True
+
+
+def test_one_vehicle_per_id(admin):
+    section('One vehicle per ID number')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0001', 'ownerName': 'Una Owner', 'ownerIdNumber': 'NCST-ONE-1'}, admin)
+    first = res['data']
+    check('first vehicle for an ID registers', code == 201, res)
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0002', 'ownerName': 'Una Owner', 'ownerIdNumber': 'NCST-ONE-1'}, admin)
+    check('second vehicle, same ID -> 409 OWNER_HAS_VEHICLE naming the existing plate', code == 409
+          and res['data']['code'] == 'OWNER_HAS_VEHICLE' and res['data']['plateNumber'] == 'ONE 0001' and 'ONE 0001' in res['message'], res)
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0003', 'ownerName': 'Una Owner', 'ownerIdNumber': '  ncst-one-1 '}, admin)
+    check('same ID with different case / spaces is still refused', code == 409, res)
+    code, res = call('GET', 'vehicles.php?plate=ONE0002', token=admin)
+    check('the refused vehicle was not saved', code == 404, code)
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0004', 'ownerName': 'Other Owner', 'ownerIdNumber': 'NCST-ONE-2'}, admin)
+    other = res['data']
+    check('a different ID registers fine', code == 201, res)
+    code, res = call('PUT', 'vehicles.php', {'id': other['id'], 'ownerIdNumber': 'NCST-ONE-1'}, admin)
+    check('re-assigning a vehicle to an ID that already has one -> 409', code == 409 and res['data']['code'] == 'OWNER_HAS_VEHICLE', res)
+    code, res = call('PUT', 'vehicles.php', {'id': first['id'], 'ownerIdNumber': 'ncst-one-1', 'makeModelColor': 'Blue Vios'}, admin)
+    check('editing a vehicle keeps its own ID (case change ok)', code == 200 and res['data']['makeModelColor'] == 'Blue Vios', res)
+    code, res = call('PUT', 'vehicles.php', {'id': other['id'], 'ownerIdNumber': 'NCST-ONE-3'}, admin)
+    check('moving a vehicle to a free ID works', code == 200 and res['data']['ownerIdNumber'] == 'NCST-ONE-3', res)
+    code, _ = call('POST', 'vehicles.php', {'plateNumber': 'ONE 0005', 'ownerName': 'X', 'ownerIdNumber': 'NCST-ONE-9'}, guard)
+    check('guards still cannot register vehicles -> 403', code == 403, code)
+
+
+class FakeSmtp:
+    """A tiny SMTP server that records every message, so the real mail code runs end to end without sending anything."""
+
+    def __init__(self, port, user='sp-user', password='sp-pass'):
+        import socket, threading
+        self.messages, self.user, self.password = [], user, password
+        self.sock = socket.socket()
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(('127.0.0.1', port))
+        self.sock.listen(5)
+        self.running = True
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        import threading
+        while self.running:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    def _handle(self, conn):
+        import base64
+        f = conn.makefile('rwb', buffering=0)
+
+        def send(line):
+            f.write((line + '\r\n').encode())
+
+        send('220 fake.smtp ready')
+        rcpt, auth_step, authed = [], 0, False
+        while True:
+            line = f.readline()
+            if not line:
+                return
+            cmd = line.decode(errors='replace').strip()
+            up = cmd.upper()
+            if auth_step == 1:
+                auth_step = 2 if base64.b64decode(cmd).decode() == self.user else -1
+                send('334 UGFzc3dvcmQ6')
+            elif auth_step in (2, -1):
+                ok = auth_step == 2 and base64.b64decode(cmd).decode() == self.password
+                authed = ok
+                auth_step = 0
+                send('235 ok' if ok else '535 bad credentials')
+            elif up.startswith('EHLO'):
+                send('250-fake.smtp')
+                send('250 AUTH LOGIN')
+            elif up.startswith('AUTH LOGIN'):
+                auth_step = 1
+                send('334 VXNlcm5hbWU6')
+            elif up.startswith('MAIL FROM'):
+                send('250 ok' if authed else '530 auth required')
+            elif up.startswith('RCPT TO'):
+                rcpt.append(cmd[cmd.index('<') + 1:cmd.index('>')])
+                send('250 ok')
+            elif up == 'DATA':
+                send('354 go')
+                data = b''
+                while not data.endswith(b'\r\n.\r\n'):
+                    chunk = f.readline()
+                    if not chunk:
+                        return
+                    data += chunk
+                self.messages.append({'to': list(rcpt), 'raw': data})
+                rcpt = []
+                send('250 queued')
+            elif up == 'QUIT':
+                send('221 bye')
+                conn.close()
+                return
+            else:
+                send('250 ok')
+
+    def stop(self):
+        self.running = False
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+    @staticmethod
+    def parse(raw):
+        import email, email.header
+        msg = email.message_from_bytes(raw)
+        subject = str(email.header.make_header(email.header.decode_header(msg['Subject'])))
+        text = ''
+        for part in msg.walk():
+            if part.get_content_type() == 'text/plain':
+                text = part.get_payload(decode=True).decode()
+        return subject, text, msg
+
+
+def test_owner_notices(admin):
+    """Blocked / violation notices: student portal feed + e-mail through SMTP; on-campus details for the guard."""
+    import re, sqlite3, time
+    section('Owner notices (portal + e-mail) and on-campus details')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    secret = open(os.path.join(ROOT, 'backend', 'config', 'secret.php'), encoding='utf-8').read()
+    smtp_cfg = re.search(r"define\('SP_SMTP_HOST',\s*'127\.0\.0\.1'\)", secret) and re.search(r"define\('SP_SMTP_PORT',\s*(\d+)\)", secret)
+    smtp = FakeSmtp(int(smtp_cfg.group(1))) if smtp_cfg else None
+    if not smtp:
+        print('  (SMTP is not pointed at 127.0.0.1 in secret.php: the e-mail checks are skipped)')
+
+    def new_owner(plate, owner_id, email=None, with_email_account=False):
+        body = {'plateNumber': plate, 'ownerName': 'Nina Notice', 'ownerIdNumber': owner_id, 'ownerPhone': '0917 123 4567', 'department': 'BSIT',
+                'authorizedDrivers': [{'fullName': 'Nina Notice', 'relationship': 'Self (Owner)'}]}
+        if email:
+            body['ownerEmail'] = email
+        code, res = call('POST', 'vehicles.php', body, admin)
+        v = res['data']
+        temp_pw = v['studentAccount']['tempPassword']
+        tok = call('POST', 'auth.php?action=login&realm=student', {'username': owner_id, 'password': temp_pw})[1]['data']['token']
+        call('POST', 'auth.php?action=change_password', {'current_password': temp_pw, 'new_password': 'Student-Note-2026'}, tok)
+        return v, tok
+
+    def notices(tok, wait_for=None):
+        for _ in range(40):
+            code, res = call('GET', 'student.php?action=notices', token=tok)
+            rows = res['data']
+            if wait_for is None or (rows and rows[0]['emailStatus'] in wait_for):
+                return rows
+            time.sleep(0.15)
+        return rows
+
+    # --- a violation
+    v1, tok1 = new_owner('NTC 1001', 'NTC-OWNER-1', 'nina@example.com')
+    code, res = call('POST', 'violations.php', {'vehicle_id': v1['id'], 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'Blocking the hydrant'}, guard)
+    check('guard issues the violation', code == 201, res)
+    rows = notices(tok1, ['Sent', 'Failed', 'Skipped'])
+    check('the owner sees a Violation notice in the student portal', len(rows) == 1 and rows[0]['kind'] == 'Violation' and rows[0]['plateNumber'] == 'NTC 1001'
+          and 'Parking in Fire Lane' in rows[0]['title'] and 'Blocking the hydrant' in rows[0]['message'], rows)
+    check('  ...and the portal never exposes the e-mail address or error', set(rows[0]) == {'id', 'kind', 'title', 'message', 'plateNumber', 'emailStatus', 'emailed', 'createdAt'}, sorted(rows[0]))
+    if smtp:
+        check('  ...the e-mail was sent through SMTP', rows[0]['emailStatus'] == 'Sent' and rows[0]['emailed'] is True, rows[0])
+        check('  ...to the owner address', len(smtp.messages) == 1 and smtp.messages[0]['to'] == ['nina@example.com'], [m['to'] for m in smtp.messages])
+        subject, text, _ = FakeSmtp.parse(smtp.messages[0]['raw'])
+        check('  ...subject names the plate; the body has the violation, the notes and what to do',
+              'NTC 1001' in subject and 'Parking in Fire Lane' in text and 'Blocking the hydrant' in text and 'cannot enter or leave campus' in text, (subject, text[:200]))
+    else:
+        check('  ...without SMTP the e-mail is Skipped, the portal notice stays', rows[0]['emailStatus'] in ('Skipped', 'Failed'), rows[0])
+
+    # --- a block at the gate (guard flags the vehicle)
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'NTC 1001', 'reason': 'Plate & Vehicle Profile Mismatch', 'ownerName': 'Nina Notice', 'vehicleType': '4-Wheel',
+                                               'gatePoint': 'Gate 1 (Main Ingress)', 'notes': 'Driver did not match'}, guard)
+    check('guard blocks the vehicle at the gate', code == 201, res)
+    rows = notices(tok1, ['Sent', 'Failed', 'Skipped'])
+    check('the owner sees a Blocked notice with the reason and case number', len(rows) == 2 and rows[0]['kind'] == 'Blocked'
+          and 'Plate & Vehicle Profile Mismatch' in rows[0]['message'] and 'CASE-' in rows[0]['message'], rows)
+    if smtp:
+        check('  ...and a second e-mail went out', rows[0]['emailStatus'] == 'Sent' and len(smtp.messages) == 2, (rows[0]['emailStatus'], len(smtp.messages)))
+
+    # --- an owner without an e-mail address still gets the portal notice
+    v2, tok2 = new_owner('NTC 2002', 'NTC-OWNER-2')
+    call('POST', 'incidents.php', {'plateNumber': 'NTC 2002', 'reason': 'Security Officer Intervention', 'ownerName': 'Nina Notice', 'gatePoint': 'Gate 1 (Main Ingress)'}, guard)
+    rows = notices(tok2)
+    check('no e-mail on file: portal notice exists, e-mail Skipped', len(rows) == 1 and rows[0]['emailStatus'] == 'Skipped' and rows[0]['emailed'] is False, rows)
+    check("another owner's notices are not visible (scoped by login)", all(r['plateNumber'] == 'NTC 2002' for r in rows) and len(notices(tok1)) == 2, rows)
+    code, _ = call('GET', 'student.php?action=notices', token=admin)
+    check('staff token cannot read the student feed -> 401', code == 401, code)
+    code, _ = call('GET', 'student.php?action=notices')
+    check('the feed needs a sign-in -> 401', code == 401, code)
+
+    # --- an unregistered plate has no owner to tell
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'UNK 0000', 'reason': 'Unauthorized / Unregistered Driver', 'gatePoint': 'Gate 1 (Main Ingress)'}, guard)
+    check('blocking an unregistered plate works and notifies nobody', code == 201 and len(notices(tok1)) == 2 and len(notices(tok2)) == 1, res)
+
+    # --- SMTP trouble is recorded, never fatal
+    if smtp:
+        smtp.stop()
+        time.sleep(0.2)
+        code, res = call('POST', 'violations.php', {'vehicle_id': v1['id'], 'type': 'Unauthorized Driver at Helm', 'notes': 'mail server is down'}, guard)
+        check('the violation is still recorded when SMTP is down', code == 201, res)
+        rows = notices(tok1, ['Sent', 'Failed', 'Skipped'])
+        check('  ...the owner sees it at once', 'mail server is down' in rows[0]['message'], rows[0])
+        check('  ...the notice stays in the portal and the e-mail is marked Failed', rows[0]['kind'] == 'Violation' and rows[0]['emailStatus'] == 'Failed', rows[0])
+
+    # --- the guard's phone gets contact + on-campus details for a vehicle that is already inside
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicles SET status = 'Inside Campus' WHERE id = ?", (v1['id'],))
+    db.execute("DELETE FROM gate_logs WHERE plate_number = 'NTC 1001'")
+    db.execute("INSERT INTO gate_logs (plate_number, driver_name, verified_driver_name, action, gate_type, gate_point, status, guard_name, logged_at) "
+               "VALUES ('NTC 1001', 'Nina Notice', 'Nina Notice', 'Entry Recorded', 'Ingress', 'Gate 1 (Main Ingress)', 'Inside Campus', 'Officer Reyes', datetime('now', '+8 hours', '-3 hours'))")
+    db.commit()
+    db.close()
+    code, v = verify({'plate': 'NTC 1001', 'gate_type': 'Ingress'}, guard)
+    oc = v.get('onCampus') or {}
+    check('scanning a vehicle already inside returns where it is and who to call', v.get('currentlyInside') is True and oc.get('ownerPhone') == '0917 123 4567'
+          and oc.get('enteredBy') == 'Nina Notice' and oc.get('admittedBy') == 'Officer Reyes' and oc.get('gatePoint') == 'Gate 1 (Main Ingress)'
+          and 2.5 <= (oc.get('hoursInside') or 0) <= 3.5, v)
+    check('  ...the vehicle record carries the contact number and department', v['vehicle']['ownerPhone'] == '0917 123 4567' and v['vehicle']['department'] == 'BSIT', v['vehicle'])
+    code, v = verify({'plate': 'NTC 2002', 'gate_type': 'Ingress'}, guard)
+    check('a vehicle that is not inside has no on-campus block', v.get('onCampus') is None, v.get('onCampus'))
+    if smtp:
+        smtp.stop()
+
+
+def test_payments(admin):
+    """Registration fee: cashier cash payment, PayMongo checkout (local mock gateway), QR only after payment."""
+    global AUTO_PAY
+    section('Registration fee payments (cashier + online)')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def register(plate, owner_id, vtype=None, **extra):
+        body = {'plateNumber': plate, 'ownerName': 'Pat Payer', 'ownerIdNumber': owner_id}
+        if vtype:
+            body['vehicleType'] = vtype
+        body.update(extra)
+        return call('POST', 'vehicles.php', body, admin)
+
+    def new_student(plate, owner_id, vtype='4-Wheel'):
+        code, res = register(plate, owner_id, vtype)
+        temp_pw = res['data']['studentAccount']['tempPassword']
+        t = call('POST', 'auth.php?action=login&realm=student', {'username': owner_id, 'password': temp_pw})[1]['data']['token']
+        call('POST', 'auth.php?action=change_password', {'current_password': temp_pw, 'new_password': 'Student-Pay-2026'}, t)
+        return res['data'], t
+
+    # Fees by vehicle type
+    for plate, vtype, status, fee in [('PAY 0001', 'Bicycle', 'Waived', 0), ('PAY 0002', 'Motorcycle', 'Unpaid', 250),
+                                      ('PAY 0003', '3-Wheel (Tricycle)', 'Unpaid', 250), ('PAY 0004', '4-Wheel', 'Unpaid', 500),
+                                      ('PAY 0005', 'Campus Fleet', 'Unpaid', 500)]:
+        code, res = register(plate, 'PAY-' + plate[-4:], vtype)
+        d = res['data']
+        check(f'{vtype}: fee {fee}, {status}', code == 201 and d['paymentStatus'] == status and d['feeAmount'] == fee, d)
+        check(f'{vtype}: QR only when not Unpaid', bool(d['qrPayload']) == (status != 'Unpaid'), d.get('qrPayload'))
+    code, res = register('PAY 0006', 'PAY-VIP', '4-Wheel', passClass='VIP')
+    check('VIP registration is waived', code == 201 and res['data']['paymentStatus'] == 'Waived' and res['data']['qrPayload'], res)
+
+    # Unpaid vehicle: no QR anywhere, gate refuses entry
+    owner = 'PAY-OWNER-1'
+    code, res = register('PAY 1001', owner, '4-Wheel')
+    veh = res['data']
+    temp = res['data']['studentAccount']['tempPassword']
+    check('unpaid vehicle: admin sees no QR', veh['paymentStatus'] == 'Unpaid' and veh['qrPayload'] is None, veh)
+    code, res = call('GET', 'vehicles.php?plate=PAY1001', token=admin)
+    check('unpaid vehicle: lookup has no QR', res['data']['qrPayload'] is None, res)
+    code, v = verify({'plate': 'PAY 1001', 'gate_type': 'Ingress'}, guard)
+    check('unpaid vehicle is refused at entry (UNPAID)', v.get('result') == 'UNPAID' and v.get('accepted') is False, v)
+    code, res = call('POST', 'auth.php?action=login&realm=student', {'username': owner, 'password': temp})
+    tok = res['data']['token']
+    call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Student-Pay-2026'}, tok)
+    code, res = call('GET', 'student.php?action=vehicles', token=tok)
+    sv = res['data'][0]
+    check('student portal: Unpaid, fee 500, no QR', sv['paymentStatus'] == 'Unpaid' and sv['feeAmount'] == 500 and sv['qrPayload'] is None, sv)
+    code, res = call('GET', 'student.php?action=me', token=tok)
+    check('student summary counts unpaid vehicles', res['data']['summary']['unpaidVehicles'] == 1, res['data']['summary'])
+
+    # Editing an unpaid vehicle updates its fee
+    code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'vehicleType': 'Motorcycle'}, admin)
+    check('unpaid fee follows a vehicle type edit (250)', code == 200 and res['data']['feeAmount'] == 250 and res['data']['paymentStatus'] == 'Unpaid', res)
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'vehicleType': '4-Wheel'}, admin)
+    call('PUT', 'vehicles.php', {'id': veh['id'], 'paymentStatus': 'Paid', 'makeModelColor': 'Edited'}, admin)
+    code, res = call('GET', 'vehicles.php?plate=PAY1001', token=admin)
+    check('payment status cannot be set through a vehicle edit', res['data']['paymentStatus'] == 'Unpaid' and res['data']['feeAmount'] == 500, res)
+
+    # Cashier
+    code, _ = call('GET', 'payments.php?view=unpaid', token=guard)
+    check('guard cannot use the cashier -> 403', code == 403, code)
+    code, _ = call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id']}, tok)
+    check('student token cannot use the cashier -> 401', code == 401, code)
+    code, res = call('GET', 'payments.php?view=unpaid', token=admin)
+    check('cashier queue lists the unpaid vehicle', code == 200 and any(x['plateNumber'] == 'PAY 1001' and x['feeAmount'] == 500 for x in res['data']), res)
+    code, res = call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id'], 'tendered': 100}, admin)
+    check('cash below the fee is refused', code == 400, res)
+    code, res = call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id'], 'tendered': 1000}, admin)
+    pay = res['data']['payment']
+    check('cash payment -> receipt with change', code == 201 and pay['receiptNumber'].startswith('OR-') and pay['change'] == 500
+          and pay['method'] == 'Cash' and pay['status'] == 'Paid', res)
+    paid = res['data']['vehicle']
+    check('QR issued after payment', paid['paymentStatus'] == 'Paid' and paid['qrPayload'] and paid['passId'] != veh['passId'], paid)
+    code, v = verify({'qr_code': paid['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('paid pass verifies at the gate', v.get('result') == 'VALID' and v.get('accepted') is True, v)
+    code, res = call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id']}, admin)
+    check('second payment for a paid vehicle -> 409', code == 409, res)
+    code, res = call('GET', 'student.php?action=vehicles', token=tok)
+    check('student now sees the QR', res['data'][0]['qrPayload'] == paid['qrPayload'], res)
+    code, res = call('GET', 'student.php?action=payments', token=tok)
+    check('student sees the receipt', len(res['data']) == 1 and res['data'][0]['receiptNumber'] == pay['receiptNumber'], res)
+
+    # Online (local mock gateway)
+    return_url = BASE.split('/web-app-admin/api')[0] + '/web-app-student/'
+    online, tok2 = new_student('PAY 2001', 'PAY-OWNER-2')
+    code, res = register('PAY 2002', 'PAY-OTHER', '4-Wheel')
+    other = res['data']
+    code, res = call('POST', 'student_pay.php', {'vehicleId': other['id'], 'returnUrl': return_url}, tok2)
+    check("cannot pay for someone else's vehicle -> 404", code == 404, res)
+    code, res = call('POST', 'student_pay.php', {'vehicleId': online['id'], 'returnUrl': 'https://evil.example/steal'}, tok2)
+    check('return URL on another host refused -> 400', code == 400, res)
+    code, res = call('POST', 'student_pay.php', {'vehicleId': veh['id'], 'returnUrl': return_url}, tok)
+    check('already-paid vehicle cannot start a checkout -> 409', code == 409, res)
+    code, res = call('POST', 'student_pay.php', {'vehicleId': online['id'], 'returnUrl': return_url}, admin)
+    check('staff token cannot start a student checkout -> 401', code == 401, res)
+    code, res = call('POST', 'student_pay.php', {'vehicleId': online['id'], 'returnUrl': return_url}, tok2)
+    check('student starts an online payment', code == 201 and res['data']['checkoutUrl'] and res['data']['amount'] == 500, res)
+    pid = res['data']['paymentId']
+    checkout = res['data']['checkoutUrl']
+    code, res = call('GET', f'student_pay.php?paymentId={pid}', token=tok2)
+    check('pending until the gateway confirms', res['data']['status'] == 'Pending', res)
+    code, res = call('GET', 'student.php?action=vehicles', token=tok2)
+    check('still no QR while pending', [x for x in res['data'] if x['plateNumber'] == 'PAY 2001'][0]['qrPayload'] is None, res)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    def press(checkout_url, do):
+        """Presses a button on the test checkout page; returns the Location it redirects to."""
+        form = urllib.parse.parse_qs(urllib.parse.urlparse(checkout_url).query)
+        body = urllib.parse.urlencode({'session': form['session'][0], 'return': form['return'][0], 'do': do}).encode()
+        try:
+            urllib.request.build_opener(NoRedirect).open(urllib.request.Request(checkout_url, data=body))
+            return ''
+        except urllib.error.HTTPError as e:
+            return e.headers.get('Location', '')
+
+    location = press(checkout, 'pay')
+    check('checkout redirects back to the portal with the result', location.startswith(return_url) and 'payment=success' in location, location)
+    code, res = call('GET', f'student_pay.php?paymentId={pid}', token=tok2)
+    check('payment settled', res['data']['status'] == 'Paid' and res['data']['method'] == 'PayMongo' and res['data']['receiptNumber'], res)
+    code, res2 = call('GET', f'student_pay.php?paymentId={pid}', token=tok2)
+    check('settling is idempotent (same receipt)', res2['data']['receiptNumber'] == res['data']['receiptNumber'], res2)
+    code, res = call('GET', 'student.php?action=vehicles', token=tok2)
+    pv = [x for x in res['data'] if x['plateNumber'] == 'PAY 2001'][0]
+    check('QR active after online payment', pv['paymentStatus'] == 'Paid' and pv['qrPayload'], pv)
+    code, v = verify({'qr_code': pv['qrPayload'], 'gate_type': 'Ingress'}, guard)
+    check('online-paid pass verifies at the gate', v.get('result') == 'VALID', v)
+
+    # Cancelling on the checkout page leaves the vehicle unpaid
+    v3, tok3 = new_student('PAY 2003', 'PAY-OWNER-3')
+    code, started = call('POST', 'student_pay.php', {'vehicleId': v3['id'], 'returnUrl': return_url}, tok3)
+    location = press(started['data']['checkoutUrl'], 'cancel')
+    check('cancelled checkout returns with payment=cancelled', 'payment=cancelled' in location, location)
+    code, res = call('GET', f"student_pay.php?paymentId={started['data']['paymentId']}", token=tok3)
+    check('cancelling does not pay', res['data']['status'] == 'Pending', res)
+
+    # Cash while an online checkout is open: the checkout is cancelled and cannot double-charge
+    race, tok4 = new_student('PAY 3001', 'PAY-OWNER-4')
+    code, res = call('POST', 'student_pay.php', {'vehicleId': race['id'], 'returnUrl': return_url}, tok4)
+    rpid, rcheckout = res['data']['paymentId'], res['data']['checkoutUrl']
+    code, res = call('GET', 'payments.php?view=unpaid', token=admin)
+    check('queue flags the open online checkout', any(x['plateNumber'] == 'PAY 3001' and x['onlineCheckoutOpen'] for x in res['data']), res)
+    code, res = call('POST', 'payments.php', {'action': 'cash', 'vehicleId': race['id']}, admin)
+    check('cashier settles it', code == 201, res)
+    press(rcheckout, 'pay')
+    code, res = call('GET', f'student_pay.php?paymentId={rpid}', token=tok4)
+    check('the superseded online checkout stays Cancelled (no double payment)', res['data']['status'] == 'Cancelled', res)
+
+    # Reporting
+    code, res = call('GET', 'payments.php', token=admin)
+    s = res['data']['summary']
+    check('history + today totals', code == 200 and s['cashToday']['count'] >= 2 and s['onlineToday']['count'] == 1
+          and s['collectedToday'] >= 1500 and s['onlineMock'] is True and s['unpaidCount'] >= 4, s)
+    code, res = call('GET', 'payments.php?method=PayMongo&q=PAY2001', token=admin)
+    check('filter by method + plate', len(res['data']['payments']) == 1 and res['data']['payments'][0]['plateNumber'] == 'PAY 2001', res)
+    code, res = call('GET', 'payments.php?q=PAY%202001', token=admin)
+    check('search by plate with a space', len(res['data']['payments']) == 1, res)
+
+    # Webhook refuses unsigned calls
+    code, res = call('POST', 'paymongo_webhook.php', {'data': {'attributes': {'type': 'checkout_session.payment.paid'}}})
+    check('webhook without a valid signature -> 401', code == 401, res)
+    AUTO_PAY = True
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -1295,6 +1881,10 @@ def main():
     test_scheduled_and_revoked_passes(admin)
     test_vip_passes(admin)
     test_offline_sync(admin)
+    test_payments(admin)
+    test_one_vehicle_per_id(admin)
+    test_loophole_fixes(admin)
+    test_owner_notices(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
 

@@ -177,7 +177,7 @@
   const RESULT_LABELS = {
     VALID: 'Valid QR pass', LEGACY: 'Older pass', MANUAL: 'Plate number check', FORGED: 'Fake or changed pass',
     REVOKED: 'Cancelled pass', EXPIRED: 'Expired pass', EXPIRED_TEMP: 'Expired day pass', NOT_YET_VALID: 'Pass not active yet',
-    BANNED: 'Banned vehicle', SUSPENDED: 'Registration on hold', NOT_FOUND: 'Not found'
+    BANNED: 'Violation hold', SUSPENDED: 'Registration on hold', NOT_FOUND: 'Not found'
   };
 
   function setCheckStatus(text, state) {
@@ -223,7 +223,7 @@
             <button type="button" data-act="deny" class="px-4 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">
               Deny ${dirLabel === 'ENTRY' ? 'Entry' : 'Exit'}
             </button>
-            ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
+            ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">Issue Violation</button>' : ''}
             <button type="button" data-act="reset" class="ml-auto px-3 py-2 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">Cancel</button>
           </div>
           <div id="gateDenyPanel" class="hidden rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight/70 p-3 space-y-2">
@@ -247,7 +247,7 @@
         <div class="border-t border-slate-100 px-5 py-4 flex flex-wrap items-center gap-3">
           <p class="text-xs text-slate-600 flex-1 min-w-[200px]">${logged}</p>
           ${r.result === 'NOT_FOUND' && r.gateType === 'Ingress' ? '<button type="button" data-act="visitor" class="px-3 py-2.5 rounded-md border border-ncst-navy/20 bg-ncst-navy/5 hover:bg-ncst-navy/10 text-sm font-bold text-ncst-navy cursor-pointer">Issue Visitor Pass</button>' : ''}
-          ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-gold/40 bg-ncst-goldLight hover:bg-amber-100 text-sm font-bold text-amber-950 cursor-pointer">Issue Warning</button>' : ''}
+          ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">Issue Violation</button>' : ''}
           <button type="button" data-act="reset" class="px-5 py-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold cursor-pointer">Scan Next</button>
         </div>`;
     }
@@ -286,13 +286,12 @@
       SPViolations.openFlagModal(r.vehicle, {
         context: `Gate ${r.gateType === 'Ingress' ? 'entry' : 'exit'} check (${RESULT_LABELS[r.result] || r.result})`,
         onDone: (res) => {
-          if (res.banned && r.accepted && r.gateType === 'Ingress') {
-            // The vehicle just got banned: this entry can no longer be approved
+          if (res.onHold && r.accepted) {
+            // The vehicle is now on hold: it can neither enter nor leave, so this passage can no longer be approved
             resetResult();
-            SP.showToast(`${r.vehicle.plateNumber} is now BANNED. Entry must be refused.`);
+            SP.showToast(`${r.vehicle.plateNumber} is now on violation hold. Do not let it ${r.gateType === 'Ingress' ? 'enter' : 'leave'}.`);
             return;
           }
-          r.vehicle.warningCount = res.vehicle.warningCount;
           r.vehicle.isBanned = res.vehicle.isBanned;
           renderResult();
         }
@@ -316,10 +315,9 @@
   }
 
   function vehicleBlock(v, r) {
-    const strikes = Number(v.warningCount || 0);
     const standing = v.isBanned
-      ? '<span class="px-2 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">BANNED</span>'
-      : (strikes > 0 ? `<span class="px-2 py-0.5 rounded bg-ncst-goldLight text-amber-950 border border-ncst-gold/40 text-[10px] font-extrabold">STRIKE ${strikes} OF 3</span>` : '');
+      ? '<span class="px-2 py-0.5 rounded bg-ncst-crimson text-white text-[10px] font-extrabold">VIOLATION HOLD</span>'
+      : '';
     const drivers = v.authorizedDrivers || [];
     const ownerPhoto = v.ownerPhoto || v.ownerPhotoUrl;
     const vipBanner = v.isVip
