@@ -1,13 +1,20 @@
 -- ==============================================================================
 -- SecurePark: Campus Gate Custody & Vehicle Administration System
 -- Target Host: InfinityFree MySQL (phpMyAdmin)
--- WARNING: FRESH INSTALL ONLY. This drops every table. For an existing database
---          run database/migrations/001_v2.sql instead.
+-- WARNING: FRESH INSTALL ONLY. This DROPS EVERY TABLE and recreates it empty (all data is lost).
+--          Import it once into an empty database (phpMyAdmin > Import) and nothing else is needed:
+--          it already contains everything from migrations 001 to 008 (v2 security, visitor items,
+--          settings, vehicle status, VIP, offline sync, registration payments, owner notices).
+--          For an EXISTING database that must keep its data, run database/migrations/ instead.
+-- First sign-in: admin / Password123!  (you are forced to change it immediately).
 -- Timezone: all DATETIME values are Asia/Manila (UTC+8)
 -- Engine: InnoDB | Character Set: utf8mb4 | Collation: utf8mb4_unicode_ci
 -- ==============================================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS `owner_notices`;
+DROP TABLE IF EXISTS `payments`;
+DROP TABLE IF EXISTS `system_settings`;
 DROP TABLE IF EXISTS `auth_tokens`;
 DROP TABLE IF EXISTS `student_accounts`;
 DROP TABLE IF EXISTS `visitor_pass_items`;
@@ -44,11 +51,14 @@ CREATE TABLE `vehicles` (
   `sticker_year` VARCHAR(20) NOT NULL DEFAULT '2026',
   `last_entry_time` VARCHAR(50) NULL,
   `last_gate_point` VARCHAR(100) NULL,
-  `warning_count` INT NOT NULL DEFAULT 0,
-  `is_banned` TINYINT(1) NOT NULL DEFAULT 0,
+  `warning_count` INT NOT NULL DEFAULT 0 COMMENT 'Retired strike counter, no longer used (kept so older code and data still fit)',
+  `is_banned` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = on violation hold: cannot enter or leave until the violation is resolved',
   `pass_class` VARCHAR(16) NOT NULL DEFAULT 'Standard' COMMENT 'Standard or VIP',
   `pass_class_by` VARCHAR(150) NULL COMMENT 'Admin who set the class',
   `pass_class_at` DATETIME NULL,
+  `payment_status` VARCHAR(16) NOT NULL DEFAULT 'Paid' COMMENT 'Unpaid (no QR yet) | Paid | Waived (free vehicle or VIP)',
+  `fee_amount` DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT 'Amount due while Unpaid; total paid once Paid',
+  `paid_at` DATETIME NULL,
   `pass_id` VARCHAR(40) NULL UNIQUE,
   `pass_valid_until` DATE NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -188,7 +198,9 @@ CREATE TABLE IF NOT EXISTS `auth_tokens` (
 
 -- ------------------------------------------------------------------------------
 -- 8. Table: vehicle_violations
--- Warnings (strikes) and violations. 3 strikes => automatic Violation + ban.
+-- Violations. A pending violation puts the vehicle on hold (no entry, no exit) until an
+-- admin resolves it. Only severity 'Violation' is used now; 'Warning' rows can only exist
+-- in databases that were upgraded from the old strike system (they are history, not listed).
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `vehicle_violations` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -200,8 +212,8 @@ CREATE TABLE IF NOT EXISTS `vehicle_violations` (
   `logged_by` VARCHAR(100) NOT NULL,
   `logged_by_user_id` INT NULL,
   `status` ENUM('Pending', 'Resolved', 'Dismissed') NOT NULL DEFAULT 'Pending',
-  `counts_as_strike` TINYINT(1) NOT NULL DEFAULT 0,
-  `cleared_by_violation_id` INT NULL,
+  `counts_as_strike` TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Retired, always 0',
+  `cleared_by_violation_id` INT NULL COMMENT 'Retired, unused',
   `incident_id` INT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `resolved_at` DATETIME NULL,
@@ -251,6 +263,73 @@ CREATE TABLE IF NOT EXISTS `visitor_pass_items` (
   INDEX `idx_item_pass` (`visitor_pass_id`),
   CONSTRAINT `fk_items_visitor_pass` FOREIGN KEY (`visitor_pass_id`)
     REFERENCES `visitor_passes` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 11. Table: system_settings
+-- Configurable campus policy values (read by api/settings.php).
+-- ------------------------------------------------------------------------------
+CREATE TABLE `system_settings` (
+  `setting_key` VARCHAR(64) PRIMARY KEY,
+  `setting_value` VARCHAR(255) NOT NULL,
+  `description` VARCHAR(255) NULL,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 12. Table: payments
+-- Registration-fee payments: cash at the cashier or online through PayMongo.
+-- Paying activates the vehicle's QR pass (the vehicle becomes 'Paid' and gets a new pass id).
+-- ------------------------------------------------------------------------------
+CREATE TABLE `payments` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `receipt_number` VARCHAR(32) NULL UNIQUE,
+  `vehicle_id` INT NOT NULL,
+  `plate_number` VARCHAR(20) NOT NULL,
+  `owner_id_number` VARCHAR(50) NOT NULL,
+  `owner_name` VARCHAR(150) NOT NULL,
+  `sticker_year` VARCHAR(10) NULL,
+  `amount` DECIMAL(10,2) NOT NULL,
+  `method` VARCHAR(16) NOT NULL COMMENT 'Cash | PayMongo',
+  `status` VARCHAR(16) NOT NULL DEFAULT 'Pending' COMMENT 'Pending | Paid | Cancelled',
+  `provider_session_id` VARCHAR(100) NULL,
+  `provider_payment_id` VARCHAR(100) NULL,
+  `provider_method` VARCHAR(32) NULL COMMENT 'gcash, paymaya, card ...',
+  `cash_tendered` DECIMAL(10,2) NULL,
+  `recorded_by` VARCHAR(150) NULL,
+  `recorded_by_user_id` INT NULL,
+  `notes` VARCHAR(255) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `paid_at` DATETIME NULL,
+  INDEX `idx_payments_vehicle` (`vehicle_id`),
+  INDEX `idx_payments_owner` (`owner_id_number`),
+  INDEX `idx_payments_status` (`status`),
+  INDEX `idx_payments_session` (`provider_session_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------------------------
+-- 13. Table: owner_notices
+-- Notices sent to a vehicle owner when the vehicle is blocked at the gate or given a violation
+-- (shown in the student portal and e-mailed through SMTP when an address is on file).
+-- email_status: Pending | Sent | Failed (email_error says why) | Skipped (no address / SMTP not set up)
+-- ------------------------------------------------------------------------------
+CREATE TABLE `owner_notices` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `owner_id_number` VARCHAR(50) NOT NULL,
+  `vehicle_id` INT NULL,
+  `plate_number` VARCHAR(20) NOT NULL,
+  `kind` VARCHAR(16) NOT NULL COMMENT 'Violation | Blocked',
+  `title` VARCHAR(150) NOT NULL,
+  `message` TEXT NOT NULL,
+  `email_to` VARCHAR(150) NULL,
+  `email_status` VARCHAR(16) NOT NULL DEFAULT 'Pending',
+  `email_error` VARCHAR(255) NULL,
+  `emailed_at` DATETIME NULL,
+  `violation_id` INT NULL,
+  `incident_id` INT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_notices_owner` (`owner_id_number`, `id`),
+  INDEX `idx_notices_status` (`email_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------------------------
