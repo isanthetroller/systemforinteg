@@ -54,7 +54,7 @@ define('SP_STUDENT_TOKEN_HOURS', 168);
 // define('SP_SMTP_PASS', 'app-password');
 // define('SP_MAIL_FROM', 'securepark@example.com');
 // define('SP_MAIL_FROM_NAME', 'NCST SecurePark');
-// define('SP_PUBLIC_URL', 'http://ncstparking-test.rf.gd');   // adds a portal link to the e-mail
+// define('SP_PUBLIC_URL', 'https://securepark.site.je');   // adds a portal link to the e-mail
 // Note: free hosts (InfinityFree) may block outbound SMTP; a failed send is recorded on the notice, never fatal.
 
 // PayMongo (online payment of the vehicle registration fee). Leave these out until you have the keys.

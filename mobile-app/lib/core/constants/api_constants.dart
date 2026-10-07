@@ -1,7 +1,10 @@
 /// SecurePark API Configuration for Mobile Gate Scanner
 class ApiConstants {
   /// Known server presets
-  static const String liveCloudUrl = 'http://ncstparking-test.rf.gd/api';
+  /// Main server (securepark.site.je).
+  static const String liveCloudUrl = 'https://securepark.site.je/api';
+  /// Previous server (ncstparking-test.rf.gd), kept as a secondary choice on the sign-in screen.
+  static const String legacyCloudUrl = 'http://ncstparking-test.rf.gd/api';
   static const String localLanUrl = 'http://192.168.0.102:8000/web-app-admin/api';
   static const String localEmulatorUrl = 'http://10.0.2.2:8000/web-app-admin/api';
 

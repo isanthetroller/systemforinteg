@@ -187,7 +187,7 @@ class ApiService {
   static Future<http.Response> _post(Uri uri, String body) async {
     try {
       // If not authenticated with InfinityFree test cookie yet, ping status to solve cookie
-      if (_testCookie == null && uri.host.contains('rf.gd')) {
+      if (_testCookie == null && (uri.host.endsWith('rf.gd') || uri.host.endsWith('site.je'))) {
         await _get(Uri.parse('${ApiConstants.baseUrl}${ApiConstants.statsEndpoint}'));
       }
       var res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
