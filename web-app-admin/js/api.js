@@ -81,6 +81,7 @@ const ApiClient = (function() {
       ...(options.headers || {})
     };
 
+    const originalBody = options.body; // request() turns the body into a string below; a retry needs the object
     const token = getToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -130,6 +131,27 @@ const ApiClient = (function() {
         window.dispatchEvent(new CustomEvent('sp:auth-required', { detail: { message: err.message } }));
       } else if (res.status === 403 && err.code === 'PASSWORD_CHANGE_REQUIRED') {
         window.dispatchEvent(new CustomEvent('sp:password-change-required'));
+      }
+
+      // The server wants a written reason (audit trail) or a decision about the one-vehicle-per-class rule:
+      // ask the administrator, then repeat the same request with the answer.
+      if (!options._asked && window.SPOps && (err.code === 'REASON_REQUIRED' || err.code === 'OWNER_CLASS_LIMIT')) {
+        const method = (options.method || 'GET').toUpperCase();
+        const extra = err.code === 'REASON_REQUIRED'
+          ? await window.SPOps.askReason(err.message)
+          : await window.SPOps.askClassLimit(err, method === 'POST' && /^vehicles\.php/.test(endpoint));
+        if (extra) {
+          const next = { ...options, _asked: true };
+          let nextEndpoint = endpoint;
+          if (method === 'DELETE') {
+            nextEndpoint += (endpoint.includes('?') ? '&' : '?') + new URLSearchParams(extra);
+          } else {
+            let body = originalBody;
+            if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) { body = {}; } }
+            next.body = { ...(body || {}), ...extra };
+          }
+          return request(nextEndpoint, next, retries);
+        }
       }
       throw err;
     }
@@ -187,6 +209,49 @@ const ApiClient = (function() {
       const res = await request('payments.php', { method: 'POST', body: { action: 'cash', vehicleId, tendered } });
       return res.data;
     },
+
+    // Renewals (admin): cashier renewal list, cash / free / bulk renewal
+    getRenewals: async () => (await request('renewals.php')).data,
+    renewPass: async (vehicleId, action, tendered) => {
+      const res = await request('renewals.php', { method: 'POST', body: { action, vehicleId, tendered } });
+      return { ...res.data, message: res.message };
+    },
+    renewBulk: async (vehicleIds, cashCollected) => {
+      const res = await request('renewals.php', { method: 'POST', body: { action: 'bulk', vehicleIds, cashCollected } });
+      return { ...res.data, message: res.message };
+    },
+
+    // Retire a vehicle without replacing it (admin; the server asks for a reason)
+    retireVehicle: async (id) => {
+      const res = await request('vehicles.php', { method: 'PUT', body: { id, action: 'retire' } });
+      return res.data;
+    },
+
+    // One-time exit for a vehicle on hold (admin; reason required)
+    releaseExit: async (vehicleId, reason) => {
+      const res = await request('releases.php', { method: 'POST', body: { vehicleId, reason } });
+      return { ...res.data, message: res.message };
+    },
+    getReleases: async () => (await request('releases.php')).data,
+    cancelRelease: async (id) => (await request(`releases.php?id=${id}`, { method: 'DELETE' })).data,
+
+    // Admin Center: activity log, approvals, guard duty, settings
+    getAuditLog: async (params = {}) => {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+      return (await request(`audit.php${qs ? '?' + qs : ''}`)).data;
+    },
+    getApprovals: async (status = '') => (await request(`approvals.php${status ? '?status=' + encodeURIComponent(status) : ''}`)).data,
+    decideApproval: async (id, decision, note = '') => {
+      const res = await request('approvals.php', { method: 'POST', body: { id, decision, note } });
+      return { ...res.data, message: res.message };
+    },
+    getSettings: async () => (await request('settings.php?scope=all')).data,
+    saveSettings: async (values) => (await request('settings.php', { method: 'PUT', body: values })).data,
+    getShifts: async () => (await request('shifts.php')).data,
+    getShiftReport: async (from = '', to = '') => (await request(`shifts.php?scope=report${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
+    getEvidence: async (params) => (await request('evidence.php?' + new URLSearchParams(params))).data,
+    getEvidencePhoto: async (id) => (await request(`evidence.php?id=${id}`)).data,
+    runMaintenance: async () => { try { return (await request('maintenance.php', { method: 'POST', body: {} })).data; } catch (_) { return null; } },
 
     // Staff Accounts (admin only)
     getUsers: async () => {

@@ -2755,6 +2755,8 @@ document.addEventListener('DOMContentLoaded', () => {
       vipGrantedBy: v.vipGrantedBy || null,
       vipGrantedAt: v.vipGrantedAt || null,
       isBanned: !!v.isBanned,
+      isRetired: !!v.isRetired,
+      retiredReason: v.retiredReason || null,
       entryTime: entryTime,
       gatePoint: gatePoint,
       authorizedDrivers: drivers
@@ -2950,6 +2952,8 @@ document.addEventListener('DOMContentLoaded', () => {
         <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
           Replace Pass
         </button>
+        ${v.isBanned && v.status === 'Inside Campus' ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
+        ${v.isRetired ? '' : `<button id="drawerRetireBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="The owner sold or no longer uses this vehicle. History is kept.">Retire</button>`}
         <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
           <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -3040,6 +3044,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const reissueBtn = drawerFooter.querySelector('#drawerReissueBtn');
     if (reissueBtn) reissueBtn.addEventListener('click', () => reissueVehiclePass(v));
+    const releaseBtn = drawerFooter.querySelector('#drawerReleaseBtn');
+    if (releaseBtn) releaseBtn.addEventListener('click', async () => {
+      if (window.SPOps && await SPOps.releaseExit(v)) closeDrawer();
+    });
+    const retireBtn = drawerFooter.querySelector('#drawerRetireBtn');
+    if (retireBtn) retireBtn.addEventListener('click', async () => {
+      if (window.SPOps && await SPOps.retire(v)) closeDrawer();
+    });
     const editBtn = drawerFooter.querySelector('#drawerEditBtn');
     if (editBtn) {
       editBtn.addEventListener('click', () => {
@@ -4823,6 +4835,7 @@ document.addEventListener('DOMContentLoaded', () => {
      ========================================================================== */
   const PASS_UNAVAILABLE_MSG = 'Signed pass not available yet. Save the vehicle online, then reload.';
   function passUnavailableMsg(v) {
+    if (v && v.isRetired) return 'This vehicle was retired (replaced or sold). It has no pass.';
     if (v && v.paymentStatus === 'Unpaid') {
       const fee = Number(v.feeAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 });
       return `Registration fee of \u20b1${fee} is unpaid. The QR pass is issued once it is paid at the Cashier or online.`;
@@ -4841,6 +4854,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function holdChip(v) {
+    if (v.isRetired) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-300 text-[10px] font-semibold tracking-wide" title="' + escapeHtml(v.retiredReason || 'Retired') + '">RETIRED</span>';
     if (v.paymentStatus === 'Unpaid') return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold tracking-wide">UNPAID \u20b1' + Number(v.feeAmount || 0).toLocaleString('en-PH') + '</span>';
     if (v.isVip) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/80 text-[10px] font-semibold tracking-wide">VIP</span>';
     if (v.isBanned) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold tracking-wide">VIOLATION HOLD</span>';
@@ -4849,6 +4863,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function passPayloadFor(v) {
     if (!v) return null;
+    if (v.isRetired) return null; // a retired vehicle has no pass
     if (v.paymentStatus === 'Unpaid') return null; // no pass exists until the fee is paid
     if (typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{')) {
       return v.qrPayload;

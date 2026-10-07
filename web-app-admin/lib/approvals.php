@@ -66,6 +66,7 @@ function approvalView($r) {
         'violationId' => $r['violation_id'] !== null ? (int)$r['violation_id'] : null,
         'plateNumber' => $r['plate_number'],
         'requestedBy' => $r['requested_by_label'],
+        'requestedByUserId' => $r['requested_by_user_id'] !== null ? (int)$r['requested_by_user_id'] : null,
         'reason' => $r['reason'],
         'status' => $r['status'],
         'decidedBy' => $r['decided_by_label'],
