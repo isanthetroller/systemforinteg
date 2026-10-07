@@ -25,6 +25,7 @@ require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 require_once __DIR__ . '/../lib/payments.php';
 require_once __DIR__ . '/../lib/notices.php';
+require_once __DIR__ . '/../lib/renewals.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendResponse(405, null, 'Method not allowed');
@@ -91,6 +92,7 @@ function heldIncidentCount($pdo, array $plates) {
 
 function studentVehicleView($pdo, $row) {
     $v = vehicleForOutput($pdo, $row, true);
+    $renewal = renewalInfo($pdo, $row);
     // Only what the owner needs; internal / duplicate snake_case keys are dropped
     return [
         'id' => $v['id'],
@@ -104,6 +106,10 @@ function studentVehicleView($pdo, $row) {
         'status' => $v['status'],
         'registrationStatus' => $v['registrationStatus'],
         'vehiclePhoto' => $v['vehiclePhoto'],
+        'renewal' => [
+            'due' => $renewal['due'], 'eligible' => $renewal['eligible'], 'expired' => $renewal['expired'], 'daysLeft' => $renewal['daysLeft'],
+            'fee' => $renewal['fee'], 'targetYear' => $renewal['targetYear'], 'newValidUntil' => $renewal['newValidUntil'], 'blocker' => $renewal['blocker'],
+        ],
         'paymentStatus' => $v['paymentStatus'],
         'feeAmount' => $v['feeAmount'],
         'paidAt' => $v['paidAt'],

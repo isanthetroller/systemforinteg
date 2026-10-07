@@ -28,6 +28,8 @@ require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 require_once __DIR__ . '/../lib/campus.php';
+require_once __DIR__ . '/../lib/releases.php';
+require_once __DIR__ . '/../lib/capacity.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendResponse(405, null, 'Method not allowed');
@@ -246,9 +248,19 @@ if ($vehicle) {
     $activeVehIncident = $vehIncStmt->fetch();
 }
 
+// An administrator may release ONE exit of a vehicle on hold (single use, time limited, logged)
+$exitRelease = null;
+if ($vehicle && $gateType === 'Egress' && vehicleIsOnHold($pdo, $vehicle)) {
+    $exitRelease = activeExitRelease($pdo, $vehicle['id']);
+}
+
 if ($vehicle && in_array($result, [null, 'VALID', 'LEGACY', 'MANUAL'], true)) {
     $prior = $result ?? 'VALID';
-    if ($activeVehIncident || $vehicle['status'] === 'Blocked / Alert') {
+    if ($exitRelease) {
+        $result = $prior;
+        $warnings[] = "EXIT RELEASED by {$exitRelease['released_by_label']} until " . date('g:i A', strtotime($exitRelease['expires_at']))
+            . " ({$exitRelease['reason']}). Let it out once; it stays on hold and cannot come back in.";
+    } elseif ($activeVehIncident || $vehicle['status'] === 'Blocked / Alert') {
         $caseNum = $activeVehIncident ? $activeVehIncident['case_number'] : 'HOLD';
         $holdReason = $activeVehIncident ? $activeVehIncident['reason'] : 'Security hold on vehicle';
         $result = 'BANNED';
@@ -303,6 +315,9 @@ $hasSecurityHold = ($incident !== null && !empty($incident))
     || ($visitor && $visitor['status'] === 'Revoked');
 
 // Security holds, bans, suspensions, and revoked passes strictly PREVENT passage at both Ingress and Egress
+if ($exitRelease) {
+    $hasSecurityHold = false;
+}
 if ($hasSecurityHold) {
     $accepted = false;
 } elseif ($gateType === 'Egress' && $result === 'EXPIRED_TEMP' && !empty($visitor['entry_time'])) {
@@ -362,6 +377,7 @@ if (!$accepted && $result !== 'NOT_FOUND') {
         'gateType' => $gateType,
         'status' => $gateType === 'Egress' ? 'Inside Campus' : 'Outside',
         'notes' => $result . ($reasonDetail ? ": {$reasonDetail}" : '') . ($incident ? " [{$incident['caseNumber']}]" : ''),
+        'lookupMethod' => $passType === 'manual' ? 'manual' : 'qr',
     ]);
     $autoLogged = true;
 }
@@ -398,6 +414,8 @@ sendResponse(200, [
     'passType' => $passType,
     'autoLogged' => $autoLogged,
     'incident' => $incident,
+    'exitRelease' => $exitRelease ? ['id' => (int)$exitRelease['id'], 'expiresAt' => $exitRelease['expires_at'], 'reason' => $exitRelease['reason'], 'releasedBy' => $exitRelease['released_by_label']] : null,
+    'occupancy' => campusOccupancy($pdo),
     'currentlyInside' => $currentlyInside,
     // Where it is and who to call: shown to the guard when a vehicle that is already inside is scanned again
     'onCampus' => ($vehicle && $currentlyInside) ? onCampusDetails($pdo, $vehicle, $now) : null,

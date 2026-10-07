@@ -2,6 +2,14 @@
 <html lang="en" class="h-full bg-slate-50">
 <head>
   <meta charset="UTF-8">
+  <script>
+    // Always use HTTPS (except on a developer machine). A script instead of a server redirect rule: it cannot loop behind a proxy.
+    (function () {
+      var h = location.hostname;
+      var local = h === 'localhost' || h === '[::1]' || /^(127|10|192\.168)\./.test(h) || /\.(local|localhost|test)$/.test(h) || /^\d+\.\d+\.\d+\.\d+$/.test(h);
+      if (location.protocol === 'http:' && !local) location.replace('https://' + location.host + location.pathname + location.search + location.hash);
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SecurePark — Campus Gate & Vehicle Administration</title>
   <style>

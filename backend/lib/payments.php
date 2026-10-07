@@ -55,6 +55,14 @@ function paymentView($p) {
     ];
 }
 
+/** Extends the pass: new validity, sticker year and pass id. Returns the new valid-until date. */
+function applyRenewal($pdo, $vehicleId, $targetYear) {
+    $validUntil = "{$targetYear}-12-31";
+    $pdo->prepare("UPDATE `vehicles` SET `pass_valid_until` = ?, `sticker_year` = ?, `pass_id` = ?, `qr_pass_code` = NULL, `payment_status` = 'Paid', `paid_at` = ? WHERE `id` = ?")
+        ->execute([$validUntil, (string)$targetYear, newPassId(), date('Y-m-d H:i:s'), (int)$vehicleId]);
+    return $validUntil;
+}
+
 /**
  * Sum of everything actually paid (online, cash or transfer credit) for a vehicle's pass year. $year defaults to the
  * vehicle's current sticker year, so last year's registration or renewal never counts toward this year's fee.
@@ -121,7 +129,9 @@ function settlePayment($pdo, $paymentId, array $extra = []) {
 
         $now = date('Y-m-d H:i:s');
         $vehicle = findVehicleById($pdo, $p['vehicle_id']);
-        $duplicate = !$vehicle || $vehicle['payment_status'] !== 'Unpaid';
+        // A registration payment settles an Unpaid vehicle; a renewal payment settles a pass year not yet renewed
+        $isRenewal = ($p['purpose'] ?? '') === 'Renewal';
+        $duplicate = !$vehicle || ($isRenewal ? (int)$vehicle['sticker_year'] >= (int)$p['sticker_year'] : $vehicle['payment_status'] !== 'Unpaid');
 
         $set = ['status' => 'Paid', 'paid_at' => $now, 'receipt_number' => sprintf('OR-%s-%06d', date('Y'), $p['id'])];
         foreach (['provider_payment_id', 'provider_method', 'cash_tendered', 'recorded_by', 'recorded_by_user_id'] as $col) {
@@ -134,7 +144,12 @@ function settlePayment($pdo, $paymentId, array $extra = []) {
         $pdo->prepare("UPDATE `payments` SET " . implode(', ', $cols) . " WHERE `id` = ?")
             ->execute(array_merge(array_values($set), [$p['id']]));
 
-        if (!$duplicate) {
+        if (!$duplicate && $isRenewal) {
+            // The pass runs to Dec 31 of the paid year, with a fresh pass id; fee_amount = what was paid for that year
+            applyRenewal($pdo, $vehicle['id'], (int)$p['sticker_year']);
+            $pdo->prepare("UPDATE `vehicles` SET `fee_amount` = ? WHERE `id` = ?")
+                ->execute([paidTotalForVehicle($pdo, $vehicle['id'], (string)$p['sticker_year']), $vehicle['id']]);
+        } elseif (!$duplicate) {
             // New pass id: any QR derived from the pre-payment id stops matching
             // fee_amount of a paid vehicle = everything paid so far (a later fee change only charges the difference)
             $pdo->prepare("UPDATE `vehicles` SET `payment_status` = 'Paid', `paid_at` = ?, `fee_amount` = ?, `pass_id` = ?, `qr_pass_code` = NULL WHERE `id` = ?")
@@ -229,9 +244,9 @@ function paymentReturnUrl($base, $paymentId, $outcome) {
  * Starts an online payment for an Unpaid vehicle. Returns the Pending payment row with its checkout URL.
  * Throws RuntimeException with a user-safe message on failure.
  */
-function startOnlinePayment($pdo, $vehicle, $returnBase) {
+function startOnlinePayment($pdo, $vehicle, $returnBase, array $opts = []) {
     cancelPendingPayments($pdo, $vehicle['id']);
-    $payment = createPendingPayment($pdo, $vehicle, 'PayMongo');
+    $payment = createPendingPayment($pdo, $vehicle, 'PayMongo', $opts); // $opts: purpose / sticker_year / amount for a renewal
 
     if (paymongoMockEnabled()) {
         $session = 'mock_' . bin2hex(random_bytes(8));
@@ -251,11 +266,11 @@ function startOnlinePayment($pdo, $vehicle, $returnBase) {
         'line_items' => [[
             'currency' => 'PHP',
             'amount' => (int)round(((float)$payment['amount']) * 100),
-            'name' => 'SecurePark vehicle registration ' . $vehicle['plate_number'] . ' (' . ($vehicle['sticker_year'] ?? date('Y')) . ')',
+            'name' => 'SecurePark ' . (($payment['purpose'] ?? '') === 'Renewal' ? 'pass renewal ' : 'vehicle registration ') . $vehicle['plate_number'] . ' (' . ($payment['sticker_year'] ?? date('Y')) . ')',
             'quantity' => 1,
         ]],
         'payment_method_types' => $methods,
-        'description' => 'NCST campus vehicle registration fee',
+        'description' => (($payment['purpose'] ?? '') === 'Renewal') ? 'NCST campus pass renewal' : 'NCST campus vehicle registration fee',
         'reference_number' => 'SP-PAY-' . $payment['id'],
         'send_email_receipt' => false,
         'show_description' => true,

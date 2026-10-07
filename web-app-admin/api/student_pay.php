@@ -15,6 +15,7 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/payments.php';
+require_once __DIR__ . '/../lib/renewals.php';
 
 $student = requireStudent($pdo);
 $ownerId = $student['owner_id_number'];
@@ -26,14 +27,22 @@ if ($method === 'POST') {
     if (!$vehicle || $vehicle['owner_id_number'] !== $ownerId) {
         sendResponse(404, null, 'Vehicle not found.');
     }
-    if ($vehicle['payment_status'] !== 'Unpaid') {
-        sendResponse(409, ['code' => 'NOT_UNPAID'], 'This vehicle has no outstanding registration fee.');
-    }
     $base = safeReturnBase($data['returnUrl'] ?? '');
     if (!$base) sendResponse(400, null, 'Invalid return address.');
+    if ((int)$vehicle['is_retired'] === 1) sendResponse(409, ['code' => 'VEHICLE_RETIRED'], 'This vehicle was retired.');
+
+    $opts = [];
+    if (($data['purpose'] ?? '') === 'renewal') {
+        $info = renewalInfo($pdo, $vehicle);
+        if (!$info['eligible']) sendResponse(409, ['code' => 'NOT_RENEWABLE'], $info['blocker'] ?: 'This pass cannot be renewed now.');
+        if ($info['fee'] <= 0) sendResponse(409, ['code' => 'FREE_RENEWAL'], 'This renewal has no fee. Ask the Security Office to renew it.');
+        $opts = ['purpose' => 'Renewal', 'sticker_year' => (string)$info['targetYear'], 'amount' => $info['fee']];
+    } elseif ($vehicle['payment_status'] !== 'Unpaid') {
+        sendResponse(409, ['code' => 'NOT_UNPAID'], 'This vehicle has no outstanding registration fee.');
+    }
 
     try {
-        $started = startOnlinePayment($pdo, $vehicle, $base);
+        $started = startOnlinePayment($pdo, $vehicle, $base, $opts);
     } catch (RuntimeException $e) {
         sendResponse(503, ['code' => 'ONLINE_UNAVAILABLE'], $e->getMessage());
     }

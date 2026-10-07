@@ -29,15 +29,22 @@ function ownerEmailFor($pdo, $vehicle) {
  */
 function queueOwnerNotice($pdo, $vehicle, $kind, $title, $message, array $rel = []) {
     if (!$vehicle || trim((string)($vehicle['owner_id_number'] ?? '')) === '') return null;
+    // Reminders carry a key so each is sent only once (e.g. one 30-day expiry notice per pass)
+    $refKey = $rel['refKey'] ?? null;
+    if ($refKey !== null) {
+        $dup = $pdo->prepare("SELECT COUNT(*) FROM `owner_notices` WHERE `ref_key` = ?");
+        $dup->execute([$refKey]);
+        if ((int)$dup->fetchColumn() > 0) return null;
+    }
     $email = ownerEmailFor($pdo, $vehicle);
     $status = $email ? 'Pending' : 'Skipped';
     $error = $email ? null : 'No e-mail address on file for this owner.';
     $stmt = $pdo->prepare("INSERT INTO `owner_notices`
-        (`owner_id_number`, `vehicle_id`, `plate_number`, `kind`, `title`, `message`, `email_to`, `email_status`, `email_error`, `violation_id`, `incident_id`, `created_at`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        (`owner_id_number`, `vehicle_id`, `plate_number`, `kind`, `title`, `message`, `email_to`, `email_status`, `email_error`, `violation_id`, `incident_id`, `created_at`, `ref_key`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([
         trim((string)$vehicle['owner_id_number']), $vehicle['id'] ?? null, $vehicle['plate_number'], $kind, $title, $message,
-        $email, $status, $error, $rel['violationId'] ?? null, $rel['incidentId'] ?? null, date('Y-m-d H:i:s'),
+        $email, $status, $error, $rel['violationId'] ?? null, $rel['incidentId'] ?? null, date('Y-m-d H:i:s'), $refKey,
     ]);
     $id = (int)$pdo->lastInsertId();
     if ($email) spScheduleNoticeDelivery();
@@ -77,9 +84,11 @@ function noticeEmailBodies($notice, $vehicle) {
     $owner = $vehicle['owner_name'] ?? 'Vehicle owner';
     $plate = $notice['plate_number'];
     $portal = defined('SP_PUBLIC_URL') && SP_PUBLIC_URL !== '' ? rtrim((string)SP_PUBLIC_URL, '/') . '/student/' : '';
-    $steps = $notice['kind'] === 'Violation'
-        ? "Your vehicle cannot enter or leave campus until the Campus Security Office resolves this violation. Please visit the Security Office."
-        : "Your vehicle was stopped at the gate and is being held. Please contact or visit the Campus Security Office.";
+    $steps = [
+        'Violation' => "Your vehicle cannot enter or leave campus until the Campus Security Office resolves this violation. Please visit the Security Office.",
+        'Reminder' => "Your vehicle still cannot enter or leave campus. Please visit the Campus Security Office to settle the violation.",
+        'Expiry' => "Renew in the student portal (pay online) or at the Campus Security Office cashier before it expires, so your QR keeps working at the gate.",
+    ][$notice['kind']] ?? "Your vehicle was stopped at the gate and is being held. Please contact or visit the Campus Security Office.";
     $text = "Dear {$owner},\n\n{$notice['message']}\n\nVehicle: {$plate}\n\n{$steps}\n"
         . ($portal !== '' ? "\nYou can also see this notice in the SecurePark student portal: {$portal}\n" : '')
         . "\nNCST Campus Security Office\n(This is an automated message from SecurePark.)\n";
@@ -111,7 +120,11 @@ function deliverPendingNotices($pdo) {
         $stmt->execute([$n['vehicle_id']]);
         $vehicle = $stmt->fetch() ?: ['owner_name' => 'Vehicle owner'];
         [$text, $html] = noticeEmailBodies($n, $vehicle);
-        $subject = ($n['kind'] === 'Violation' ? 'Violation recorded for ' : 'Vehicle blocked at the gate: ') . $n['plate_number'] . ' - NCST SecurePark';
+        $subject = ([
+            'Violation' => 'Violation recorded for ',
+            'Reminder' => 'Reminder: unresolved violation on ',
+            'Expiry' => 'Campus pass expiring: ',
+        ][$n['kind']] ?? 'Vehicle blocked at the gate: ') . $n['plate_number'] . ' - NCST SecurePark';
         [$ok, $err] = spSendMail($n['email_to'], $subject, $text, $html);
         if (!$ok && !spMailConfigured()) {
             $pdo->prepare("UPDATE `owner_notices` SET `email_status` = 'Skipped', `email_error` = ? WHERE `id` = ?")->execute([$err, $n['id']]);

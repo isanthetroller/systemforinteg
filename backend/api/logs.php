@@ -9,6 +9,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/releases.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -216,7 +217,11 @@ function handleCreateLog($pdo, $actor) {
         }
     }
 
+    $usedRelease = null;
     if ($action === 'Exit Approved' && $vehicle && (int)$vehicle['is_banned'] === 1) {
+        $usedRelease = activeExitRelease($pdo, $vehicle['id']);
+    }
+    if ($action === 'Exit Approved' && $vehicle && (int)$vehicle['is_banned'] === 1 && !$usedRelease) {
         sendResponse(403, ['code' => 'VEHICLE_BANNED'], "Exit refused: {$vehicle['plate_number']} has an unresolved violation. An administrator must resolve it before it can leave campus.");
     }
 
@@ -286,6 +291,7 @@ function handleCreateLog($pdo, $actor) {
             'gateType' => $gateType,
             'status' => $status,
             'notes' => $notes,
+            'lookupMethod' => strtolower(trim((string)($data['lookupMethod'] ?? $data['lookup_method'] ?? ''))),
             'clientRef' => $clientRef,
         ]);
 
@@ -306,6 +312,9 @@ function handleCreateLog($pdo, $actor) {
                 $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = ?, `status` = 'Revoked' WHERE `id` = ?")
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             }
+        }
+        if ($usedRelease && $isApproval) {
+            consumeExitRelease($pdo, $usedRelease, gateActorLabel($actor));
         }
         $pdo->commit();
     } catch (Exception $e) {

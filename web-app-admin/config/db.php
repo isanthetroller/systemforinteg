@@ -532,9 +532,25 @@ function spNow() {
 /**
  * Standard JSON response helper
  */
+/**
+ * True when the browser reached us over HTTPS. Free hosts often terminate TLS in a proxy and pass plain HTTP on, so the
+ * forwarded-protocol headers and port 443 count too.
+ */
+function isSecureRequest() {
+    if (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') return true;
+    if (strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https') return true;
+    if (strpos((string)($_SERVER['HTTP_CF_VISITOR'] ?? ''), '"https"') !== false) return true;
+    return (string)($_SERVER['SERVER_PORT'] ?? '') === '443';
+}
+
 function sendResponse($statusCode, $data = null, $message = '') {
     http_response_code($statusCode);
     header("Content-Type: application/json; charset=UTF-8");
+    header('X-Content-Type-Options: nosniff');
+    if (isSecureRequest()) {
+        // Browsers that reached us over HTTPS keep using HTTPS for the next 180 days
+        header('Strict-Transport-Security: max-age=15552000');
+    }
     $ok = ($statusCode >= 200 && $statusCode < 300);
     // `status` is kept for the mobile app; `success` is the v2 response contract
     $response = [

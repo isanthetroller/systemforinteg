@@ -62,7 +62,7 @@ $values = [
 try {
     $rows = $pdo->query("SELECT `setting_key`, `setting_value` FROM `system_settings`")->fetchAll(PDO::FETCH_KEY_PAIR);
     foreach ($rows as $key => $value) {
-        if ($key === 'visitor_pass_validity_hours') continue; // retired setting
+        if ($key === 'visitor_pass_validity_hours' || $key === 'maintenance_last_run') continue; // retired / internal
         if (isset(spSettingDefinitions()[$key])) continue;    // policy values are exposed through scope=all (admin) only
         $values[$key] = $key === 'overnight_warning_threshold' ? (int)$value : $value;
     }

@@ -42,6 +42,10 @@ function recordGateLog($pdo, $actor, array $f) {
         $columns[] = 'synced_at';
         $values[] = $f['syncedAt'];
     }
+    if (!empty($f['lookupMethod']) && in_array($f['lookupMethod'], ['qr', 'manual'], true)) {
+        $columns[] = 'lookup_method';
+        $values[] = $f['lookupMethod'];
+    }
     $marks = implode(', ', array_fill(0, count($columns), '?'));
     $stmt = $pdo->prepare("INSERT INTO `gate_logs` (`" . implode('`, `', $columns) . "`) VALUES ({$marks})");
     $stmt->execute($values);

@@ -2134,6 +2134,306 @@ def test_audit_and_approvals(admin):
     AUTO_PAY = True
 
 
+def test_ops_phase2(admin):
+    """Renewals, maintenance reminders, one-time exit release, capacity, guard shifts, evidence photos, HTTPS headers."""
+    global AUTO_PAY
+    import datetime, sqlite3, time, base64
+    section('Renewals, exit release, capacity, shifts, evidence, HTTPS')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    today = datetime.date.today()
+    year = today.year
+
+    def reg(plate, owner_id, vtype='4-Wheel', **extra):
+        code, res = call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': 'Rene Wall', 'ownerIdNumber': owner_id, 'vehicleType': vtype, 'ownerEmail': f'{owner_id.lower()}@example.com',
+                                                 'authorizedDrivers': [{'fullName': 'Rene Wall', 'relationship': 'Self (Owner)', 'licenseNo': 'N/A'}], **extra}, admin)
+        return res['data']
+
+    def pay(vid):
+        return call('POST', 'payments.php', {'action': 'cash', 'vehicleId': vid}, admin)
+
+    def set_until(vid, d):
+        db = sqlite3.connect(SQLITE_DB)
+        db.execute("UPDATE vehicles SET pass_valid_until = ? WHERE id = ?", (d, vid))
+        db.commit()
+        db.close()
+
+    def student_token(v, owner_id):
+        temp = v['studentAccount']['tempPassword']
+        t = call('POST', 'auth.php?action=login&realm=student', {'username': owner_id, 'password': temp})[1]['data']['token']
+        call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Student-Ren-2026'}, t)
+        return t
+
+    # ---------------------------------------------------------------- renewals
+    near = (today + datetime.timedelta(days=20)).isoformat()
+    far = (today + datetime.timedelta(days=200)).isoformat()
+    past = (today - datetime.timedelta(days=10)).isoformat()
+    r1 = reg('RNW 1001', 'RN-1')
+    pay(r1['id'])
+    tok_r1 = student_token(r1, 'RN-1')
+    set_until(r1['id'], far)
+    code, res = call('POST', 'renewals.php', {'action': 'cash', 'vehicleId': r1['id']}, admin)
+    check('renewal is refused before the window opens -> 409', code == 409 and 'opens' in res['message'], res)
+    code, res = call('GET', 'renewals.php', token=guard)
+    check('guards cannot use renewals -> 403', code == 403, code)
+
+    set_until(r1['id'], near)
+    code, res = call('GET', 'renewals.php', token=admin)
+    row = [r for r in res['data']['vehicles'] if r['plateNumber'] == 'RNW 1001']
+    check('a pass inside the window is on the renewal list with fee 500 and next year as the new date',
+          len(row) == 1 and row[0]['eligible'] and row[0]['fee'] == 500 and row[0]['newValidUntil'] == f'{year + 1}-12-31' and row[0]['daysLeft'] == 20, row)
+    code, res = call('POST', 'renewals.php', {'action': 'cash', 'vehicleId': r1['id'], 'tendered': 100}, admin)
+    check('cash below the fee is refused', code == 409, res)
+    code, res = call('POST', 'renewals.php', {'action': 'free', 'vehicleId': r1['id']}, admin)
+    check('"free" on a fee-bearing renewal is refused', code == 409, res)
+    code, res = call('POST', 'renewals.php', {'action': 'cash', 'vehicleId': r1['id'], 'tendered': 500}, admin)
+    check('cash renewal -> pass moves to Dec 31 of next year, new QR', code == 201 and res['data']['vehicle']['passValidUntil'] == f'{year + 1}-12-31'
+          and res['data']['vehicle']['qrPayload'] and res['data']['payment']['purpose'] == 'Renewal' and res['data']['payment']['amount'] == 500, res)
+    old_qr = r1['qrPayload']
+    check('  ...the QR changed (the old pass id is dead)', res['data']['vehicle']['qrPayload'] != old_qr, '')
+    code, res = call('POST', 'renewals.php', {'action': 'cash', 'vehicleId': r1['id']}, admin)
+    check('renewing again is refused (not due any more)', code == 409, res)
+    code, res = call('GET', 'audit.php?action=renewal&q=RNW1001', token=admin)
+    check('the renewal is in the audit log', res['data']['total'] == 1, res['data'])
+
+    # expired pass: renew -> valid again, can enter
+    r2 = reg('RNW 2002', 'RN-2')
+    pay(r2['id'])
+    set_until(r2['id'], past)
+    code, v = verify({'plate': 'RNW 2002', 'gate_type': 'Ingress'}, guard)
+    check('expired pass is refused at the gate', v.get('result') == 'EXPIRED', v)
+    code, res = call('POST', 'renewals.php', {'action': 'cash', 'vehicleId': r2['id']}, admin)
+    check('an expired pass can be renewed', code == 201 and res['data']['vehicle']['passValidUntil'] == f'{year}-12-31' or res['data']['vehicle']['passValidUntil'] == f'{year + 1}-12-31', res)
+    code, v = verify({'plate': 'RNW 2002', 'gate_type': 'Ingress'}, guard)
+    check('  ...and then it is admitted', v.get('accepted') is True, v)
+
+    # free renewal (bicycle) and bulk
+    b1 = reg('RNW 3001', 'RN-3', 'Bicycle')
+    b2 = reg('RNW 3002', 'RN-4', 'Motorcycle')
+    pay(b2['id'])
+    b3 = reg('RNW 3003', 'RN-5', 'Motorcycle')
+    pay(b3['id'])
+    for v_ in (b1, b2, b3):
+        set_until(v_['id'], near)
+    code, res = call('POST', 'renewals.php', {'action': 'bulk', 'vehicleIds': [b1['id'], b2['id'], b3['id']]}, admin)
+    check('bulk renewal with fees needs the cash confirmation -> 400', code == 400 and res['data']['code'] == 'CASH_CONFIRMATION_REQUIRED' and res['data']['totalDue'] == 500, res)
+    code, res = call('GET', 'vehicles.php?plate=RNW3001', token=admin)
+    check('  ...and nothing changed', res['data']['passValidUntil'] == near, res['data']['passValidUntil'])
+    code, res = call('POST', 'renewals.php', {'action': 'bulk', 'vehicleIds': [b1['id'], b2['id'], b3['id']], 'cashCollected': True}, admin)
+    check('bulk renewal: 3 renewed, PHP 500 collected (bicycle free)', code == 200 and res['data']['renewed'] == 3 and res['data']['collected'] == 500, res)
+
+    # online renewal by the owner
+    return_url = BASE.split('/web-app-admin/api')[0] + '/web-app-student/'
+    r3 = reg('RNW 4001', 'RN-6')
+    pay(r3['id'])
+    tok_r3 = student_token(r3, 'RN-6')
+    code, res = call('POST', 'student_pay.php', {'vehicleId': r3['id'], 'returnUrl': return_url, 'purpose': 'renewal'}, tok_r3)
+    check('online renewal before the window opens -> 409', code == 409, res)
+    set_until(r3['id'], near)
+    code, res = call('GET', 'student.php?action=vehicles', token=tok_r3)
+    sv = res['data'][0]
+    check('the owner sees the renewal as available (fee 500)', sv.get('renewal', {}).get('eligible') is True and sv['renewal']['fee'] == 500, sv.get('renewal'))
+    code, res = call('POST', 'student_pay.php', {'vehicleId': r3['id'], 'returnUrl': return_url, 'purpose': 'renewal'}, tok_r3)
+    check('owner starts an online renewal', code == 201 and res['data']['amount'] == 500, res)
+    pid, checkout = res['data']['paymentId'], res['data']['checkoutUrl']
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    form = urllib.parse.parse_qs(urllib.parse.urlparse(checkout).query)
+    body = urllib.parse.urlencode({'session': form['session'][0], 'return': form['return'][0], 'do': 'pay'}).encode()
+    try:
+        urllib.request.build_opener(NoRedirect).open(urllib.request.Request(checkout, data=body))
+    except urllib.error.HTTPError:
+        pass
+    code, res = call('GET', f'student_pay.php?paymentId={pid}', token=tok_r3)
+    check('online renewal settles', res['data']['status'] == 'Paid' and res['data']['purpose'] == 'Renewal', res)
+    code, res = call('GET', 'vehicles.php?plate=RNW4001', token=admin)
+    check('  ...and the pass now runs to next year', res['data']['passValidUntil'] == f'{year + 1}-12-31', res['data']['passValidUntil'])
+
+    # ---------------------------------------------------------------- maintenance reminders
+    m1 = reg('MNT 1001', 'MN-1')
+    pay(m1['id'])
+    tok_m1 = student_token(m1, 'MN-1')
+    set_until(m1['id'], (today + datetime.timedelta(days=10)).isoformat())
+    code, res = call('POST', 'maintenance.php?force=1', token=guard)
+    check('only admins can force maintenance -> 403', code == 403, code)
+    code, res = call('POST', 'maintenance.php?force=1', token=admin)
+    check('maintenance sends expiry notices', code == 200 and res['data']['expiryNotices'] >= 1, res)
+    rows = call('GET', 'student.php?action=notices', token=tok_m1)[1]['data']
+    check('the owner sees an Expiry notice naming the date', any(r['kind'] == 'Expiry' and 'expires on' in r['message'] for r in rows), rows)
+    code, res = call('POST', 'maintenance.php?force=1', token=admin)
+    check('running it again sends nothing new (idempotent)', res['data']['expiryNotices'] == 0, res)
+    code, res = call('POST', 'maintenance.php', token=admin)
+    check('an unforced run right after is skipped', res['data'].get('skipped') is True, res)
+
+    h1 = reg('MNT 2002', 'MN-2')
+    pay(h1['id'])
+    tok_h1 = student_token(h1, 'MN-2')
+    code, res = call('POST', 'violations.php', {'vehicle_id': h1['id'], 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'Hydrant'}, guard)
+    vid = res['data']['violation']['id']
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicle_violations SET created_at = ? WHERE id = ?", ((datetime.datetime.now() - datetime.timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S'), vid))
+    db.commit()
+    db.close()
+    code, res = call('POST', 'maintenance.php?force=1', token=admin)
+    check('an unresolved violation older than N days triggers a reminder', res['data']['holdReminders'] == 1, res)
+    rows = call('GET', 'student.php?action=notices', token=tok_h1)[1]['data']
+    check('  ...the owner sees a Reminder notice', any(r['kind'] == 'Reminder' and 'unresolved' in r['message'] for r in rows), rows)
+    code, res = call('POST', 'maintenance.php?force=1', token=admin)
+    check('  ...and it is not sent twice', res['data']['holdReminders'] == 0, res)
+
+    # ---------------------------------------------------------------- one-time exit release
+    x = reg('RLS 1001', 'RL-1')
+    pay(x['id'])
+    driver = int(x['authorizedDrivers'][0]['id'])
+    code, res = call('POST', 'logs.php', {'plate': 'RLS 1001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver}, guard)
+    check('vehicle enters', code == 201, res)
+    code, res = call('POST', 'releases.php', {'vehicleId': x['id'], 'reason': 'Emergency, parent is ill'}, admin)
+    check('releasing a vehicle that is not on hold -> 409 NOT_ON_HOLD', code == 409 and res['data']['code'] == 'NOT_ON_HOLD', res)
+    call('POST', 'violations.php', {'vehicle_id': x['id'], 'type': 'Parking in Fire Lane / Restricted Zone', 'notes': 'Blocked the exit'}, guard)
+    code, v = verify({'plate': 'RLS 1001', 'gate_type': 'Egress'}, guard)
+    check('on hold: exit is refused', v.get('result') == 'BANNED' and v.get('accepted') is False, v)
+    code, res = call('POST', 'logs.php', {'plate': 'RLS 1001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': driver}, guard)
+    check('  ...also server-side', code == 403 and res['data']['code'] == 'VEHICLE_BANNED', res)
+    code, res = call('POST', 'releases.php', {'vehicleId': x['id'], 'reason': 'Emergency'}, guard)
+    check('a guard cannot release -> 403', code == 403, code)
+    code, res = call('POST', 'releases.php', {'vehicleId': x['id']}, admin)
+    check('the admin must give a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    code, res = call('POST', 'releases.php', {'vehicleId': x['id'], 'reason': 'Emergency, parent is ill'}, admin)
+    check('admin releases one exit', code == 201 and res['data']['minutes'] == 30, res)
+    code, res = call('POST', 'releases.php', {'vehicleId': x['id'], 'reason': 'Again please'}, admin)
+    check('a second release while one is active -> 409', code == 409, res)
+    code, v = verify({'plate': 'RLS 1001', 'gate_type': 'Egress'}, guard)
+    check('the gate scan now accepts the exit, with a warning naming the release', v.get('accepted') is True and any('EXIT RELEASED' in w for w in v.get('warnings', [])) and v.get('exitRelease'), v)
+    code, v = verify({'plate': 'RLS 1001', 'gate_type': 'Ingress'}, guard)
+    check('a release does not allow entry', v.get('accepted') is False, v)
+    code, res = call('POST', 'logs.php', {'plate': 'RLS 1001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': driver}, guard)
+    check('the exit is recorded', code == 201, res)
+    code, res = call('GET', 'vehicles.php?plate=RLS1001', token=admin)
+    check('  ...the vehicle is outside and still on hold', res['data']['status'] != 'Inside Campus' and res['data'].get('isBanned', True), res['data']['status'])
+    code, res = call('POST', 'logs.php', {'plate': 'RLS 1001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver}, guard)
+    check('  ...and cannot come back in', code == 403, res)
+    code, res = call('GET', 'audit.php?action=exit.&q=RLS1001', token=admin)
+    actions = {r['action'] for r in res['data']['rows']}
+    check('release and use are both in the audit log', {'exit.release', 'exit.release_used'} <= actions, actions)
+    # single use: put it back inside and try again
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE vehicles SET status = 'Inside Campus' WHERE id = ?", (x['id'],))
+    db.commit()
+    db.close()
+    code, v = verify({'plate': 'RLS 1001', 'gate_type': 'Egress'}, guard)
+    check('a used release cannot be reused', v.get('accepted') is False, v)
+    # expiry
+    code, res = call('POST', 'releases.php', {'vehicleId': x['id'], 'reason': 'Second emergency'}, admin)
+    check('a new release can be issued after the first was used', code == 201, res)
+    rid = res['data']['id']
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE exit_releases SET expires_at = ? WHERE id = ?", ((datetime.datetime.now() - datetime.timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S'), rid))
+    db.commit()
+    db.close()
+    code, v = verify({'plate': 'RLS 1001', 'gate_type': 'Egress'}, guard)
+    check('an expired release does nothing', v.get('accepted') is False, v)
+
+    # ---------------------------------------------------------------- capacity
+    code, res = call('GET', 'stats.php', token=admin)
+    inside = res['data']['occupancy']['inside']
+    check('stats carry the occupancy (unlimited by default)', res['data']['occupancy']['level'] == 'unlimited' and inside == res['data']['inside'], res['data']['occupancy'])
+    code, res = call('PUT', 'settings.php', {'parking_capacity': inside + 10, 'reason': 'Lot A + B only'}, admin)
+    check('set a capacity', code == 200, res)
+    code, res = call('GET', 'stats.php', token=admin)
+    check('plenty of room -> ok', res['data']['occupancy']['level'] == 'ok' and res['data']['occupancy']['available'] == 10, res['data']['occupancy'])
+    code, res = call('PUT', 'settings.php', {'parking_capacity': max(inside + 1, 1)}, admin)
+    code, res = call('GET', 'stats.php', token=admin)
+    check('one space left -> nearly full', res['data']['occupancy']['level'] == 'nearly_full', res['data']['occupancy'])
+    code, v = verify({'plate': 'MNT 1001', 'gate_type': 'Ingress'}, guard)
+    check('the gate scan carries the occupancy warning', v['occupancy']['level'] == 'nearly_full' and v['occupancy']['message'], v.get('occupancy'))
+    code, res = call('PUT', 'settings.php', {'parking_capacity': max(inside, 1)}, admin)
+    code, v = verify({'plate': 'MNT 1001', 'gate_type': 'Ingress'}, guard)
+    check('at capacity -> full (entry is still the guard\'s decision)', v['occupancy']['level'] == 'full' and v['accepted'] is True, v.get('occupancy'))
+    call('PUT', 'settings.php', {'parking_capacity': 0}, admin)
+
+    # ---------------------------------------------------------------- guard shifts and the supervisor view
+    code, res = call('GET', 'shifts.php', token=guard)
+    check('nobody on duty and no handover to start', code == 200 and res['data']['mine'] is None, res)
+    code, res = call('POST', 'shifts.php', {'action': 'start'}, guard)
+    check('going on duty needs a gate -> 400', code == 400, res)
+    code, res = call('POST', 'shifts.php', {'action': 'start', 'gate': 'Gate 1 (Main Ingress)'}, guard)
+    check('guard goes on duty', code == 201 and res['data']['shift']['gate'] == 'Gate 1 (Main Ingress)', res)
+    code, res = call('POST', 'shifts.php', {'action': 'start', 'gate': 'Gate 1 (Main Ingress)'}, guard)
+    check('starting again at the same gate resumes it', code == 200, res)
+    code, res = call('GET', 'shifts.php', token=admin)
+    check('the supervisor sees who is on duty', any(s['gate'] == 'Gate 1 (Main Ingress)' and 'QA Guard' in s['guard'] for s in res['data']['onDuty']), res['data']['onDuty'])
+    code, res = call('POST', 'shifts.php', {'action': 'end', 'notes': 'Gate arm is jammed; the plate of the blue Vios was not read.'}, guard)
+    check('guard ends the shift with a handover note', code == 200, res)
+    code, res = call('POST', 'shifts.php', {'action': 'end'}, guard)
+    check('ending when not on duty -> 409', code == 409, res)
+    code, res = call('POST', 'shifts.php', {'action': 'start', 'gate': 'Gate 1 (Main Ingress)'}, admin)
+    check('the next person on that gate gets the previous handover note', code == 201 and res['data']['handover'] and 'jammed' in res['data']['handover']['handoverNotes'], res)
+    call('POST', 'shifts.php', {'action': 'end'}, admin)
+    code, res = call('POST', 'shifts.php', {'action': 'start', 'gate': 'Gate 2'}, None)
+    check('shifts need a sign-in', code == 401, code)
+    code, res = call('POST', 'verify.php', {'plate': 'MNT 1001', 'gate_type': 'Ingress', 'lookupMethod': 'manual'}, guard)
+    code, res = call('GET', 'shifts.php?scope=report', token=guard)
+    check('the report is for admins only -> 403', code == 403, code)
+    code, res = call('GET', 'shifts.php?scope=report', token=admin)
+    qa = [g for g in res['data']['guards'] if 'QA Guard' in g['guard']]
+    check('the supervisor report lists each guard with entries, exits, denials, manual lookups, violations and hours',
+          qa and qa[0]['violationsIssued'] >= 2 and qa[0]['shifts'] >= 1 and qa[0]['entries'] >= 1 and 'denialRate' in qa[0], qa)
+
+    # ---------------------------------------------------------------- evidence photos
+    jpeg = base64.b64encode(b'\xff\xd8\xff\xe0' + b'\x00' * 200 + b'\xff\xd9').decode()
+    code, lg = call('POST', 'logs.php', {'plate': 'MNT 1001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driverName': 'Rene Wall',
+                                         'driver_id': int(m1['authorizedDrivers'][0]['id'])}, guard)
+    log_id = lg['data']['id']
+    code, res = call('POST', 'evidence.php', {'kind': 'entry', 'plate': 'MNT 1001', 'gateLogId': log_id, 'image': jpeg, 'plateRead': 'MNT 1001'}, guard)
+    check('guard uploads an entry photo; the plate read matches', code == 201 and res['data']['plateMatches'] is True, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'entry', 'plate': 'MNT 1001', 'gateLogId': log_id, 'image': 'data:image/jpeg;base64,' + jpeg, 'plateRead': 'MNT-1OO1'}, guard)
+    check('an OCR confusion (O vs 0) still matches', code == 201 and res['data']['plateMatches'] is True, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'entry', 'plate': 'MNT 1001', 'gateLogId': log_id, 'image': jpeg, 'plateRead': 'XYZ 9999'}, guard)
+    check('a different plate on the photo is flagged as a mismatch', code == 201 and res['data']['plateMatches'] is False and 'does not match' in res['message'], res)
+    code, res = call('GET', 'audit.php?action=evidence.plate_mismatch', token=admin)
+    check('  ...and logged', res['data']['total'] == 1, res['data'])
+    code, res = call('POST', 'evidence.php', {'kind': 'entry', 'plate': 'MNT 1001', 'gateLogId': log_id, 'image': jpeg}, guard)
+    check('a photo with no plate read is stored unchecked', code == 201 and res['data']['plateMatches'] is None, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'entry', 'plate': 'MNT 1001', 'gateLogId': log_id, 'image': jpeg}, guard)
+    check('at most 4 photos per record -> 409', code == 409, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'entry', 'plate': 'RLS 1001', 'gateLogId': log_id, 'image': jpeg}, guard)
+    check('a photo cannot be attached to another plate\'s record -> 400', code == 400, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'violation', 'plate': 'MNT 2002', 'violationId': vid, 'image': base64.b64encode(b'<html>not an image</html>').decode()}, guard)
+    check('something that is not a JPEG/PNG is refused', code == 400, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'violation', 'plate': 'MNT 2002', 'violationId': vid, 'image': base64.b64encode(b'\xff\xd8\xff' + b'0' * 700000).decode()}, guard)
+    check('an oversized photo -> 413', code == 413, res)
+    code, res = call('POST', 'evidence.php', {'kind': 'violation', 'plate': 'MNT 2002', 'violationId': vid, 'image': jpeg}, guard)
+    check('violation evidence is stored', code == 201, res)
+    ev_id = res['data']['id']
+    code, res = call('GET', f'evidence.php?violationId={vid}', token=guard)
+    check('guards cannot browse evidence -> 403', code == 403, code)
+    code, res = call('GET', f'evidence.php?violationId={vid}', token=admin)
+    check('admin lists the evidence without pictures', code == 200 and len(res['data']) == 1 and 'image' not in res['data'][0], res)
+    code, res = call('GET', f'evidence.php?id={ev_id}', token=admin)
+    check('admin opens one photo (data URL)', res['data']['image'].startswith('data:image/jpeg;base64,'), '')
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE evidence_photos SET created_at = ? WHERE id = ?", ((datetime.datetime.now() - datetime.timedelta(days=120)).strftime('%Y-%m-%d %H:%M:%S'), ev_id))
+    db.commit()
+    db.close()
+    code, res = call('POST', 'maintenance.php?force=1', token=admin)
+    check('photos older than the retention period are purged', res['data']['photosPurged'] == 1, res)
+    code, res = call('GET', f'evidence.php?id={ev_id}', token=admin)
+    check('  ...the row stays, the picture is gone', res['data']['purged'] is True and not res['data']['image'], res['data'])
+
+    # ---------------------------------------------------------------- HTTPS plumbing
+    code, res = call('GET', 'status.php')
+    check('status reports how the request arrived', code == 200 and 'transport' in res['data'] and res['data']['transport']['secure'] is False, res)
+    req = urllib.request.Request(f'{BASE}/status.php', headers={'X-Forwarded-Proto': 'https'})
+    with urllib.request.urlopen(req) as r:
+        check('behind a TLS proxy (X-Forwarded-Proto) the API sends HSTS', 'max-age' in (r.headers.get('Strict-Transport-Security') or ''), dict(r.headers))
+        check('  ...and nosniff', r.headers.get('X-Content-Type-Options') == 'nosniff', '')
+    with urllib.request.urlopen(f'{BASE}/status.php') as r:
+        check('plain http gets no HSTS header', r.headers.get('Strict-Transport-Security') is None, '')
+    AUTO_PAY = True
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -2164,6 +2464,7 @@ def main():
     test_vehicle_classes(admin)
     test_loophole_fixes(admin)
     test_owner_notices(admin)
+    test_ops_phase2(admin)
     test_audit_and_approvals(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
