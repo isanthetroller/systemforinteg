@@ -276,6 +276,9 @@ const ApiClient = (function() {
     getShiftReport: async (from = '', to = '') => (await request(`shifts.php?scope=report${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
     getEvidence: async (params) => (await request('evidence.php?' + new URLSearchParams(params))).data,
     getEvidencePhoto: async (id) => (await request(`evidence.php?id=${id}`)).data,
+    // Sends the owner e-mails that are waiting (entry / exit). Fire and forget: the gate screen never waits for it.
+    flushNotices: () => request('notices_send.php', { method: 'POST', body: {} }).catch(() => null),
+
     // Sends one test e-mail through the server's SMTP account (admin). Resolves with the server's message, rejects with the reason.
     sendTestMail: async (to) => {
       const res = await request('mail_test.php', { method: 'POST', body: { to } });

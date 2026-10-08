@@ -2701,8 +2701,11 @@ def test_passage_mail(admin):
                 time.sleep(0.15)
             return smtp.messages[count - 1] if len(smtp.messages) >= count else None
 
-        def deliver_pending():
-            call('POST', 'maintenance.php?force=1', token=admin)
+        def deliver_pending(headers=None):
+            # What the apps do right after a passage: ask the server to send the waiting owner e-mails
+            if headers:
+                return call('POST', 'notices_send.php', {}, headers=headers)
+            return call('POST', 'notices_send.php', {}, guard)
 
         code, res = call('POST', 'vehicles.php', {'plateNumber': 'MAL 1001', 'ownerName': 'Mia Mailer', 'ownerIdNumber': 'ML-1', 'vehicleType': '4-Wheel', 'ownerEmail': 'mia@example.com',
                                                  'makeModelColor': 'Red Honda City',
@@ -2730,7 +2733,10 @@ def test_passage_mail(admin):
 
         # ---- exit
         code, res = call('POST', 'logs.php', {'plate': 'MAL 1001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': driver}, guard)
-        deliver_pending()
+        code, res = deliver_pending(SCANNER)
+        check('the phone (scanner device key) can ask the server to send the waiting e-mails', code == 200 and res['data']['sent'] >= 1, res)
+        code, res = call('POST', 'notices_send.php', {})
+        check('...but nobody who is not signed in can -> 401', code == 401, code)
         m = wait_for(before + 2)
         check('the exit is announced too', m is not None and 'left campus' in FakeSmtp.parse(m['raw'])[0], '')
 

@@ -595,6 +595,7 @@ class ApiService {
     final outcome = await _postForOutcome(ApiConstants.logsEndpoint, payload);
     if (outcome == WriteOutcome.accepted) {
       lastGateLogId = int.tryParse('${lastResponseData?['id'] ?? ''}');
+      if (action == 'Entry Recorded' || action == 'Exit Approved') unawaited(flushOwnerNotices());
       debugPrint('[ApiService] Gate passage logged to server for $plateNumber');
       unawaited(LocalCacheService.updateVehicleCampusStatus(plateNumber, status));
       MockData.updateVehicleCampusStatus(plateNumber, status);
@@ -798,6 +799,17 @@ class ApiService {
       debugPrint('[ApiService] Lookup visitor pass note: $e');
     }
     return null;
+  }
+
+  /// Asks the server to send the owner e-mails that are waiting ("is this you?" on entry / exit). Called right after a passage
+  /// was recorded, in its own request that nobody waits for: the e-mail is sent there, so the gate is never held up by the mail
+  /// server. Failures are ignored (the e-mail then goes out with the next call or maintenance run).
+  static Future<void> flushOwnerNotices() async {
+    try {
+      await _post(Uri.parse('${ApiConstants.baseUrl}/notices_send.php'), '{}');
+    } catch (e) {
+      debugPrint('[ApiService] flushOwnerNotices note: $e');
+    }
   }
 
   /// Uploads one evidence photo (see api/evidence.php). Returns null on success, otherwise a message to show.

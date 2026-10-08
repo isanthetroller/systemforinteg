@@ -201,6 +201,7 @@ class SyncQueueService {
 
     var connectionHealthy = true;
     var delivered = false;
+    var flushOwners = false; // passages recorded offline were just accepted: their owners' "is this you?" e-mails are waiting
 
     try {
       var pending = LocalCacheService.getSyncQueue();
@@ -229,6 +230,7 @@ class SyncQueueService {
           final status = result?['status']?.toString();
           if (status == 'accepted' || status == 'duplicate') {
             delivered = true;
+            if (status == 'accepted' && item.type == 'gate_log') flushOwners = true;
             continue;
           }
           if (status == 'rejected') {
@@ -274,6 +276,8 @@ class SyncQueueService {
       connectionHealthy = false;
       debugPrint('[SyncQueueService] Sync error: $e');
     }
+
+    if (flushOwners) unawaited(ApiService.flushOwnerNotices());
 
     var fetched = false;
     if (connectionHealthy && ApiService.authToken != null && DateTime.now().difference(_lastFetch) >= _fetchEvery) {

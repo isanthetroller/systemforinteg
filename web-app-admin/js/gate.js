@@ -430,6 +430,7 @@
     gate.busy = true;
     try {
       const log = await ApiClient.createLog(payload);
+      ApiClient.flushNotices(); // the owner's "is this you?" e-mail goes out now, in its own request
       SP.showToast(`${action.toUpperCase()}: ${log.plateNumber} — ${log.driverName}. 5 s CCTV clip attached.`);
       afterDecision();
     } catch (err) {

@@ -113,6 +113,7 @@ void main() {
         if (path.endsWith('logs.php')) {
           return json(201, {'status': 'success', 'data': {'id': 99}});
         }
+        if (path.endsWith('notices_send.php')) return json(200, {'status': 'success', 'data': {'sent': 1, 'waiting': 0}});
         if (path.endsWith('sync.php')) return json(200, {'status': 'success', 'data': {'results': []}});
         return json(404, {'status': 'error', 'message': 'not found'});
       }));
@@ -145,6 +146,24 @@ void main() {
       final error = await ApiService.issueViolation(plateNumber: 'NDK 4821', type: 'Other', notes: 'x');
       expect(error, isNull);
       expect(ApiService.lastViolationId, 42);
+    });
+
+    test('after an entry or exit is recorded the phone asks the server to send the owner e-mail', () async {
+      await ApiService.postGateLog(plateNumber: 'NDK 4821', driverName: 'Maria', action: 'Entry Recorded');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(seen.containsKey('POST notices_send.php'), isTrue);
+
+      seen.clear();
+      await ApiService.postGateLog(plateNumber: 'NDK 4821', driverName: 'Maria', action: 'Exit Approved', status: 'Outside');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(seen.containsKey('POST notices_send.php'), isTrue);
+    });
+
+    test('a refused passage does not ask for an e-mail', () async {
+      seen.clear();
+      await ApiService.postGateLog(plateNumber: 'NDK 4821', driverName: 'Maria', action: 'Entry Denied', status: 'Blocked');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(seen.containsKey('POST notices_send.php'), isFalse);
     });
 
     test('a recorded gate passage carries how the vehicle was looked up and exposes the server log id', () async {
