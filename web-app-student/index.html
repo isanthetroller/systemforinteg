@@ -17,12 +17,13 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css?v=20261001b">
-<link rel="stylesheet" href="css/portal.css?v=20261009a"></head>
+<link rel="stylesheet" href="css/portal.css?v=20261010b">
+<link rel="stylesheet" href="css/portal-layout.css?v=20261010c"></head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
   <main id="screenLogin" class="screen auth-screen" hidden>
     <div class="auth-container">
-      <div class="owner-login-brand">SecurePark<span>.</span><small>NCST · Vehicle owner portal</small></div>
+      <div class="owner-login-brand">SecurePark<span>.</span></div>
       <div class="auth-card owner-login-card">
         <div class="owner-campus"><img src="assets/ncst-campus.jpg" alt="Entrance to the National College of Science and Technology"><div><h2>National College of<br>Science and Technology</h2><p>Your campus. Your vehicle pass.</p></div></div>
         <div class="owner-signin">
@@ -132,7 +133,7 @@
   </main>
 
   <!-- ==================== APP ==================== -->
-  <div id="screenApp" class="screen app" hidden>
+  <div id="screenApp" class="screen app" data-active-tab="tabPass" hidden>
     <header class="topbar">
       <div class="topbar-brand">
         <img src="assets/ncst-logo.svg" alt="NCST Logo" class="topbar-logo" width="34" height="34">
@@ -144,22 +145,29 @@
       <button type="button" class="btn btn-ghost" data-action="logout">Sign out</button>
     </header>
 
-    <main class="content"><div class="portal-heading"><small>NCST · Vehicle owner portal</small><h1 id="portalTitle">Your campus pass</h1><p id="portalDescription">Show your pass and check your vehicle details.</p></div>
+    <main class="content"><div class="portal-heading"><h1 id="portalTitle">Your campus pass</h1><p id="portalDescription">Show this QR code to the guard when you enter and leave campus.</p></div>
       <div id="alertBanner" class="alert-banner" role="alert" aria-live="assertive" hidden></div>
       <section id="tabPass" class="tab" aria-labelledby="navPass"></section>
       <section id="tabActivity" class="tab" aria-labelledby="navActivity" hidden></section>
       <section id="tabStrikes" class="tab" aria-labelledby="navStrikes" hidden></section>
       <section id="tabAccount" class="tab" aria-labelledby="navAccount" hidden>
+        <div class="cols cols-even">
+          <div class="col">
         <div class="card">
           <h2 class="card-title">My account</h2>
+          <p class="card-sub">The details the Security Office has on file. To change any of them, visit the Security Office.</p>
           <dl id="accountDetails" class="details"></dl>
         </div>
         <div class="card" id="receiptsCard" hidden>
           <h2 class="card-title">Payments &amp; receipts</h2>
+          <p class="card-sub">Fees you have paid, with the receipt number to quote if you need help.</p>
           <ul id="receiptList" class="receipts"></ul>
         </div>
+          </div>
+          <div class="col">
         <div class="card">
           <h2 class="card-title">Change password</h2>
+          <p class="card-sub">Pick something only you know.</p>
           <form id="passwordForm" novalidate>
             <label for="pwCurrent">Current password</label>
             <input id="pwCurrent" type="password" autocomplete="current-password" required>
@@ -182,6 +190,8 @@
             <li>Parking overnight or past curfew (22:00): the guard will try to contact you first.</li>
             <li>Changes to your vehicle or drivers are done at the Security Office. A new pass replaces the old one.</li>
           </ul>
+        </div>
+          </div>
         </div>
       </section>
     </main>
@@ -256,8 +266,8 @@
     };
   </script>
   <script src="js/alerts.js?v=20261001b"></script>
-  <script src="js/app.js?v=20261010b"></script>
-<script src="js/portal.js?v=20261010b"></script></body>
+  <script src="js/app.js?v=20261010d"></script>
+<script src="js/portal.js?v=20261010c"></script></body>
 </html>
 
 

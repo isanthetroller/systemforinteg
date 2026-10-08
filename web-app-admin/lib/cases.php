@@ -175,6 +175,7 @@ function casePublicView($summary, array $events) {
         'key' => $summary['key'], 'type' => $summary['type'], 'title' => $summary['title'], 'plateNumber' => $summary['plateNumber'],
         'status' => $summary['status'], 'step' => $summary['step'], 'outcome' => $summary['outcome'],
         'openedAt' => $summary['openedAt'], 'closedAt' => $summary['closedAt'], 'nextStep' => $next, 'timeline' => $tl,
+        'policeReferred' => $summary['policeReferred'], 'contactAttempts' => $summary['contactAttempts'],
     ];
 }
 
