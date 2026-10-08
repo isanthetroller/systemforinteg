@@ -17,6 +17,7 @@ import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
 import '../widgets/camera_viewfinder.dart';
 import '../widgets/scan_rejection_view.dart';
+import '../widgets/scan_notice_strip.dart';
 import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
 
@@ -59,6 +60,8 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   ScanRejectionDetails? _rejectionDetails;
   VehicleRecord? _verifiedVehicleRecord;
   String? _statusReason;
+  // What the server told us about this scan (an exit released by an administrator, the case holding the vehicle...)
+  List<ScanNotice> _scanNotices = const [];
   // A visitor day pass leaving campus: Guard 2 checks visitors out as well as registered vehicles
   ScannedVisitorPass? _exitVisitor;
   final Set<int> _exitCheckedItems = <int>{};
@@ -107,6 +110,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _rejectionDetails = null;
       _verifiedVehicleRecord = null;
       _statusReason = null;
+      _scanNotices = const [];
       _exitVisitor = null;
       _exitCheckedItems.clear();
       _selectedDriverName = '';
@@ -376,7 +380,14 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
     // If genuine registered vehicle found
     if (registeredVehicle != null && registeredVehicle.ownerIdNumber != 'UNKNOWN' && !registeredVehicle.ownerRole.contains('Guest') && !registeredVehicle.ownerRole.contains('Visitor')) {
-      _evaluateRegisteredVehicle(registeredVehicle);
+      _scanNotices = ScanNotice.fromVerify(verifyResult);
+      // An administrator released ONE exit for this vehicle on hold (the server accepted it and will use up the release
+      // when the exit is recorded): show it as a normal exit, with the release spelled out for the guard.
+      final released = verifyResult?['exitRelease'] is Map && verifyResult?['accepted'] == true;
+      if (released) {
+        registeredVehicle = registeredVehicle.copyWith(isBanned: false, registrationStatus: 'Active', campusStatus: 'Inside Campus');
+      }
+      _evaluateRegisteredVehicle(registeredVehicle, exitReleased: released);
       return;
     }
 
@@ -410,7 +421,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     } catch (_) {}
   }
 
-  void _evaluateRegisteredVehicle(VehicleRecord vehicle) {
+  void _evaluateRegisteredVehicle(VehicleRecord vehicle, {bool exitReleased = false}) {
     // 1. Strict BLOCKED Vehicle Check: Guard cannot override
     if (vehicle.isBlocked) {
       setState(() {
@@ -429,6 +440,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
               : (vehicle.registrationStatus?.toLowerCase() == 'suspended'
                   ? 'Registration is SUSPENDED.'
                   : (vehicle.flagReason ?? 'Administrative hold on vehicle.')),
+          notices: _scanNotices,
         );
       });
       return;
@@ -460,7 +472,9 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _verifiedVehicleRecord = vehicle;
       _exitVisitor = null;
       _resultStatus = ExitVerificationStatus.valid;
-      _statusReason = vehicle.hasActiveFlag ? 'FLAGGED VEHICLE: ${vehicle.flagReason ?? "Security flag active"}' : null;
+      _statusReason = exitReleased
+          ? 'EXIT RELEASED by an administrator: let it leave once. It stays on hold.'
+          : (vehicle.hasActiveFlag ? 'FLAGGED VEHICLE: ${vehicle.flagReason ?? "Security flag active"}' : null);
 
       if (vehicle.authorizedDrivers.isNotEmpty) {
         final first = vehicle.authorizedDrivers.first;
@@ -962,6 +976,8 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
 
     return Column(
       children: [
+        if (_scanNotices.isNotEmpty)
+          Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: ScanNoticeStrip(notices: _scanNotices)),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),

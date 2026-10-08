@@ -19,6 +19,9 @@ void main() {
   final List<Map<String, dynamic>> dbViolations = [];
   int violationStatus = 201;
   bool simulateNetworkFailure = false;
+  // Server-side extras the gate scan can carry: parking nearly full, an exit released by an administrator
+  bool occupancyNearlyFull = false;
+  final Set<String> releasedExits = <String>{};
 
   final guard1 = GuardUser(
     id: 'guard-01',
@@ -42,6 +45,8 @@ void main() {
 
   setUp(() {
     simulateNetworkFailure = false;
+    occupancyNearlyFull = false;
+    releasedExits.clear();
     dbVehicles.clear();
     dbLogs.clear();
     dbViolations.clear();
@@ -157,6 +162,24 @@ void main() {
             );
           }
 
+          if (isBlocked && gateType == 'Egress' && currentlyInside && releasedExits.contains(code)) {
+            return http.Response(
+              jsonEncode({
+                'status': 'success',
+                'data': {
+                  'result': 'VALID',
+                  'accepted': true,
+                  'currentlyInside': true,
+                  'warnings': ['EXIT RELEASED by Admin One until 2:30 PM (Family emergency).'],
+                  'exitRelease': {'id': 5, 'releasedBy': 'Admin One', 'expiresAt': '2026-10-08 14:30:00', 'reason': 'Family emergency'},
+                  'vehicle': veh,
+                },
+              }),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+
           if (isBlocked) {
             return http.Response(
               jsonEncode({
@@ -218,6 +241,8 @@ void main() {
                   'result': 'VALID',
                   'accepted': true,
                   'currentlyInside': currentlyInside,
+                  if (occupancyNearlyFull)
+                    'occupancy': {'level': 'nearly_full', 'inside': 95, 'capacity': 100, 'message': 'Campus parking is nearly full (95 of 100, 5 space(s) left).'},
                   'vehicle': veh,
                 },
               }),
@@ -457,9 +482,73 @@ void main() {
       expect(find.byType(ScanRejectionView), findsOneWidget); // still on the vehicle's screen
     });
 
+
+    testWidgets('Parking nearly full: the guard sees the warning, entry can still be cleared and records how it was looked up', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      occupancyNearlyFull = true;
+
+      await tester.pumpWidget(MaterialApp(home: QrScannerScreen(onDecision: (_) {})));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(QrScannerScreen));
+      state.testProcessRawQrCode('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Campus parking is nearly full'), findsOneWidget);
+      expect(find.byKey(const Key('evidenceTakePhoto')), findsOneWidget); // an optional photo can be taken first
+      await tester.tap(find.text('CLEARED (TO GO)'));
+      await tester.pumpAndSettle();
+      expect(dbLogs.single['action'], 'Entry Recorded');
+      expect(dbLogs.single['lookupMethod'], 'qr');
+    });
   });
 
   group('Exit State Checking & QR Validation (Guard 2)', () {
+    testWidgets('An exit released by an administrator lets a vehicle on hold leave once, with the release spelled out', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      dbVehicles['ABC-1111']!['is_banned'] = 1;
+      dbVehicles['ABC-1111']!['registration_status'] = 'Suspended';
+      releasedExits.add('ABC-1111');
+
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: ExitScannerScreen(currentGuard: guard2, onDecision: (_) {}))));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+      state.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Exit released by Admin One'), findsOneWidget);
+      expect(find.text('CLEARED (EXIT)'), findsOneWidget);
+      await tester.tap(find.text('CLEARED (EXIT)'));
+      await tester.pumpAndSettle();
+      expect(dbLogs.single['action'], 'Exit Approved');
+    });
+
+    testWidgets('Without a release the same vehicle on hold is still refused at the exit', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      dbVehicles['ABC-1111']!['is_banned'] = 1;
+      dbVehicles['ABC-1111']!['registration_status'] = 'Suspended';
+
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: ExitScannerScreen(currentGuard: guard2, onDecision: (_) {}))));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+      state.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ScanRejectionView), findsOneWidget);
+      expect(find.text('CLEARED (EXIT)'), findsNothing);
+      expect(dbLogs, isEmpty);
+    });
+
     testWidgets('Test 3: Vehicle inside campus exits successfully; state changes to Outside', (tester) async {
       await tester.binding.setSurfaceSize(const Size(800, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));

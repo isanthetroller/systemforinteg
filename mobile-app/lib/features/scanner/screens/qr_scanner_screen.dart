@@ -20,6 +20,9 @@ import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
 import '../widgets/camera_viewfinder.dart';
 import '../widgets/scan_rejection_view.dart';
+import '../widgets/scan_notice_strip.dart';
+import '../../../core/widgets/evidence_button.dart';
+import '../../../services/evidence_service.dart';
 import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
 
@@ -54,6 +57,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   bool _isSubmitting = false;
   bool _isPatrolInspection = false;
   DateTime? _lastScanTime;
+  // What the server told us about this scan (parking nearly full, the case holding the vehicle...)
+  List<ScanNotice> _scanNotices = const [];
+  // A photo the guard took of this vehicle; sent right after the entry is recorded
+  PendingEvidence? _evidence;
+  // True when the guard typed the plate / code instead of scanning it (supervisors see how often)
+  bool _manualLookup = false;
   ScanRejectionDetails? _rejectionDetails;
 
   VehicleRecord? _scannedVehicle;
@@ -157,6 +166,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _isSubmitting = false;
       _isPatrolInspection = false;
       _lastScanTime = null;
+      _scanNotices = const [];
+      _evidence = null;
     });
     _cameraController?.startSafely();
   }
@@ -458,6 +469,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         );
       }
 
+      _scanNotices = ScanNotice.fromVerify(vData);
+
       final isServerBanned = vData != null &&
           (vData['result'] == 'BANNED' ||
            vData['result'] == 'SUSPENDED' ||
@@ -496,6 +509,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 : (remoteVehicle.registrationStatus?.toLowerCase() == 'suspended'
                     ? 'Registration is SUSPENDED.'
                     : (remoteVehicle.flagReason ?? 'Administrative hold on vehicle.')),
+            notices: _scanNotices,
           );
         });
         return;
@@ -518,6 +532,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ownerName: remoteVehicle.ownerName,
             statusBadge: serverResult.isEmpty ? 'REFUSED' : serverResult,
             reason: serverReason,
+            notices: _scanNotices,
           );
         });
         return;
@@ -591,12 +606,18 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   void _showIssueViolationDialog() {
     final vehicle = _rejectionDetails?.vehicle;
     if (vehicle == null) return;
+    PendingEvidence? violationPhoto;
     IssueViolationDialog.show(
       context,
       plateNumber: vehicle.plateNumber,
+      onEvidence: (photo) => violationPhoto = photo,
       onSubmit: (type, notes) async {
         final messenger = ScaffoldMessenger.of(context);
         final error = await ApiService.issueViolation(plateNumber: vehicle.plateNumber, type: type, notes: notes);
+        final violationId = ApiService.lastViolationId;
+        if (error == null && violationPhoto != null && violationId != null) {
+          EvidenceService.upload(violationPhoto!, kind: 'violation', plate: vehicle.plateNumber, violationId: violationId);
+        }
         if (!mounted) return;
         if (error != null) {
           messenger.showSnackBar(SnackBar(
@@ -644,7 +665,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   void _showManualQrInputDialog() {
-    ManualQrDialog.show(context, _processRawQrCode);
+    ManualQrDialog.show(context, (raw) {
+      _manualLookup = true;
+      _processRawQrCode(raw);
+    });
   }
 
   /// Shows an existing visitor day pass the server recognised, in place of the locally guessed "unregistered" record.
@@ -939,6 +963,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     // Asynchronously synchronize with InfinityFree MySQL Backend API. If the server REFUSES the entry (banned,
     // unregistered...) it is not recorded anywhere: say so loudly, the guard must not treat it as cleared.
     final plateForLog = _scannedVehicle!.plateNumber;
+    final photo = _evidence;
     ApiService.postGateLog(
       plateNumber: plateForLog,
       driverName: _selectedDriverName,
@@ -949,9 +974,27 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       vehicleType: _scannedVehicle!.vehicleType,
       ownerName: _scannedVehicle!.ownerName,
       driverId: _scannedVehicle!.driverIdForName(_selectedDriverName),
+      lookupMethod: _manualLookup ? 'manual' : 'qr',
     ).then((recorded) {
-      if (recorded) return;
-      _showEntryNotRecorded(messenger, plateForLog);
+      if (!recorded) {
+        _showEntryNotRecorded(messenger, plateForLog);
+        return;
+      }
+      // Evidence is stored with the gate log, so it can only go once the server has given us that log's id
+      final logId = ApiService.lastGateLogId;
+      if (photo != null && logId != null) {
+        EvidenceService.upload(photo, kind: 'entry', plate: plateForLog, gateLogId: logId).then((problem) {
+          if (problem != null) {
+            messenger.showSnackBar(SnackBar(backgroundColor: NcstColors.goldDark, content: Text(problem), behavior: SnackBarBehavior.floating));
+          }
+        });
+      } else if (photo != null) {
+        messenger.showSnackBar(const SnackBar(
+          backgroundColor: NcstColors.goldDark,
+          behavior: SnackBarBehavior.floating,
+          content: Text('Entry saved offline: the photo could not be attached.'),
+        ));
+      }
     });
 
     messenger.showSnackBar(
@@ -1217,7 +1260,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     return CameraViewfinder(
       cameraController: _cameraController,
       cameraHasError: _cameraHasError,
-      onQrDetected: _processRawQrCode,
+      onQrDetected: (raw) {
+        _manualLookup = false;
+        _processRawQrCode(raw);
+      },
       onManualQrPressed: _showManualQrInputDialog,
       onFlipCameraPressed: () async {
         try {
@@ -1383,6 +1429,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       children: [
         if (_isPatrolInspection)
           _buildInspectionNoticeHeader(vehicle.plateNumber, vehicle.ownerName),
+        if (_scanNotices.isNotEmpty)
+          Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: ScanNoticeStrip(notices: _scanNotices)),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -1469,6 +1517,15 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             ),
           ),
         ),
+        if (!_isPatrolInspection && !vehicle.isUnregistered)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: EvidenceButton(
+              key: ValueKey('evidence-${vehicle.plateNumber}'),
+              expectedPlate: vehicle.plateNumber,
+              onChanged: (photo) => _evidence = photo,
+            ),
+          ),
         if (_isPatrolInspection)
           _buildInspectionDecisionBar(vehicle.plateNumber)
         else

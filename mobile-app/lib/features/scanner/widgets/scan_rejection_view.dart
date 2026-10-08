@@ -5,6 +5,7 @@ import '../../../core/widgets/plate_badge.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../theme/ncst_theme.dart';
+import 'scan_notice_strip.dart';
 
 enum ScanRejectionType {
   blocked,
@@ -29,6 +30,9 @@ class ScanRejectionDetails {
   final String? statusBadge;
   final String? reason;
 
+  /// Parking nearly full, which case holds the vehicle, ... (from the server's verify answer)
+  final List<ScanNotice> notices;
+
   ScanRejectionDetails({
     required this.type,
     required this.title,
@@ -41,6 +45,7 @@ class ScanRejectionDetails {
     this.ownerName,
     this.statusBadge,
     this.reason,
+    this.notices = const [],
   }) : resolutionInstructions = resolutionInstructions ??
             (type == ScanRejectionType.blocked
                 ? 'The vehicle owner must resolve all issues with administration before the vehicle can proceed.'
@@ -195,6 +200,7 @@ class ScanRejectionView extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
+                      ScanNoticeStrip(notices: details.notices),
                       // Prominent Notice Container
                       Container(
                         width: double.infinity,

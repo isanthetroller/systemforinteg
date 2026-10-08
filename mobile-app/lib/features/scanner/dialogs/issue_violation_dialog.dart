@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/widgets/evidence_button.dart';
+import '../../../services/evidence_service.dart';
 import '../../../theme/ncst_theme.dart';
 
 /// Lets a guard issue a violation to a vehicle (type + notes). The vehicle is then on hold: it can neither enter nor
@@ -9,20 +11,25 @@ class IssueViolationDialog extends StatefulWidget {
   final String plateNumber;
   final void Function(String type, String notes) onSubmit;
 
+  /// Called with the evidence photo (or null) when one was taken; sent to the server after the violation exists.
+  final void Function(PendingEvidence? photo)? onEvidence;
+
   const IssueViolationDialog({
     super.key,
     required this.plateNumber,
     required this.onSubmit,
+    this.onEvidence,
   });
 
   static Future<void> show(
     BuildContext context, {
     required String plateNumber,
     required void Function(String type, String notes) onSubmit,
+    void Function(PendingEvidence? photo)? onEvidence,
   }) {
     return showDialog(
       context: context,
-      builder: (ctx) => IssueViolationDialog(plateNumber: plateNumber, onSubmit: onSubmit),
+      builder: (ctx) => IssueViolationDialog(plateNumber: plateNumber, onSubmit: onSubmit, onEvidence: onEvidence),
     );
   }
 
@@ -34,6 +41,7 @@ class _IssueViolationDialogState extends State<IssueViolationDialog> {
   String? _type;
   final TextEditingController _notes = TextEditingController();
   String? _error;
+  PendingEvidence? _photo;
 
   @override
   void dispose() {
@@ -53,6 +61,7 @@ class _IssueViolationDialogState extends State<IssueViolationDialog> {
       return;
     }
     Navigator.of(context).pop();
+    widget.onEvidence?.call(_photo);
     widget.onSubmit(type, notes);
   }
 
@@ -111,6 +120,14 @@ class _IssueViolationDialogState extends State<IssueViolationDialog> {
               isDense: true,
             ),
           ),
+          if (widget.onEvidence != null) ...[
+            const SizedBox(height: 12),
+            EvidenceButton(
+              expectedPlate: widget.plateNumber,
+              label: 'Add photo evidence',
+              onChanged: (p) => _photo = p,
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(_error!, style: const TextStyle(color: NcstColors.crimson, fontSize: 12, fontWeight: FontWeight.w700)),

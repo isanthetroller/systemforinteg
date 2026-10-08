@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
+import '../../../services/api_service.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/local_cache_service.dart';
 import '../../../services/sync_queue_service.dart';
@@ -13,6 +14,8 @@ import '../../dashboard/widgets/quick_scan_banner.dart';
 import '../../scanner/screens/exit_scanner_screen.dart';
 import '../../scanner/screens/qr_scanner_screen.dart';
 import '../../visitor/screens/visitor_registration_screen.dart';
+import '../widgets/handover_note_field.dart';
+import '../widgets/shift_banner.dart';
 
 class GuardShellScreen extends StatefulWidget {
   final GuardUser user;
@@ -90,19 +93,38 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   }
 
   void _confirmLogout() {
+    var handoverNote = '';
+    final onDuty = ShiftBanner.onDuty.value;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Sign Out of Terminal'),
-        content: const Text('Are you sure you want to end your security guard shift and sign out?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Are you sure you want to end your security guard shift and sign out?'),
+            if (onDuty) ...[
+              const SizedBox(height: 12),
+              HandoverNoteField(
+                key: const Key('signOutHandoverField'),
+                lines: 3,
+                label: 'Handover note for the next guard (optional)',
+                onChanged: (v) => handoverNote = v,
+              ),
+            ],
+          ],
+        ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('CANCEL'),
-          ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('CANCEL')),
           ElevatedButton(
             onPressed: () async {
+              final note = handoverNote.trim();
               Navigator.of(ctx).pop();
+              if (onDuty) {
+                await ApiService.endShift(note);
+                ShiftBanner.onDuty.value = false;
+              }
               await AuthService().logout();
               if (mounted) {
                 Navigator.of(context).pushReplacement(
@@ -359,6 +381,9 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Who is on duty at this gate, and the previous guard's handover note
+            ShiftBanner(assignedGate: _currentUser.assignedGate),
+
             // KPI Counters
             DashboardKpiRow(
               insideCount: _insideCount,
