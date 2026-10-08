@@ -19,6 +19,7 @@ import '../dialogs/manual_qr_dialog.dart';
 import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
 import '../widgets/camera_viewfinder.dart';
+import '../../../services/scan_feedback.dart';
 import '../widgets/scan_rejection_view.dart';
 import '../widgets/scan_notice_strip.dart';
 import '../../../core/widgets/evidence_button.dart';
@@ -63,6 +64,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   PendingEvidence? _evidence;
   // True when the guard typed the plate / code instead of scanning it (supervisors see how often)
   bool _manualLookup = false;
+  // Plays the beep / vibration for each new scan result
+  final ScanFeedbackGate _feedback = ScanFeedbackGate();
   ScanRejectionDetails? _rejectionDetails;
 
   VehicleRecord? _scannedVehicle;
@@ -1145,8 +1148,23 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     );
   }
 
+  /// What the guard should hear for the result on screen (null while scanning / verifying).
+  ScanOutcome? get _outcome {
+    if (_isValidating || _isPatrolInspection) return null;
+    final rejection = _rejectionDetails;
+    if (rejection != null) {
+      return (rejection.type == ScanRejectionType.networkError || rejection.type == ScanRejectionType.unknown)
+          ? ScanOutcome.warning
+          : ScanOutcome.refused;
+    }
+    if (_scannedVehicle == null && _visitorPass == null) return null;
+    final needsLook = _scanNotices.any((n) => n.level != ScanNoticeLevel.info) || (_scannedVehicle?.hasActiveFlag ?? false);
+    return needsLook ? ScanOutcome.warning : ScanOutcome.cleared;
+  }
+
   @override
   Widget build(BuildContext context) {
+    _feedback.update(_outcome);
     final Widget content;
     if (_isValidating) {
       content = const Center(

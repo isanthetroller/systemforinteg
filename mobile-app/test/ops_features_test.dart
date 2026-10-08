@@ -1,11 +1,20 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:systemforinteg/core/utils/plate_reader.dart';
+import 'package:systemforinteg/features/cases/case_format.dart';
+import 'package:systemforinteg/features/cases/screens/case_detail_screen.dart';
+import 'package:systemforinteg/features/cases/screens/cases_screen.dart';
+import 'package:systemforinteg/features/guard/screens/guard_shell_screen.dart';
 import 'package:systemforinteg/features/guard/widgets/shift_banner.dart';
+import 'package:systemforinteg/models/user_model.dart';
+import 'package:systemforinteg/features/scanner/widgets/scan_rejection_view.dart';
+import 'package:systemforinteg/services/local_cache_service.dart';
+import 'package:systemforinteg/services/scan_feedback.dart';
 import 'package:systemforinteg/features/scanner/widgets/scan_notice_strip.dart';
 import 'package:systemforinteg/services/api_service.dart';
 
@@ -233,6 +242,351 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: Scaffold(body: ShiftBanner(assignedGate: 'Gate 1 (Main Ingress)'))));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('shiftBanner')), findsNothing);
+    });
+  });
+
+  group('ScanFeedback', () {
+    tearDown(() {
+      ScanFeedback.testSink = null;
+      LocalCacheService.clearMemoryCache();
+    });
+
+    test('each outcome has its own tone and vibration, and the refused one is the longest', () {
+      final cleared = ScanFeedback.wavFor(ScanOutcome.cleared);
+      final warning = ScanFeedback.wavFor(ScanOutcome.warning);
+      final refused = ScanFeedback.wavFor(ScanOutcome.refused);
+      expect(cleared.length, isNot(warning.length));
+      expect(refused.length, greaterThan(warning.length));
+      expect(ScanFeedback.vibrationFor(ScanOutcome.cleared).length, 2);
+      expect(ScanFeedback.vibrationFor(ScanOutcome.warning).length, 4);
+      expect(ScanFeedback.vibrationFor(ScanOutcome.refused).reduce((a, b) => a + b), greaterThan(1000));
+    });
+
+    test('the generated sound is a valid 16-bit mono WAV file', () {
+      final wav = ScanFeedback.wavFor(ScanOutcome.cleared);
+      expect(String.fromCharCodes(wav.sublist(0, 4)), 'RIFF');
+      expect(String.fromCharCodes(wav.sublist(8, 12)), 'WAVE');
+      expect(String.fromCharCodes(wav.sublist(36, 40)), 'data');
+      final data = ByteData.sublistView(wav);
+      expect(data.getUint32(4, Endian.little), wav.length - 8);
+      expect(data.getUint32(40, Endian.little), wav.length - 44);
+      expect(data.getUint16(22, Endian.little), 1); // mono
+      expect(data.getUint16(34, Endian.little), 16); // 16 bit
+    });
+
+    test('on by default; turning it off silences every cue and the choice is remembered', () async {
+      final heard = <ScanOutcome>[];
+      ScanFeedback.testSink = (o) async => heard.add(o);
+      expect(ScanFeedback.enabled, isTrue);
+      await ScanFeedback.play(ScanOutcome.refused);
+      expect(heard, [ScanOutcome.refused]);
+
+      await ScanFeedback.setEnabled(false);
+      expect(ScanFeedback.enabled, isFalse);
+      await ScanFeedback.play(ScanOutcome.cleared);
+      expect(heard, [ScanOutcome.refused]); // nothing new
+      await ScanFeedback.play(ScanOutcome.cleared, force: true); // the "test it" preview still plays
+      expect(heard.last, ScanOutcome.cleared);
+
+      await ScanFeedback.setEnabled(true);
+      expect(ScanFeedback.enabled, isTrue);
+    });
+
+    testWidgets('ScanFeedbackGate plays once per result, not on every rebuild', (tester) async {
+      final heard = <ScanOutcome>[];
+      ScanFeedback.testSink = (o) async => heard.add(o);
+      final gate = ScanFeedbackGate();
+      Future<void> frame(ScanOutcome? now) async {
+        gate.update(now);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+
+      await frame(null);
+      await frame(ScanOutcome.cleared);
+      await frame(ScanOutcome.cleared);
+      await frame(ScanOutcome.cleared);
+      expect(heard, [ScanOutcome.cleared]);
+      await frame(null); // back to scanning
+      await frame(ScanOutcome.cleared); // the next vehicle, same kind of result
+      await frame(ScanOutcome.refused);
+      expect(heard, [ScanOutcome.cleared, ScanOutcome.cleared, ScanOutcome.refused]);
+    });
+  });
+
+  group('Cases on the phone', () {
+    final calls = <Map<String, dynamic>>[];
+    late Map<String, dynamic> theCase;
+    List<Map<String, dynamic>> listed = [];
+
+    Map<String, dynamic> row(String key, String plate, String status, {int attempts = 0, bool police = false}) => {
+          'key': key,
+          'plateNumber': plate,
+          'title': 'Parking in Fire Lane',
+          'status': status,
+          'step': status == 'Open' ? 'Reported' : status,
+          'ownerName': 'Prof. John Smith',
+          'ownerPhone': '0917 555 0100',
+          'openedAt': '2026-10-08 08:00:00',
+          'contactAttempts': attempts,
+          'policeReferred': police,
+        };
+
+    setUp(() {
+      calls.clear();
+      theCase = {
+        ...row('V12', 'ABC-1111', 'Open'),
+        'timeline': [
+          {'at': '2026-10-08 08:00:00', 'type': 'reported', 'label': 'Reported', 'detail': 'Parking in Fire Lane', 'by': 'Officer Entrance'},
+        ],
+      };
+      listed = [row('V12', 'ABC-1111', 'Open'), row('I3', 'XYZ-9999', 'Awaiting clearance', attempts: 2, police: true)];
+      ApiService.resetClient();
+      ApiService.setClientForTesting(MockClient((request) async {
+        final body = request.body.isNotEmpty ? jsonDecode(request.body) as Map<String, dynamic> : <String, dynamic>{};
+        if (!request.url.path.endsWith('cases.php')) return json(404, {'status': 'error', 'message': 'not found'});
+        if (request.method == 'GET') {
+          if (request.url.queryParameters['key'] != null) return json(200, {'status': 'success', 'data': theCase});
+          calls.add({'GET': request.url.queryParameters['status']});
+          return json(200, {'status': 'success', 'data': {'cases': listed, 'summary': {}, 'total': listed.length}});
+        }
+        calls.add(body);
+        if (body['action'] == 'contact' && body['result'] == 'No answer') {
+          theCase = {
+            ...theCase,
+            'contactAttempts': 1,
+            'step': 'Contact attempted',
+            'timeline': [
+              ...(theCase['timeline'] as List),
+              {'at': '2026-10-08 09:00:00', 'type': 'contact', 'label': 'Contact attempt: Phone call, No answer', 'detail': body['note'], 'by': 'Officer Entrance'},
+            ],
+          };
+          return json(200, {'status': 'success', 'message': 'Contact attempt recorded.', 'data': {'case': theCase}});
+        }
+        if (body['action'] == 'awaiting') {
+          theCase = {...theCase, 'status': 'Awaiting clearance', 'step': 'Awaiting clearance'};
+          return json(200, {'status': 'success', 'message': 'Marked as waiting for the owner to come in for clearance.', 'data': {'case': theCase}});
+        }
+        if (body['action'] == 'close') return json(403, {'status': 'error', 'message': 'Only an administrator can do this.'});
+        return json(400, {'status': 'error', 'message': 'Write the note.'});
+      }));
+    });
+
+    tearDown(ApiService.resetClient);
+
+    test('caseAction posts the key, the action and the contact fields; a refusal comes back as a message', () async {
+      final ok = await ApiService.caseAction('V12', 'contact', method: 'Phone call', result: 'No answer', note: 'Rang 3 times');
+      expect(ok['error'], isNull);
+      expect(calls.last, {'key': 'V12', 'action': 'contact', 'method': 'Phone call', 'result': 'No answer', 'note': 'Rang 3 times'});
+      final denied = await ApiService.caseAction('V12', 'close');
+      expect(denied['error'], 'Only an administrator can do this.');
+      expect(calls.last.containsKey('method'), isFalse);
+    });
+
+    test('server unreachable: lists give null and actions say nothing was saved', () async {
+      ApiService.resetClient();
+      ApiService.setClientForTesting(MockClient((request) async => throw http.ClientException('offline')));
+      expect(await ApiService.fetchCases(), isNull);
+      expect(await ApiService.fetchCase('V12'), isNull);
+      expect((await ApiService.caseAction('V12', 'note', note: 'x'))['error'], contains('Nothing was saved'));
+    });
+
+    testWidgets('the list shows open cases with counts and who has been tried', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: CasesScreen())));
+      await tester.pumpAndSettle();
+      expect(calls.first['GET'], 'active');
+      expect(find.text('ABC-1111'), findsOneWidget);
+      expect(find.text('XYZ-9999'), findsOneWidget);
+      expect(find.textContaining('not contacted yet'), findsOneWidget);
+      expect(find.textContaining('2 contact attempts'), findsOneWidget);
+      expect(find.text('Coming in'), findsOneWidget);
+      expect(find.text('On hold'), findsWidgets);
+    });
+
+    testWidgets('no open cases says so; an unreachable server says that instead', (tester) async {
+      listed = [];
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: CasesScreen())));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('casesEmpty')), findsOneWidget);
+
+      ApiService.resetClient();
+      ApiService.setClientForTesting(MockClient((request) async => throw http.ClientException('offline')));
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SizedBox.shrink())));
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: CasesScreen())));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('casesUnreachable')), findsOneWidget);
+    });
+
+    testWidgets('open a case, log a contact attempt: the form needs both answers, then the timeline gains the attempt', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: CasesScreen())));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('caseTile:V12')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Case V12'), findsOneWidget);
+      expect(find.text('Prof. John Smith'), findsOneWidget);
+      expect(find.text('0917 555 0100'), findsOneWidget);
+      expect(find.byKey(const Key('callOwner')), findsOneWidget);
+      expect(find.textContaining('administrator'), findsWidgets); // closing / police are not the guard's
+      expect(find.text('Close case'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('logContact')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<ElevatedButton>(find.byKey(const Key('contactSave'))).onPressed, isNull);
+      await tester.tap(find.byKey(const Key('contactMethod:Phone call')));
+      await tester.tap(find.byKey(const Key('contactResult:No answer')));
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('contactNoteField')), 'Rang 3 times');
+      await tester.tap(find.byKey(const Key('contactSave')));
+      await tester.pumpAndSettle();
+
+      expect(calls.any((c) => c['action'] == 'contact' && c['method'] == 'Phone call' && c['result'] == 'No answer' && c['note'] == 'Rang 3 times'), isTrue);
+      expect(find.text('Contact attempt recorded.'), findsOneWidget);
+      expect(find.text('Contact attempt: Phone call, No answer'), findsOneWidget);
+    });
+
+    testWidgets('"Owner is coming in" asks first, then moves the case to Awaiting clearance and hides itself', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(home: CaseDetailScreen(caseKey: 'V12', preview: row('V12', 'ABC-1111', 'Open'))));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('markAwaiting')));
+      await tester.pumpAndSettle();
+      expect(calls.where((c) => c['action'] == 'awaiting'), isEmpty); // not sent until confirmed
+      await tester.tap(find.byKey(const Key('awaitingConfirm')));
+      await tester.pumpAndSettle();
+      expect(calls.where((c) => c['action'] == 'awaiting').length, 1);
+      expect(find.byKey(const Key('markAwaiting')), findsNothing);
+      expect(tester.widget<Text>(find.descendant(of: find.byKey(const Key('caseStatusChip')), matching: find.byType(Text))).data, 'Awaiting clearance');
+    });
+
+    testWidgets('a note is required; a closed case offers no actions; no phone on file says so', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(home: CaseDetailScreen(caseKey: 'V12', preview: row('V12', 'ABC-1111', 'Open'))));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('addCaseNote')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('noteSave')));
+      await tester.pumpAndSettle();
+      expect(find.text('Write the note first.'), findsOneWidget);
+      expect(calls.where((c) => c['action'] == 'note'), isEmpty);
+
+      theCase = {...theCase, 'status': 'Closed', 'step': 'Closed: Clearance signed', 'ownerPhone': null};
+      await tester.pumpWidget(MaterialApp(home: CaseDetailScreen(key: UniqueKey(), caseKey: 'V12')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('logContact')), findsNothing);
+      expect(find.byKey(const Key('callOwner')), findsNothing);
+      expect(find.byKey(const Key('noPhoneNote')), findsOneWidget);
+    });
+
+    testWidgets('a vehicle held by a case offers VIEW CASE on the rejection screen', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final details = ScanRejectionDetails(
+        type: ScanRejectionType.blocked,
+        title: 'ACCESS DENIED',
+        message: 'On hold',
+        notices: ScanNotice.fromVerify({
+          'case': {'key': 'V12', 'title': 'Parking in Fire Lane', 'step': 'Reported', 'policeReferred': false},
+        }),
+      );
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: ScanRejectionView(details: details, onScanAnother: () {}))));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('viewCaseButton')));
+      await tester.tap(find.byKey(const Key('viewCaseButton')));
+      await tester.pumpAndSettle();
+      expect(find.text('Case V12'), findsOneWidget);
+
+      // a rejection with no case has no such button
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: ScanRejectionView(
+            details: ScanRejectionDetails(type: ScanRejectionType.notFound, title: 'NOT FOUND', message: 'x'),
+            onScanAnother: () {},
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('viewCaseButton')), findsNothing);
+    });
+
+    test('CaseFormat: friendly dates and ages', () {
+      expect(CaseFormat.when('2026-10-08 14:30:00'), 'Oct 8, 2:30 PM');
+      expect(CaseFormat.when('not a date'), '');
+      expect(CaseFormat.age('2026-10-05 08:00:00', now: DateTime(2026, 10, 8, 9)), 'Open 3 days');
+      expect(CaseFormat.age('2026-10-08 08:00:00', now: DateTime(2026, 10, 8, 9, 30)), 'Open 1 h');
+      expect(CaseFormat.age('2026-10-08 08:00:00', now: DateTime(2026, 10, 8, 8, 20)), 'Open 20 min');
+    });
+  });
+
+  group('Guard shell: Cases tab and scan sound switch', () {
+    GuardUser guard(GuardRole role) => GuardUser(
+          id: 'g',
+          username: 'g',
+          fullName: 'Officer Test',
+          badgeNumber: 'B-1',
+          role: role,
+          assignedGate: role == GuardRole.entrance ? 'Gate 1 (Main Ingress)' : 'Gate 2 (Main Egress)',
+          loginTime: DateTime.now(),
+        );
+
+    setUp(() {
+      LocalCacheService.clearMemoryCache();
+      ApiService.resetClient();
+      ApiService.setClientForTesting(MockClient((request) async {
+        if (request.url.path.endsWith('cases.php')) {
+          return json(200, {'status': 'success', 'data': {'cases': [], 'summary': {}, 'total': 0}});
+        }
+        if (request.url.path.endsWith('shifts.php')) return json(200, {'status': 'success', 'data': {'onDuty': [], 'mine': null, 'handover': null}});
+        return json(200, {'status': 'success', 'data': []});
+      }));
+    });
+
+    tearDown(() {
+      ApiService.resetClient();
+      ScanFeedback.testSink = null;
+    });
+
+    for (final role in [GuardRole.entrance, GuardRole.exit]) {
+      testWidgets('${role.name} guard: a Cases tab opens the list of open cases', (tester) async {
+        await tester.binding.setSurfaceSize(const Size(800, 1400));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(MaterialApp(home: GuardShellScreen(user: guard(role))));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('Cases'), findsOneWidget);
+        await tester.tap(find.text('Cases'));
+        await tester.pumpAndSettle();
+        expect(find.byType(CasesScreen), findsOneWidget);
+        expect(find.byKey(const Key('casesEmpty')), findsOneWidget);
+      });
+    }
+
+    testWidgets('the menu switch turns scan sound and vibration off and on, and previews the sound when turning on', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1400));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final heard = <ScanOutcome>[];
+      ScanFeedback.testSink = (o) async => heard.add(o);
+      await tester.pumpWidget(MaterialApp(home: GuardShellScreen(user: guard(GuardRole.entrance))));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(find.byTooltip('Switch Guard Role / Account'));
+      await tester.pumpAndSettle();
+      expect(find.text('Scan sound & vibration: ON'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('toggleScanSound')));
+      await tester.pumpAndSettle();
+      expect(ScanFeedback.enabled, isFalse);
+      expect(heard, isEmpty);
+
+      await tester.tap(find.byTooltip('Switch Guard Role / Account'));
+      await tester.pumpAndSettle();
+      expect(find.text('Scan sound & vibration: OFF'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('toggleScanSound')));
+      await tester.pumpAndSettle();
+      expect(ScanFeedback.enabled, isTrue);
+      expect(heard, [ScanOutcome.cleared]);
     });
   });
 }

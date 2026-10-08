@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/utils/scanner_controller_safe.dart';
+import '../../../core/widgets/evidence_button.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
@@ -10,12 +11,14 @@ import '../../../models/visitor_pass_model.dart';
 import '../../../repositories/gate_repository.dart';
 import '../../../repositories/visitor_repository.dart';
 import '../../../services/api_service.dart';
+import '../../../services/evidence_service.dart';
 import '../../../theme/ncst_theme.dart';
 import '../dialogs/block_reason_dialog.dart';
 import '../dialogs/manual_qr_dialog.dart';
 import '../widgets/authorized_drivers_card.dart';
 import '../widgets/bottom_decision_bar.dart';
 import '../widgets/camera_viewfinder.dart';
+import '../../../services/scan_feedback.dart';
 import '../widgets/scan_rejection_view.dart';
 import '../widgets/scan_notice_strip.dart';
 import '../widgets/scanned_person_card.dart';
@@ -62,6 +65,10 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   String? _statusReason;
   // What the server told us about this scan (an exit released by an administrator, the case holding the vehicle...)
   List<ScanNotice> _scanNotices = const [];
+  // An optional photo of the vehicle leaving; sent right after the exit is recorded (never holds the exit up)
+  PendingEvidence? _evidence;
+  // Plays the beep / vibration for each new scan result
+  final ScanFeedbackGate _feedback = ScanFeedbackGate();
   // A visitor day pass leaving campus: Guard 2 checks visitors out as well as registered vehicles
   ScannedVisitorPass? _exitVisitor;
   final Set<int> _exitCheckedItems = <int>{};
@@ -111,6 +118,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       _verifiedVehicleRecord = null;
       _statusReason = null;
       _scanNotices = const [];
+      _evidence = null;
       _exitVisitor = null;
       _exitCheckedItems.clear();
       _selectedDriverName = '';
@@ -122,6 +130,9 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     });
     _cameraController?.startSafely();
   }
+
+  @visibleForTesting
+  void testSetEvidence(PendingEvidence? photo) => _evidence = photo;
 
   @visibleForTesting
   void testVerifyPass(String raw) {
@@ -405,6 +416,23 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
   }
 
   /// The server refused to record this exit, so it exists nowhere but on this phone's screen: tell the guard.
+  /// Sends the optional exit photo with the gate log that was just recorded. The photo is a bonus: a failure only shows a
+  /// notice and the exit stays recorded.
+  void _uploadExitPhoto(PendingEvidence? photo, String plate, {required bool recorded}) {
+    if (photo == null || !recorded) return;
+    final messenger = mounted ? ScaffoldMessenger.maybeOf(context) : null;
+    void warn(String text) =>
+        messenger?.showSnackBar(SnackBar(backgroundColor: NcstColors.goldDark, content: Text(text), behavior: SnackBarBehavior.floating));
+    final logId = ApiService.lastGateLogId;
+    if (logId == null) {
+      warn('Exit saved offline: the photo could not be attached.');
+      return;
+    }
+    EvidenceService.upload(photo, kind: 'exit', plate: plate, gateLogId: logId).then((problem) {
+      if (problem != null) warn(problem);
+    });
+  }
+
   void _showNotRecorded(String plate) {
     if (!mounted) return;
     try {
@@ -504,6 +532,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     final pass = _exitVisitor;
     if (pass == null || !pass.canAdmit || !_exitItemsAllChecked) return;
 
+    final photo = _evidence;
     final recorded = await ApiService.postGateLog(
       plateNumber: pass.plateNumber,
       driverName: pass.visitorName,
@@ -519,6 +548,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       visitorPassId: pass.id,
       itemsVerified: pass.hasItems,
     );
+    _uploadExitPhoto(photo, pass.plateNumber, recorded: recorded);
     if (!recorded) {
       _showNotRecorded(pass.plateNumber);
     } else {
@@ -654,6 +684,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       blockReason: v.hasActiveFlag ? 'FLAGGED EXIT RECORDED: ${v.flagReason}' : null,
     );
 
+    final photo = _evidence;
     final recorded = await ApiService.postGateLog(
       plateNumber: v.plateNumber,
       driverName: driver,
@@ -667,6 +698,7 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
       ownerName: v.ownerName,
       driverId: v.driverIdForName(driver),
     );
+    _uploadExitPhoto(photo, v.plateNumber, recorded: recorded);
     if (!recorded) _showNotRecorded(v.plateNumber);
 
     widget.onDecision?.call(exitEntry);
@@ -819,8 +851,24 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
     }
   }
 
+  /// What the guard should hear for the result on screen (null while scanning / verifying).
+  ScanOutcome? get _outcome {
+    if (_isVerifying) return null;
+    final rejection = _rejectionDetails;
+    if (rejection != null) {
+      return (rejection.type == ScanRejectionType.networkError || rejection.type == ScanRejectionType.unknown)
+          ? ScanOutcome.warning
+          : ScanOutcome.refused;
+    }
+    if (_resultStatus == null) return null;
+    if (_resultStatus != ExitVerificationStatus.valid) return ScanOutcome.refused;
+    final needsLook = _scanNotices.any((n) => n.level != ScanNoticeLevel.info) || (_verifiedVehicleRecord?.hasActiveFlag ?? false);
+    return needsLook ? ScanOutcome.warning : ScanOutcome.cleared;
+  }
+
   @override
   Widget build(BuildContext context) {
+    _feedback.update(_outcome);
     final Widget content;
     if (_isVerifying) {
       content = const Center(
@@ -1064,6 +1112,16 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
             ),
           ),
         ),
+        if (vehicle.isEligibleForExit)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: EvidenceButton(
+              key: ValueKey('exit-evidence-${vehicle.plateNumber}'),
+              expectedPlate: vehicle.plateNumber,
+              label: 'Photo of vehicle leaving (optional)',
+              onChanged: (photo) => _evidence = photo,
+            ),
+          ),
         BottomDecisionBar(
           onBlock: _showBlockDialog,
           onCleared: _handleConfirmExit,
@@ -1102,6 +1160,16 @@ class _ExitScannerScreenState extends State<ExitScannerScreen> with WidgetsBindi
             ),
           ),
         ),
+        if (pass.canAdmit)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: EvidenceButton(
+              key: ValueKey('exit-evidence-${pass.plateNumber}'),
+              expectedPlate: pass.plateNumber,
+              label: 'Photo of vehicle leaving (optional)',
+              onChanged: (photo) => _evidence = photo,
+            ),
+          ),
         BottomDecisionBar(
           onBlock: _showBlockDialog,
           onCleared: _confirmVisitorExit,

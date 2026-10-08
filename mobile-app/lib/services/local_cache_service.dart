@@ -18,6 +18,7 @@ class LocalCacheService {
   static const String keySyncQueue = 'sp_offline_sync_queue_v2';
   static const String keyRejectedSync = 'sp_rejected_sync_events_v1';
   static const String keyVisitorPassValidityHours = 'sp_visitor_pass_validity_hours';
+  static const String keyScanFeedback = 'sp_scan_feedback_enabled';
   static const String keyServerBaseUrl = 'sp_server_base_url_v2';
 
   static const Set<String> _legacyMockPlates = {
@@ -328,5 +329,16 @@ class LocalCacheService {
       debugPrint('[LocalCacheService] Error reading visitor pass validity hours: $e');
     }
     return 8; // Default 8 hours
+  }
+
+  /// Beep + vibration on every scan result (on by default).
+  static bool getScanFeedbackEnabled() => _getString(keyScanFeedback) != 'off';
+
+  static Future<void> setScanFeedbackEnabled(bool enabled) async {
+    try {
+      await _setString(keyScanFeedback, enabled ? 'on' : 'off');
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error saving scan feedback setting: $e');
+    }
   }
 }

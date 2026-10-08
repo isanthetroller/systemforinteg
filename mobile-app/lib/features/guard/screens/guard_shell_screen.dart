@@ -7,7 +7,9 @@ import '../../../services/auth_service.dart';
 import '../../../services/local_cache_service.dart';
 import '../../../services/sync_queue_service.dart';
 import '../../../theme/ncst_theme.dart';
+import '../../../services/scan_feedback.dart';
 import '../../auth/screens/login_screen.dart';
+import '../../cases/screens/cases_screen.dart';
 import '../../dashboard/widgets/audit_log_card.dart';
 import '../../dashboard/widgets/dashboard_kpi_row.dart';
 import '../../dashboard/widgets/quick_scan_banner.dart';
@@ -90,6 +92,19 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
       );
       _selectedIndex = 0;
     });
+  }
+
+  Future<void> _toggleScanFeedback() async {
+    final turnOn = !ScanFeedback.enabled;
+    await ScanFeedback.setEnabled(turnOn);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(turnOn ? 'Scan sound and vibration are on.' : 'Scan sound and vibration are off.'),
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 2),
+    ));
+    // Let the guard hear what "cleared" sounds like when turning it on
+    if (turnOn) await ScanFeedback.play(ScanOutcome.cleared);
   }
 
   void _confirmLogout() {
@@ -253,6 +268,8 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
               _switchRole(GuardRole.entrance);
             } else if (val == 'switch_to_exit') {
               _switchRole(GuardRole.exit);
+            } else if (val == 'toggle_sound') {
+              _toggleScanFeedback();
             } else if (val == 'logout') {
               _confirmLogout();
             }
@@ -265,7 +282,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                 children: const [
                   Icon(Icons.login_rounded, size: 18, color: NcstColors.green),
                   SizedBox(width: 8),
-                  Text('Switch to Guard 1 (Entrance)'),
+                  Flexible(child: Text('Switch to Guard 1 (Entrance)', overflow: TextOverflow.ellipsis)),
                 ],
               ),
             ),
@@ -276,7 +293,19 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                 children: const [
                   Icon(Icons.logout_rounded, size: 18, color: NcstColors.navy),
                   SizedBox(width: 8),
-                  Text('Switch to Guard 2 (Exit)'),
+                  Flexible(child: Text('Switch to Guard 2 (Exit)', overflow: TextOverflow.ellipsis)),
+                ],
+              ),
+            ),
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              key: const Key('toggleScanSound'),
+              value: 'toggle_sound',
+              child: Row(
+                children: [
+                  Icon(ScanFeedback.enabled ? Icons.volume_up_rounded : Icons.volume_off_rounded, size: 18, color: NcstColors.navy),
+                  const SizedBox(width: 8),
+                  Flexible(child: Text(ScanFeedback.enabled ? 'Scan sound & vibration: ON' : 'Scan sound & vibration: OFF', overflow: TextOverflow.ellipsis)),
                 ],
               ),
             ),
@@ -287,7 +316,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                 children: const [
                   Icon(Icons.power_settings_new, size: 18, color: NcstColors.crimson),
                   SizedBox(width: 8),
-                  Text('Sign Out of Terminal', style: TextStyle(color: NcstColors.crimson)),
+                  Flexible(child: Text('Sign Out of Terminal', overflow: TextOverflow.ellipsis, style: TextStyle(color: NcstColors.crimson))),
                 ],
               ),
             ),
@@ -338,6 +367,8 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
               _fetchLiveLogs();
             },
           );
+        case 3:
+          return const CasesScreen();
         default:
           return const SizedBox.shrink();
       }
@@ -365,6 +396,8 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
               _fetchLiveLogs();
             },
           );
+        case 2:
+          return const CasesScreen();
         default:
           return const SizedBox.shrink();
       }
@@ -460,6 +493,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                   activeIcon: Icon(Icons.person_add_alt_1),
                   label: 'Visitor',
                 ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.folder_open_outlined),
+                  activeIcon: Icon(Icons.folder_open),
+                  label: 'Cases',
+                ),
               ]
             : const [
                 BottomNavigationBarItem(
@@ -471,6 +509,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                   icon: Icon(Icons.qr_code_scanner_outlined),
                   activeIcon: Icon(Icons.qr_code_scanner),
                   label: 'Scan / Exit',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.folder_open_outlined),
+                  activeIcon: Icon(Icons.folder_open),
+                  label: 'Cases',
                 ),
               ],
       ),

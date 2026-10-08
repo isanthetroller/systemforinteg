@@ -866,6 +866,52 @@ class ApiService {
     }
   }
 
+  /// Cases still being worked (GET /api/cases.php?status=active): {'cases': [...], 'summary': {...}}. Null when unreachable.
+  static Future<Map<String, dynamic>?> fetchCases({String status = 'active'}) async {
+    try {
+      final res = await _get(Uri.parse('${ApiConstants.baseUrl}/cases.php?status=$status&limit=100'));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body);
+      if (body is Map && body['data'] is Map) return Map<String, dynamic>.from(body['data']);
+    } catch (e) {
+      debugPrint('[ApiService] fetchCases note: $e');
+    }
+    return null;
+  }
+
+  /// One case with its timeline (GET /api/cases.php?key=V12). Null when unreachable or not found.
+  static Future<Map<String, dynamic>?> fetchCase(String key) async {
+    try {
+      final res = await _get(Uri.parse('${ApiConstants.baseUrl}/cases.php?key=${Uri.encodeComponent(key)}'));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body);
+      if (body is Map && body['data'] is Map) return Map<String, dynamic>.from(body['data']);
+    } catch (e) {
+      debugPrint('[ApiService] fetchCase note: $e');
+    }
+    return null;
+  }
+
+  /// A step a guard may take on a case: action 'contact' (needs [method] and [result]), 'awaiting' or 'note'. Closing a
+  /// case and referring it to the police are administrator-only on the server. Returns {'case': ..} or {'error': message}.
+  static Future<Map<String, dynamic>> caseAction(String key, String action, {String? method, String? result, String note = ''}) async {
+    try {
+      final res = await _post(
+        Uri.parse('${ApiConstants.baseUrl}/cases.php'),
+        jsonEncode({'key': key, 'action': action, 'method': ?method, 'result': ?result, 'note': note}),
+      );
+      if (res.statusCode >= 500) return {'error': 'No connection to the server. Nothing was saved.'};
+      final body = jsonDecode(res.body);
+      if (res.statusCode == 200 && body is Map && body['data'] is Map) {
+        final data = Map<String, dynamic>.from(body['data']);
+        return {...data, 'message': body['message']};
+      }
+      return {'error': _messageOf(res) ?? 'The case was not updated (HTTP ${res.statusCode}).'};
+    } catch (e) {
+      return {'error': 'No connection to the server. Nothing was saved.'};
+    }
+  }
+
   /// Verify pass against backend /api/verify.php
   static Future<Map<String, dynamic>?> verifyPassWithServer({
     String? qrCode,

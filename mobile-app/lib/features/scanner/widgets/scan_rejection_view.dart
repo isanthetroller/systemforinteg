@@ -5,6 +5,7 @@ import '../../../core/widgets/plate_badge.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../theme/ncst_theme.dart';
+import '../../cases/screens/case_detail_screen.dart';
 import 'scan_notice_strip.dart';
 
 enum ScanRejectionType {
@@ -401,6 +402,31 @@ class ScanRejectionView extends StatelessWidget {
                       if (vehicle != null && details.type == ScanRejectionType.duplicateEntry) ...[
                         OnCampusDetailsCard(vehicle: vehicle),
                         const SizedBox(height: 16),
+                      ],
+
+                      // The case holding this vehicle: call the owner / log an attempt from here
+                      if (details.notices.any((n) => n.caseKey != null)) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: OutlinedButton.icon(
+                            key: const Key('viewCaseButton'),
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => CaseDetailScreen(caseKey: details.notices.firstWhere((n) => n.caseKey != null).caseKey!)),
+                            ),
+                            icon: const Icon(Icons.folder_open_rounded, size: 20),
+                            label: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text('VIEW CASE / CONTACT OWNER', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: NcstColors.navy,
+                              side: const BorderSide(color: NcstColors.navy, width: 1.5),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                       ],
 
                       // Optional In-Campus Patrol Inspection / Incident Action Button

@@ -11,7 +11,10 @@ class ScanNotice {
   final String title;
   final String? detail;
 
-  const ScanNotice(this.level, this.title, [this.detail]);
+  /// The case this notice is about (opens the case screen), when it is one.
+  final String? caseKey;
+
+  const ScanNotice(this.level, this.title, [this.detail, this.caseKey]);
 
   /// The notices carried by a verify.php answer: `occupancy`, `exitRelease`, `case`.
   static List<ScanNotice> fromVerify(Map<String, dynamic>? data) {
@@ -48,6 +51,7 @@ class ScanNotice {
         ScanNoticeLevel.info,
         'Case: ${theCase['title'] ?? 'open case'} (${theCase['step'] ?? 'open'})$police',
         'The vehicle stays on hold until an administrator closes the case.',
+        (theCase['key'] ?? '').toString().isEmpty ? null : theCase['key'].toString(),
       ));
     }
     return out;

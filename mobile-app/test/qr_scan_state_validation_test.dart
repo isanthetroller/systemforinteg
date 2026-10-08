@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -10,7 +11,9 @@ import 'package:systemforinteg/features/scanner/widgets/scan_rejection_view.dart
 import 'package:systemforinteg/models/user_model.dart';
 import 'package:systemforinteg/models/vehicle_model.dart';
 import 'package:systemforinteg/services/api_service.dart';
+import 'package:systemforinteg/services/evidence_service.dart';
 import 'package:systemforinteg/services/local_cache_service.dart';
+import 'package:systemforinteg/services/scan_feedback.dart';
 
 void main() {
   // In-memory backend database for our test server
@@ -22,6 +25,8 @@ void main() {
   // Server-side extras the gate scan can carry: parking nearly full, an exit released by an administrator
   bool occupancyNearlyFull = false;
   final Set<String> releasedExits = <String>{};
+  final List<Map<String, dynamic>> dbEvidence = [];
+  int evidenceStatus = 201;
 
   final guard1 = GuardUser(
     id: 'guard-01',
@@ -47,6 +52,8 @@ void main() {
     simulateNetworkFailure = false;
     occupancyNearlyFull = false;
     releasedExits.clear();
+    dbEvidence.clear();
+    evidenceStatus = 201;
     dbVehicles.clear();
     dbLogs.clear();
     dbViolations.clear();
@@ -285,6 +292,15 @@ void main() {
         );
       }
 
+      if (path.contains('evidence.php') && method == 'POST') {
+        dbEvidence.add(jsonDecode(request.body) as Map<String, dynamic>);
+        return http.Response(
+          jsonEncode({'status': evidenceStatus < 300 ? 'success' : 'error', 'message': evidenceStatus < 300 ? 'Saved' : 'Photo refused', 'data': {'id': 1}}),
+          evidenceStatus,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+
       if (path.contains('logs.php') && method == 'POST') {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         final plate = (body['plate'] ?? body['plateNumber'] ?? body['plate_number'] ?? '').toString().toUpperCase();
@@ -305,6 +321,7 @@ void main() {
           jsonEncode({
             'status': 'success',
             'message': 'Log saved successfully',
+            'data': {'id': 77},
           }),
           200,
           headers: {'content-type': 'application/json'},
@@ -847,6 +864,131 @@ void main() {
       expect(find.byType(ScanRejectionView), findsOneWidget);
       expect(find.text('Connection / API Error'), findsOneWidget);
       expect(dbLogs.isEmpty, isTrue);
+    });
+  });
+
+  group('Scan sound and exit photo', () {
+    final heard = <ScanOutcome>[];
+
+    setUp(() {
+      heard.clear();
+      ScanFeedback.testSink = (o) async => heard.add(o);
+    });
+
+    tearDown(() {
+      ScanFeedback.testSink = null;
+    });
+
+    Future<dynamic> entryScan(WidgetTester tester, String code) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(home: QrScannerScreen(key: UniqueKey(), onDecision: (_) {})));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(QrScannerScreen));
+      state.testProcessRawQrCode(code);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      return state;
+    }
+
+    Future<dynamic> exitScan(WidgetTester tester, String code) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: ExitScannerScreen(key: UniqueKey(), currentGuard: guard2, onDecision: (_) {}))));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+      state.testVerifyPass(code);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      return state;
+    }
+
+    testWidgets('a vehicle cleared to enter plays the cleared cue exactly once', (tester) async {
+      await entryScan(tester, 'ABC-1111');
+      expect(find.text('CLEARED (TO GO)'), findsOneWidget);
+      expect(heard, [ScanOutcome.cleared]);
+    });
+
+    testWidgets('a clear vehicle with a warning (parking nearly full) plays the warning cue', (tester) async {
+      occupancyNearlyFull = true;
+      await entryScan(tester, 'ABC-1111');
+      expect(heard, [ScanOutcome.warning]);
+    });
+
+    testWidgets('a refused vehicle, an unknown code: refused cue; no connection: warning cue', (tester) async {
+      dbVehicles['ABC-1111']!['is_banned'] = 1;
+      dbVehicles['ABC-1111']!['registration_status'] = 'Suspended';
+      await entryScan(tester, 'ABC-1111');
+      expect(find.byType(ScanRejectionView), findsOneWidget);
+      expect(heard, [ScanOutcome.refused]);
+
+      heard.clear();
+      await entryScan(tester, 'RANDOM_GARBAGE_QR_12345');
+      expect(heard, [ScanOutcome.refused]);
+
+      heard.clear();
+      simulateNetworkFailure = true;
+      await entryScan(tester, 'ABC-1111');
+      expect(heard, [ScanOutcome.warning]);
+    });
+
+    testWidgets('turned off in settings: a scan makes no sound', (tester) async {
+      await ScanFeedback.setEnabled(false);
+      addTearDown(() => ScanFeedback.setEnabled(true));
+      ScanFeedback.testSink = (o) async => heard.add(o);
+      await entryScan(tester, 'ABC-1111');
+      expect(find.text('CLEARED (TO GO)'), findsOneWidget);
+      expect(heard, isEmpty);
+    });
+
+    testWidgets('the exit screen cues too: cleared to leave, refused when still blocked', (tester) async {
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      await exitScan(tester, 'ABC-1111');
+      expect(heard, [ScanOutcome.cleared]);
+
+      heard.clear();
+      dbVehicles['ABC-1111']!['is_banned'] = 1;
+      dbVehicles['ABC-1111']!['registration_status'] = 'Suspended';
+      await exitScan(tester, 'ABC-1111');
+      expect(heard, [ScanOutcome.refused]);
+    });
+
+    testWidgets('exit: an optional photo button is offered and leaving without a photo records the exit as usual', (tester) async {
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      await exitScan(tester, 'ABC-1111');
+      expect(find.byKey(const Key('evidenceTakePhoto')), findsOneWidget);
+      expect(find.text('Photo of vehicle leaving (optional)'), findsOneWidget);
+      await tester.tap(find.text('CLEARED (EXIT)'));
+      await tester.pumpAndSettle();
+      expect(dbLogs.single['action'], 'Exit Approved');
+      expect(dbEvidence, isEmpty);
+    });
+
+    testWidgets('exit with a photo: it is sent after the exit is recorded, with that log\'s id and kind exit', (tester) async {
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      final dynamic state = await exitScan(tester, 'ABC-1111');
+      state.testSetEvidence(PendingEvidence(bytes: Uint8List.fromList([1, 2, 3]), plateRead: 'ABC-1111', matches: true));
+      await tester.tap(find.text('CLEARED (EXIT)'));
+      await tester.pumpAndSettle();
+      expect(dbLogs.single['action'], 'Exit Approved');
+      expect(dbEvidence.single['kind'], 'exit');
+      expect(dbEvidence.single['plate'], 'ABC-1111');
+      expect(dbEvidence.single['gateLogId'], 77);
+      expect(dbEvidence.single['image'], base64Encode([1, 2, 3]));
+    });
+
+    testWidgets('exit: a photo the server refuses never undoes or blocks the exit', (tester) async {
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      evidenceStatus = 400;
+      final dynamic state = await exitScan(tester, 'ABC-1111');
+      state.testSetEvidence(PendingEvidence(bytes: Uint8List.fromList([9]), plateRead: null, matches: null));
+      await tester.tap(find.text('CLEARED (EXIT)'));
+      await tester.pumpAndSettle();
+      expect(dbLogs.single['action'], 'Exit Approved');
+      expect(dbVehicles['ABC-1111']!['status'], 'Outside');
+      expect(dbEvidence.length, 1);
     });
   });
 }
