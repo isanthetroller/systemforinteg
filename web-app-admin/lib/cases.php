@@ -178,23 +178,118 @@ function casePublicView($summary, array $events) {
     ];
 }
 
-/** All cases (newest first, capped), each with its summary. */
-function caseList($pdo, $limit = 300) {
-    $limit = max(1, min(400, (int)$limit));
-    $v = $pdo->query("SELECT vv.*, v.`owner_name`, v.`owner_phone`, v.`owner_id_number`, v.`owner_role`
-        FROM `vehicle_violations` vv JOIN `vehicles` v ON v.`id` = vv.`vehicle_id`
-        WHERE vv.`severity` = 'Violation' ORDER BY vv.`id` DESC LIMIT {$limit}")->fetchAll();
-    $i = $pdo->query("SELECT * FROM `security_incidents`
-        WHERE `id` NOT IN (SELECT `incident_id` FROM `vehicle_violations` WHERE `incident_id` IS NOT NULL)
-        ORDER BY `id` DESC LIMIT {$limit}")->fetchAll();
+const SP_OVERNIGHT_VIOLATION = 'Overnight / Unauthorized Overtime Parking';
+
+/** The plate as the database compares it: no dashes, no spaces, upper case. */
+function caseNormPlateSql($column) {
+    return "REPLACE(REPLACE(UPPER({$column}), '-', ''), ' ', '')";
+}
+
+/**
+ * Searches cases. Filters ($f): status (active|open|awaiting|closed|all), type (Violation|Security|Overnight),
+ * q, plate, from / to (YYYY-MM-DD; the day it was closed for closed cases, otherwise the day it was opened),
+ * outcome (closed cases), page, limit.
+ * Returns ['rows' => [...summaries for this page...], 'total' => n]. Open cases come first, then closed ones, newest first.
+ * Each source is read up to 1000 rows per search, which is far beyond what one campus produces.
+ */
+function caseSearch($pdo, array $f, $paginate = true) {
+    $status = $f['status'] ?? 'active';
+    $type = $f['type'] ?? '';
+    $q = trim((string)($f['q'] ?? ''));
+    $plate = normalizePlate((string)($f['plate'] ?? ''));
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['from'] ?? '')) ? $f['from'] . ' 00:00:00' : null;
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['to'] ?? '')) ? $f['to'] . ' 23:59:59' : null;
+    $outcome = (string)($f['outcome'] ?? '');
+    $page = max(1, (int)($f['page'] ?? 1));
+    $limit = max(1, min(100, (int)($f['limit'] ?? 25)));
+    $cap = 1000;
+
+    $stateWhere = function ($closedExpr, $openExpr) use ($status) {
+        if ($status === 'closed') return $closedExpr;
+        if ($status === 'all') return '1=1';
+        return $openExpr; // active, open, awaiting
+    };
+    $qLike = $q !== '' ? "%{$q}%" : null;
+    $qPlateLike = $q !== '' ? '%' . strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $q)) . '%' : null;
+
+    // ---- violations
+    $v = [];
+    if ($type === '' || $type === 'Violation' || $type === 'Overnight') {
+        $where = ["vv.`severity` = 'Violation'", $stateWhere("vv.`status` <> 'Pending'", "vv.`status` = 'Pending'")];
+        $args = [];
+        if ($type === 'Violation') { $where[] = "vv.`violation_type` <> ?"; $args[] = SP_OVERNIGHT_VIOLATION; }
+        if ($type === 'Overnight') { $where[] = "vv.`violation_type` = ?"; $args[] = SP_OVERNIGHT_VIOLATION; }
+        if ($plate !== '') { $where[] = caseNormPlateSql('vv.`plate_number`') . ' = ?'; $args[] = $plate; }
+        if ($qLike !== null) {
+            $where[] = '(' . caseNormPlateSql('vv.`plate_number`') . ' LIKE ? OR v.`owner_name` LIKE ? OR v.`owner_id_number` LIKE ? OR vv.`violation_type` LIKE ? OR vv.`description` LIKE ? OR vv.`resolution_notes` LIKE ?)';
+            array_push($args, $qPlateLike, $qLike, $qLike, $qLike, $qLike, $qLike);
+        }
+        $dateCol = $status === 'closed' ? 'vv.`resolved_at`' : 'vv.`created_at`';
+        if ($from) { $where[] = "{$dateCol} >= ?"; $args[] = $from; }
+        if ($to) { $where[] = "{$dateCol} <= ?"; $args[] = $to; }
+        $stmt = $pdo->prepare("SELECT vv.*, v.`owner_name`, v.`owner_phone`, v.`owner_id_number`, v.`owner_role`
+            FROM `vehicle_violations` vv JOIN `vehicles` v ON v.`id` = vv.`vehicle_id`
+            WHERE " . implode(' AND ', $where) . " ORDER BY vv.`id` DESC LIMIT {$cap}");
+        $stmt->execute($args);
+        $v = $stmt->fetchAll();
+    }
+
+    // ---- security incidents that are not tied to a violation
+    $i = [];
+    if ($type === '' || $type === 'Security') {
+        $where = ["`id` NOT IN (SELECT `incident_id` FROM `vehicle_violations` WHERE `incident_id` IS NOT NULL)",
+            $stateWhere("`status` <> 'Held'", "`status` = 'Held'")];
+        $args = [];
+        if ($plate !== '') { $where[] = caseNormPlateSql('`plate_number`') . ' = ?'; $args[] = $plate; }
+        if ($qLike !== null) {
+            $where[] = '(' . caseNormPlateSql('`plate_number`') . ' LIKE ? OR `owner_name` LIKE ? OR `reason` LIKE ? OR `case_number` LIKE ? OR `notes` LIKE ?)';
+            array_push($args, $qPlateLike, $qLike, $qLike, $qLike, $qLike);
+        }
+        $dateCol = $status === 'closed' ? '`resolved_at`' : '`reported_at`';
+        if ($from) { $where[] = "{$dateCol} >= ?"; $args[] = $from; }
+        if ($to) { $where[] = "{$dateCol} <= ?"; $args[] = $to; }
+        $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE " . implode(' AND ', $where) . " ORDER BY `id` DESC LIMIT {$cap}");
+        $stmt->execute($args);
+        $i = $stmt->fetchAll();
+    }
+
     $keys = [];
     foreach ($v as $r) $keys[] = 'V' . $r['id'];
     foreach ($i as $r) $keys[] = 'I' . $r['id'];
-    $events = caseEventsFor($pdo, $keys);
-    $out = [];
-    foreach ($v as $r) $out[] = caseSummary('violation', $r, $events['V' . $r['id']] ?? []);
-    foreach ($i as $r) $out[] = caseSummary('incident', $r, $events['I' . $r['id']] ?? []);
-    return $out;
+    $events = [];
+    foreach (array_chunk($keys, 400) as $chunk) $events += caseEventsFor($pdo, $chunk);
+    $all = [];
+    foreach ($v as $r) $all[] = caseSummary('violation', $r, $events['V' . $r['id']] ?? []);
+    foreach ($i as $r) $all[] = caseSummary('incident', $r, $events['I' . $r['id']] ?? []);
+
+    $all = array_values(array_filter($all, function ($c) use ($status, $outcome) {
+        if ($status === 'open' && $c['status'] !== 'Open') return false;
+        if ($status === 'awaiting' && $c['status'] !== 'Awaiting clearance') return false;
+        if ($outcome !== '' && $c['outcome'] !== $outcome) return false;
+        return true;
+    }));
+    usort($all, function ($a, $b) {
+        $ca = $a['status'] === 'Closed' ? 1 : 0;
+        $cb = $b['status'] === 'Closed' ? 1 : 0;
+        if ($ca !== $cb) return $ca <=> $cb;
+        return $ca ? strcmp((string)$b['closedAt'], (string)$a['closedAt']) : strcmp((string)$b['openedAt'], (string)$a['openedAt']);
+    });
+    $total = count($all);
+    return ['rows' => $paginate ? array_slice($all, ($page - 1) * $limit, $limit) : $all, 'total' => $total];
+}
+
+/** Counts for the Cases header: open, awaiting clearance, referred to police (still open), closed. */
+function caseCounts($pdo) {
+    $active = caseSearch($pdo, ['status' => 'active'], false)['rows'];
+    $c = ['open' => 0, 'awaiting' => 0, 'policeReferred' => 0, 'closed' => 0];
+    foreach ($active as $x) {
+        if ($x['status'] === 'Awaiting clearance') $c['awaiting']++; else $c['open']++;
+        if ($x['policeReferred']) $c['policeReferred']++;
+    }
+    $c['closed'] = (int)$pdo->query("SELECT COUNT(*) FROM `vehicle_violations` WHERE `severity` = 'Violation' AND `status` <> 'Pending'")->fetchColumn()
+        + (int)$pdo->query("SELECT COUNT(*) FROM `security_incidents` WHERE `status` <> 'Held' AND `id` NOT IN (SELECT `incident_id` FROM `vehicle_violations` WHERE `incident_id` IS NOT NULL)")->fetchColumn();
+    $c['total'] = $c['open'] + $c['awaiting'] + $c['closed'];
+    return $c;
 }
 
 /** Open case for a plate, for the gate scan: ['key', 'type', 'title', 'step', 'policeReferred'] or null. */

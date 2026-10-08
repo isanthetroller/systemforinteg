@@ -2547,6 +2547,29 @@ def test_cases(admin):
     check('an unknown case -> 404', code == 404, code)
     code, res = call('GET', 'cases.php?key=oops', token=admin)
     check('a malformed key -> 404', code == 404, code)
+
+    # history: closed cases stay findable by plate, outcome, date and text, page by page, and can be exported
+    code, res = call('GET', 'cases.php?status=closed&plate=CSE-1001', token=admin)
+    check("history by plate (any spelling) finds that vehicle's closed case", code == 200 and res['data']['total'] == 1 and res['data']['cases'][0]['key'] == key, res['data'].get('total'))
+    code, res = call('GET', 'cases.php?status=closed&outcome=Dismissed', token=admin)
+    check('history by outcome', any(c['key'] == k2 for c in res['data']['cases']) and all(c['outcome'] == 'Dismissed' for c in res['data']['cases']), '')
+    code, res = call('GET', 'cases.php?status=closed&from=2999-01-01', token=admin)
+    check('history by closing date (nothing closed in the far future)', res['data']['total'] == 0, res['data']['total'])
+    code, res = call('GET', 'cases.php?status=closed&from=2000-01-01&to=2999-12-31&plate=CSE1001', token=admin)
+    check('history inside a date range', res['data']['total'] == 1, res['data']['total'])
+    code, res = call('GET', 'cases.php?status=closed&q=hydrant', token=admin)
+    check('history by text (violation notes)', any(c['key'] == key for c in res['data']['cases']), '')
+    code, res = call('GET', 'cases.php?status=all&limit=2&page=2', token=admin)
+    check('pages: page 2 of 2-per-page', code == 200 and res['data']['page'] == 2 and len(res['data']['cases']) == 2 and res['data']['total'] > 4, (res['data']['page'], res['data']['total']))
+    code, res = call('GET', 'cases.php?status=all&plate=CSE1001', token=admin)
+    check("a vehicle's full case history (for its record)", res['data']['total'] >= 1 and all(c['plateNumber'] == 'CSE 1001' for c in res['data']['cases']), res['data']['total'])
+    code, res = call('GET', 'cases.php?status=closed&format=csv', token=guard)
+    check('only admins can export -> 403', code == 403, code)
+    req = urllib.request.Request(f'{BASE}/cases.php?status=closed&format=csv', headers={'Authorization': f'Bearer {admin}'})
+    with urllib.request.urlopen(req) as r:
+        body = r.read().decode('utf-8-sig')
+        check('admin exports the matching cases as CSV', r.headers.get('Content-Type', '').startswith('text/csv') and body.splitlines()[0].startswith('Case,Type,Plate')
+              and 'CSE 1001' in body and 'Clearance signed' in body, body[:120])
     AUTO_PAY = True
 
 

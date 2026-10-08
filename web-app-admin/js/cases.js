@@ -15,8 +15,8 @@
   const RESULTS = ['Reached owner', 'No answer', 'Left message', 'Wrong or unreachable number'];
   const OUTCOMES = ['Clearance signed', 'Referred to police / vehicle removed', 'Dismissed'];
 
-  let filter = { status: 'active', type: '', q: '' };
-  let data = { summary: { open: 0, awaiting: 0, closed: 0, policeReferred: 0, total: 0 }, cases: [] };
+  let filter = { status: 'active', type: '', q: '', outcome: '', from: '', to: '', page: 1, limit: 25 };
+  let data = { summary: { open: 0, awaiting: 0, closed: 0, policeReferred: 0, total: 0 }, cases: [], total: 0, page: 1, limit: 25 };
   let searchTimer = null;
   let ticket = 0;
 
@@ -66,7 +66,7 @@
       setSidebarCount(res.summary.open + res.summary.awaiting);
       render();
     } catch (err) {
-      $('casesBody').innerHTML = `<tr><td colspan="6" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
+      $('casesBody').innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
     }
   }
 
@@ -86,7 +86,8 @@
     });
     const body = $('casesBody');
     if (!data.cases.length) {
-      body.innerHTML = '<tr><td colspan="6" class="px-4 py-10 text-center text-slate-400">No cases match.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-slate-400">No cases match.</td></tr>';
+      renderPaging();
       return;
     }
     body.innerHTML = '';
@@ -99,10 +100,19 @@
         <td class="px-4 py-2.5">${typeBadge(c.type)}</td>
         <td class="px-4 py-2.5 text-slate-700">${esc(c.title)}${c.contactAttempts ? `<div class="text-[11px] text-slate-500">${c.contactAttempts} contact attempt${c.contactAttempts === 1 ? '' : 's'}${c.lastContactResult ? ' · last: ' + esc(c.lastContactResult) : ''}</div>` : ''}</td>
         <td class="px-4 py-2.5">${stepBadge(c)}</td>
-        <td class="px-4 py-2.5 whitespace-nowrap">${fmt(c.openedAt)}</td>`;
+        <td class="px-4 py-2.5 whitespace-nowrap">${fmt(c.openedAt)}</td>
+        <td class="px-4 py-2.5 whitespace-nowrap">${c.closedAt ? fmt(c.closedAt) + (c.closedBy ? `<div class="text-[11px] text-slate-500">${esc(c.closedBy)}</div>` : '') : '<span class="text-slate-400">—</span>'}</td>`;
       tr.addEventListener('click', () => openCase(c.key));
       body.appendChild(tr);
     });
+    renderPaging();
+  }
+
+  function renderPaging() {
+    const pages = Math.max(1, Math.ceil((data.total || 0) / data.limit));
+    $('casesPageInfo').textContent = `${data.total} case${data.total === 1 ? '' : 's'} · page ${data.page} of ${pages}`;
+    $('casesPrev').disabled = data.page <= 1;
+    $('casesNext').disabled = data.page >= pages;
   }
 
   /* ------------------------------------------------------------------------
@@ -276,15 +286,37 @@
   /* ------------------------------------------------------------------------
      Wiring
      ------------------------------------------------------------------------ */
+  window.SPCases = { open: openCase };
+
   document.addEventListener('sp:app-ready', () => {
     SP.registerView('casesView', $('navCasesBtn'), load);
     $('casesRefreshBtn').addEventListener('click', load);
     $('casesNewBtn').addEventListener('click', issueViolation);
-    document.querySelectorAll('#casesView [data-status]').forEach(b => b.addEventListener('click', () => { filter.status = b.dataset.status; load(); }));
-    $('casesType').addEventListener('change', (e) => { filter.type = e.target.value; load(); });
+    document.querySelectorAll('#casesView [data-status]').forEach(b => b.addEventListener('click', () => { filter.status = b.dataset.status; filter.page = 1; load(); }));
+    $('casesOutcome').addEventListener('change', (e) => { filter.outcome = e.target.value; filter.page = 1; load(); });
+    $('casesFrom').addEventListener('change', (e) => { filter.from = e.target.value; filter.page = 1; load(); });
+    $('casesTo').addEventListener('change', (e) => { filter.to = e.target.value; filter.page = 1; load(); });
+    $('casesPrev').addEventListener('click', () => { filter.page = Math.max(1, filter.page - 1); load(); });
+    $('casesNext').addEventListener('click', () => { filter.page += 1; load(); });
+    $('casesClearBtn').addEventListener('click', () => {
+      filter = { status: filter.status, type: '', q: '', outcome: '', from: '', to: '', page: 1, limit: 25 };
+      $('casesOutcome').value = ''; $('casesFrom').value = ''; $('casesTo').value = ''; $('casesType').value = ''; $('casesSearch').value = '';
+      load();
+    });
+    $('casesExportBtn').addEventListener('click', async () => {
+      try {
+        const blob = await ApiClient.exportCases({ ...filter, page: '', limit: '' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `securepark-cases-${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      } catch (err) { SP.showToast(err.message, 'error'); }
+    });
+    $('casesType').addEventListener('change', (e) => { filter.type = e.target.value; filter.page = 1; load(); });
     $('casesSearch').addEventListener('input', (e) => {
       clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => { filter.q = e.target.value.trim(); load(); }, 300);
+      searchTimer = setTimeout(() => { filter.q = e.target.value.trim(); filter.page = 1; load(); }, 300);
     });
     if (window.SPAuth) SPAuth.whenAuthenticated(load);
     document.addEventListener('sp:gate-passage', () => { if ($('casesView').classList.contains('active')) load(); });

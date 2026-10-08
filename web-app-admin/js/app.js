@@ -2971,6 +2971,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     openDrawer(`Vehicle Details — ${v.plateNumber}`, v.plateNumber, html, footerHtml);
 
+    // Every case this vehicle has had, open or closed
+    if (window.ApiClient && v.plateNumber) {
+      drawerContent.insertAdjacentHTML('beforeend', '<div id="drawerCaseHistory" class="mt-4"></div>');
+      ApiClient.getCases({ plate: v.plateNumber, status: 'all', limit: 50 }).then(res => {
+        const box = drawerContent.querySelector('#drawerCaseHistory');
+        if (!box || !res) return;
+        const rows = (res.cases || []).map(c => `<button type="button" data-case="${escapeHtml(c.key)}" class="w-full text-left px-3 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer">
+            <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-slate-800">${escapeHtml(c.title)}</span><span class="text-[11px] text-slate-500">${escapeHtml(c.step)}</span></div>
+            <div class="text-[11px] text-slate-500">${escapeHtml(c.type)} · ${escapeHtml(String(c.openedAt || '').slice(0, 10))}${c.closedAt ? ' → ' + escapeHtml(String(c.closedAt).slice(0, 10)) : ''}</div></button>`).join('');
+        box.innerHTML = `<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Case history (${res.total})</div>`
+          + (rows ? `<div class="space-y-1.5">${rows}</div>` : '<div class="text-xs text-slate-400">No cases on record for this vehicle.</div>');
+        box.querySelectorAll('[data-case]').forEach(b => b.addEventListener('click', () => { if (window.SPCases) SPCases.open(b.dataset.case); }));
+      }).catch(() => {});
+    }
+
     // Render Scaled-Up 200px Drawer QR Code
     const drawerQrContainer = drawerContent.querySelector('#drawerQrContainer');
     if (drawerQrContainer && typeof QRCode !== 'undefined') {

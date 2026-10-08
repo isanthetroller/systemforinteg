@@ -117,7 +117,9 @@ const ApiClient = (function() {
       if (text.includes('<!DOCTYPE') || text.includes('<html')) {
         throw new Error('API server returned HTML. Check InfinityFree DB connection or domain.');
       }
-      throw new Error(`Unexpected API response from ${endpoint}`);
+      // Say what came back (status and the first characters) so a server problem can be diagnosed from the message
+      const peek = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      throw new Error(`Unexpected API response from ${endpoint} (HTTP ${res.status}${peek ? ': ' + peek : ', empty reply'})`);
     }
 
     if (!res.ok) {
@@ -239,6 +241,18 @@ const ApiClient = (function() {
     getCases: async (params = {}) => {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
       return (await request(`cases.php${qs ? '?' + qs : ''}`)).data;
+    },
+    // Downloads the matching cases as a CSV file (admin)
+    exportCases: async (params = {}) => {
+      const qs = new URLSearchParams(Object.entries({ ...params, format: 'csv' }).filter(([, v]) => v !== '' && v != null)).toString();
+      const token = getToken();
+      const res = await fetch(`${baseUrl}/cases.php?${qs}`, { headers: token ? { 'Authorization': `Bearer ${token}`, 'X-Auth-Token': token } : {}, credentials: 'include' });
+      if (!res.ok || !(res.headers.get('Content-Type') || '').includes('csv')) {
+        let msg = `Could not export (HTTP ${res.status}).`;
+        try { msg = (await res.json()).message || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.blob();
     },
     getCase: async (key) => (await request(`cases.php?key=${encodeURIComponent(key)}`)).data,
     caseAction: async (key, action, fields = {}) => {

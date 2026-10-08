@@ -2,7 +2,8 @@
 /**
  * SecurePark API - Cases (violations and security incidents as one process)
  *
- * GET  /api/cases.php?status=active|open|awaiting|closed|all&type=Violation|Security|Overnight&q=   List + counts (staff)
+ * GET  /api/cases.php?status=active|open|awaiting|closed|all&type=Violation|Security|Overnight&q=&plate=&from=&to=&outcome=&page=&limit=
+ *        Search + counts (staff). Add &format=csv to download the matches as a spreadsheet (admin).
  * GET  /api/cases.php?key=V12                                                                       One case with its timeline (staff)
  * POST /api/cases.php { key, action, ... }
  *        contact   { method, result, note? }          Record an attempt to reach the owner (guard or admin)
@@ -54,36 +55,31 @@ if ($method === 'GET') {
         if (!$c) sendResponse(404, null, 'Case not found.');
         sendResponse(200, $c);
     }
-    $all = caseList($pdo);
-    $summary = ['open' => 0, 'awaiting' => 0, 'closed' => 0, 'policeReferred' => 0, 'total' => count($all)];
-    foreach ($all as $c) {
-        if ($c['status'] === 'Open') $summary['open']++;
-        elseif ($c['status'] === 'Awaiting clearance') $summary['awaiting']++;
-        else $summary['closed']++;
-        if ($c['policeReferred'] && $c['status'] !== 'Closed') $summary['policeReferred']++;
-    }
-    $status = $_GET['status'] ?? 'active';
-    $type = $_GET['type'] ?? '';
-    $q = strtolower(trim((string)($_GET['q'] ?? '')));
-    $qPlate = preg_replace('/[^a-z0-9]/', '', $q);
-    $rows = array_values(array_filter($all, function ($c) use ($status, $type, $q, $qPlate) {
-        if ($status === 'active' && $c['status'] === 'Closed') return false;
-        if ($status === 'open' && $c['status'] !== 'Open') return false;
-        if ($status === 'awaiting' && $c['status'] !== 'Awaiting clearance') return false;
-        if ($status === 'closed' && $c['status'] !== 'Closed') return false;
-        if ($type !== '' && $c['type'] !== $type) return false;
-        if ($q !== '') {
-            $hay = strtolower(implode(' ', [$c['plateNumber'], $c['ownerName'], $c['ownerIdNumber'], $c['title'], $c['caseNumber'], $c['step']]));
-            if (strpos($hay, $q) === false && !($qPlate !== '' && strpos(preg_replace('/[^a-z0-9]/', '', strtolower($c['plateNumber'])), $qPlate) !== false)) return false;
+    $filters = [
+        'status' => $_GET['status'] ?? 'active', 'type' => $_GET['type'] ?? '', 'q' => $_GET['q'] ?? '', 'plate' => $_GET['plate'] ?? '',
+        'from' => $_GET['from'] ?? '', 'to' => $_GET['to'] ?? '', 'outcome' => $_GET['outcome'] ?? '',
+        'page' => $_GET['page'] ?? 1, 'limit' => $_GET['limit'] ?? 25,
+    ];
+    if (($_GET['format'] ?? '') === 'csv') {
+        if (!$isAdmin) sendResponse(403, null, 'Only an administrator can export cases.');
+        $res = caseSearch($pdo, $filters, false);
+        $out = fopen('php://temp', 'w+');
+        fputcsv($out, ['Case', 'Type', 'Plate', 'Owner', 'Owner ID', 'What happened', 'Opened', 'Opened by', 'Status', 'Outcome', 'Closed', 'Closed by', 'Contact attempts', 'Police referral', 'Closing notes']);
+        foreach ($res['rows'] as $c) {
+            fputcsv($out, [$c['caseNumber'] ?: $c['key'], $c['type'], $c['plateNumber'], $c['ownerName'], $c['ownerIdNumber'], $c['title'], $c['openedAt'], $c['openedBy'],
+                $c['status'], $c['outcome'], $c['closedAt'], $c['closedBy'], $c['contactAttempts'], $c['policeReferred'] ? 'Yes' : 'No', $c['closeNotes']]);
         }
-        return true;
-    }));
-    usort($rows, function ($a, $b) {
-        $ca = $a['status'] === 'Closed' ? 1 : 0;
-        $cb = $b['status'] === 'Closed' ? 1 : 0;
-        return $ca <=> $cb ?: strcmp((string)$b['openedAt'], (string)$a['openedAt']);
-    });
-    sendResponse(200, ['summary' => $summary, 'cases' => $rows]);
+        rewind($out);
+        $csv = "\xEF\xBB\xBF" . stream_get_contents($out); // BOM so Excel reads UTF-8
+        while (ob_get_level() > 0) @ob_end_clean();
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="securepark-cases-' . date('Ymd') . '.csv"');
+        echo $csv;
+        exit;
+    }
+    $res = caseSearch($pdo, $filters);
+    sendResponse(200, ['summary' => caseCounts($pdo), 'cases' => $res['rows'], 'total' => $res['total'],
+        'page' => max(1, (int)$filters['page']), 'limit' => max(1, min(100, (int)$filters['limit']))]);
 }
 
 if ($method !== 'POST') sendResponse(405, null, "Method {$method} not allowed");

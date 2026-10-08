@@ -576,21 +576,19 @@ function sendResponse($statusCode, $data = null, $message = '') {
     if ($data !== null) {
         $response['data'] = $data;
     }
-    $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    $deferred = !empty($GLOBALS['sp_pending_notices']);
-    if ($deferred && !headers_sent()) {
-        header('Content-Length: ' . strlen($json));
-        header('Connection: close');
+    // Bad bytes in one text field must never turn the whole answer into an empty body
+    $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    if ($json === false || $json === '') {
+        $json = '{"status":"error","success":false,"message":"The server could not format its answer (' . json_last_error_msg() . ')."}';
     }
+    // Anything printed earlier (a stray warning, whitespace) would corrupt the JSON: drop it
+    while (ob_get_level() > 0) @ob_end_clean();
+    $deferred = !empty($GLOBALS['sp_pending_notices']);
     echo $json;
-    if ($deferred) {
-        // Let the client finish before the e-mails go out (see lib/notices.php)
-        if (function_exists('fastcgi_finish_request')) {
-            fastcgi_finish_request();
-        } else {
-            while (ob_get_level() > 0) @ob_end_flush();
-            flush();
-        }
+    if ($deferred && function_exists('fastcgi_finish_request')) {
+        // Let the client finish before the e-mails go out (see lib/notices.php). No hand-made Content-Length /
+        // Connection headers: behind a compressing proxy they can corrupt the response.
+        fastcgi_finish_request();
     }
     exit;
 }
