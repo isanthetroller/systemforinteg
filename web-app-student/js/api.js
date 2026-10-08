@@ -88,6 +88,7 @@ const StudentApi = (function () {
     async violations() { return (await request('student.php?action=violations')).data; },
     async activity(limit = 60) { return (await request(`student.php?action=activity&limit=${limit}`)).data; },
     async alerts() { return (await request('student.php?action=alerts')).data; },
+    async cases() { return (await request('student.php?action=cases')).data; },
     async payments() { return (await request('student.php?action=payments')).data; },
     async notices() { return (await request('student.php?action=notices')).data; },
     // Starts a PayMongo checkout for one of my unpaid vehicles; returnUrl is where the checkout sends me back

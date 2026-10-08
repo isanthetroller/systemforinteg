@@ -15,7 +15,7 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const data = { me: null, vehicles: [], violations: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
+  const data = { me: null, vehicles: [], violations: [], cases: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
   const POLL_MS = 15000;
   const DEFAULT_TITLE = document.title;
   let pollTimer = null;
@@ -251,10 +251,10 @@
   async function enterApp() {
     showScreen('screenApp');
     $('tabPass').innerHTML = '<div class="card empty">Loading your pass&hellip;</div>';
-    const [me, vehicles, violations, activity, alerts, payments, notices] = await Promise.all([
-      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices()
+    const [me, vehicles, violations, activity, alerts, payments, notices, cases] = await Promise.all([
+      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices(), StudentApi.cases()
     ]);
-    Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices });
+    Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices, cases });
     data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
     $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
     renderAll();
@@ -300,8 +300,8 @@
       const standingChanged = JSON.stringify(me.summary) !== JSON.stringify(data.me.summary);
       Object.assign(data, { me, alerts, activity, notices });
       if (standingChanged || raised.length || alerts.active.length !== known.size || newNotice) {
-        const [vehicles, violations, payments] = await Promise.all([StudentApi.vehicles(), StudentApi.violations(), StudentApi.payments()]);
-        Object.assign(data, { vehicles, violations, payments });
+        const [vehicles, violations, payments, cases] = await Promise.all([StudentApi.vehicles(), StudentApi.violations(), StudentApi.payments(), StudentApi.cases()]);
+        Object.assign(data, { vehicles, violations, payments, cases });
       }
       renderAll();
       if (raised.length) notifyFlag(raised[0]);
@@ -636,22 +636,25 @@
     const standing = data.vehicles.map(v => `
       <div class="standing-row"><span class="plate" style="font-size:16px">${esc(v.plateNumber)}</span>
         <span class="hold-label ${v.isBanned ? 'on' : ''}">${v.isBanned ? 'On hold — cannot enter or leave' : 'Clear'}</span></div>`).join('');
-    const history = data.violations.length
-      ? `<ul class="history">${data.violations.map(r => `
-          <li>
-            <div class="row1"><span class="type">${esc(r.violationType)}</span><span class="date">${esc(fmtDateTime(r.createdAt))}</span></div>
-            <div class="desc">${esc(r.plateNumber)}${r.description ? ' · ' + esc(r.description) : ''}</div>
-            <span class="badge ${esc(r.status.toLowerCase())}">${esc(r.status)}</span>
-            ${r.resolutionNotes ? `<div class="desc" style="color:var(--muted)">${esc(r.resolutionNotes)}</div>` : ''}
-          </li>`).join('')}</ul>`
-      : '<p class="empty" style="padding:12px 0">No violations recorded.</p>';
+    const cases = data.cases || [];
+    const history = cases.length
+      ? cases.map(c => `
+          <div class="case-card" style="border:1px solid var(--line,#e2e8f0);border-radius:12px;padding:14px;margin-bottom:12px">
+            <div class="row1"><span class="type">${esc(c.title)}</span><span class="date">${esc(fmtDateTime(c.openedAt))}</span></div>
+            <div class="desc">${esc(c.plateNumber)}</div>
+            <span class="badge ${c.status === 'Closed' ? 'resolved' : 'violation'}">${esc(c.step)}</span>
+            <div class="desc" style="margin-top:8px"><strong>What to do:</strong> ${esc(c.nextStep)}</div>
+            <ol style="list-style:none;margin:10px 0 0;padding:0;border-left:2px solid #e2e8f0">${c.timeline.map(t => `
+              <li style="padding:0 0 8px 12px;font-size:13px"><span style="color:var(--muted)">${esc(fmtDateTime(t.at))}</span><br>${esc(t.label)}</li>`).join('')}</ol>
+          </div>`).join('')
+      : '<p class="empty" style="padding:12px 0">No cases. Your vehicles are in good standing.</p>';
     const anyHeld = data.vehicles.some(v => v.isBanned);
     const notices = (data.notices || []).length
       ? `<ul class="history">${data.notices.map(n => `
           <li>
             <div class="row1"><span class="type">${esc(n.title)}</span><span class="date">${esc(fmtDateTime(n.createdAt))}</span></div>
             <div class="desc">${esc(n.plateNumber)} · ${esc(n.message).replace(/\n/g, '<br>')}</div>
-            <span class="badge ${n.kind === 'Violation' ? 'violation' : 'warning'}">${n.kind === 'Violation' ? 'Violation' : 'Blocked at gate'}</span>
+            <span class="badge ${n.kind === 'Violation' ? 'violation' : 'warning'}">${esc({ Violation: 'Violation', Reminder: 'Reminder', Expiry: 'Pass expiry' }[n.kind] || 'Blocked at gate')}</span>
             ${n.emailed ? '<span class="badge resolved">Also emailed to you</span>' : ''}
           </li>`).join('')}</ul>`
       : '<p class="empty" style="padding:12px 0">No notices.</p>';
@@ -662,7 +665,7 @@
         <p class="hint">A vehicle with a pending violation cannot enter or leave campus until the Security Office resolves it.</p></div>
       <div class="card"><h2 class="card-title">Notices</h2>${notices}
         <p class="hint">You get a notice here, and an email when we have your address, whenever a vehicle of yours is blocked at the gate or given a violation.</p></div>
-      <div class="card"><h2 class="card-title">Violations</h2>${history}</div>`;
+      <div class="card"><h2 class="card-title">Your cases</h2>${history}</div>`;
   }
 
   /* ---- Account ---- */
