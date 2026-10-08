@@ -46,6 +46,9 @@ function handleGetLogs($pdo) {
     $whereSql = !empty($where) ? "WHERE " . implode(' AND ', $where) : "";
     // Rows recorded offline carry the time they reached the server (migration 006)
     $syncedSelect = columnExists($pdo, 'gate_logs', 'synced_at') ? ",\n            synced_at AS syncedAt" : '';
+    if (columnExists($pdo, 'gate_logs', 'lookup_method')) {
+        $syncedSelect .= ",\n            lookup_method AS lookupMethod";
+    }
     $sql = "
         SELECT 
             id,

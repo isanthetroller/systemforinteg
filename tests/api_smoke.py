@@ -2591,6 +2591,8 @@ def test_visitor_photo(admin):
     code, res = call('GET', 'visitors.php', token=admin)
     row = [r for r in res['data'] if r['plateNumber'] == 'VPH1001']
     check('lists say there is a photo but do not carry the heavy picture', row and row[0]['hasVehiclePhoto'] is True and row[0]['vehiclePhoto'] is None, row)
+    code, res = call('GET', 'visitors.php?q=VPH1001', token=admin)
+    check('looking a pass up by plate or code returns its photo (gate records and the phone use this)', code == 200 and (res['data'].get('vehiclePhoto') or '').startswith('data:image/jpeg'), res)
     code, v = verify({'plate': 'VPH 1001', 'gate_type': 'Egress'}, guard)
     check('the gate scan carries the photo for the exit guard to compare', (v.get('visitor') or {}).get('vehiclePhoto', '').startswith('data:image/jpeg'), list((v.get('visitor') or {}).keys()))
     code, res = issue('VPH 2002', 'assets/images/kriz_monares.jpg')

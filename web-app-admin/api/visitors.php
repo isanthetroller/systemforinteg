@@ -109,7 +109,7 @@ function handleListVisitors($pdo) {
         $stmt->execute([$q, $q, $norm]);
         $row = $stmt->fetch();
         if (!$row) sendResponse(404, null, 'Visitor pass not found.');
-        sendResponse(200, formatVisitorPass($row));
+        sendResponse(200, formatVisitorPass($row, true));
     }
 
     if (!empty($_GET['upcoming'])) {
