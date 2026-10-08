@@ -262,6 +262,8 @@ function caseSearch($pdo, array $f, $paginate = true) {
     $all = [];
     foreach ($v as $r) $all[] = caseSummary('violation', $r, $events['V' . $r['id']] ?? []);
     foreach ($i as $r) $all[] = caseSummary('incident', $r, $events['I' . $r['id']] ?? []);
+    foreach ($all as &$c) caseFillOwner($pdo, $c);
+    unset($c);
 
     $all = array_values(array_filter($all, function ($c) use ($status, $outcome) {
         if ($status === 'open' && $c['status'] !== 'Open') return false;
@@ -291,6 +293,16 @@ function caseCounts($pdo) {
         + (int)$pdo->query("SELECT COUNT(*) FROM `security_incidents` WHERE `status` <> 'Held' AND `id` NOT IN (SELECT `incident_id` FROM `vehicle_violations` WHERE `incident_id` IS NOT NULL)")->fetchColumn();
     $c['total'] = $c['open'] + $c['awaiting'] + $c['closed'];
     return $c;
+}
+
+/** A security case whose owner was saved as "Unknown" shows the visitor / owner of that plate if there is one. */
+function caseFillOwner($pdo, array &$summary) {
+    if ($summary['kind'] !== 'incident') return;
+    $name = trim((string)$summary['ownerName']);
+    if ($name !== '' && strcasecmp($name, 'Unknown') !== 0) return;
+    if ($known = ownerForPlate($pdo, $summary['plateNumber'])) {
+        $summary['ownerName'] = $known['name'];
+    }
 }
 
 /** Open case for a plate, for the gate scan: ['key', 'type', 'title', 'step', 'policeReferred'] or null. */

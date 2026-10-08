@@ -29,6 +29,7 @@ function caseDetail($pdo, $key, $isAdmin) {
     if (!$loaded) return null;
     $events = caseEventsFor($pdo, [$key])[$key] ?? [];
     $summary = caseSummary($loaded['kind'], $loaded['row'], $events);
+    caseFillOwner($pdo, $summary);
     $summary['timeline'] = caseTimeline($loaded['kind'], $loaded['row'], $events, $summary);
     $plate = $summary['plateNumber'];
     $stmt = $pdo->prepare("SELECT `id`, `status`, `is_banned`, `owner_phone`, `owner_name` FROM `vehicles` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? ORDER BY `is_retired` ASC, `id` DESC LIMIT 1");

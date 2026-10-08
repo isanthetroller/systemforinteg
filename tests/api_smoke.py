@@ -2602,6 +2602,21 @@ def test_visitor_photo(admin):
     code, res = issue('VPH 5005', None)
     check('no photo at all is fine', code == 201 and res['data']['vehiclePhoto'] is None, res)
 
+    # a security case raised for a plate that only has a visitor pass names the visitor, not "Unknown"
+    import sqlite3
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'VPH 1001', 'reason': 'Unauthorized / Unregistered Driver'}, guard)
+    incident_id = res['data']['id']
+    key = 'I' + str(incident_id)
+    check('a case for a visitor plate names the visitor, not Unknown', call('GET', f'cases.php?key={key}', token=admin)[1]['data']['ownerName'] == 'Pat Photo', '')
+    db = sqlite3.connect(SQLITE_DB)
+    db.execute("UPDATE security_incidents SET owner_name = 'Unknown' WHERE id = ?", (incident_id,))
+    db.commit()
+    db.close()
+    rows = call('GET', 'cases.php?status=all&q=VPH1001', token=admin)[1]['data']['cases']
+    check('a case saved earlier as Unknown shows the visitor name in the list too', any(c['key'] == key and c['ownerName'] == 'Pat Photo' for c in rows), [c['ownerName'] for c in rows])
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'ZZZ 0000', 'reason': 'Unauthorized / Unregistered Driver'}, guard)
+    check('a plate nobody knows stays Unknown', call('GET', f"cases.php?key=I{res['data']['id']}", token=admin)[1]['data']['ownerName'] == 'Unknown', '')
+
 
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):

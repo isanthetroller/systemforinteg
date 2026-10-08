@@ -103,6 +103,13 @@ function handleCreateIncident($pdo, $actor) {
     $vehicleType = isset($data['vehicleType']) ? $data['vehicleType'] : 'Vehicle';
     $ownerName = isset($data['ownerName']) ? $data['ownerName'] : 'Unknown';
     $ownerRole = isset($data['ownerRole']) ? $data['ownerRole'] : 'Visitor';
+    // The phone does not send a name: take it from the registered owner or the visitor pass of that plate
+    if (trim((string)$ownerName) === '' || strcasecmp(trim((string)$ownerName), 'Unknown') === 0) {
+        if ($known = ownerForPlate($pdo, $plateNumber)) {
+            $ownerName = $known['name'];
+            $ownerRole = $known['role'];
+        }
+    }
     $driverName = isset($data['driverName']) ? $data['driverName'] : 'Unknown';
     $driverRelationship = isset($data['driverRelationship']) ? $data['driverRelationship'] : 'Unregistered Driver';
     $gatePoint = isset($data['gatePoint']) ? $data['gatePoint'] : 'Gate 1 (Main Ingress)';

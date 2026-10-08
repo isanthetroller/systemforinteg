@@ -187,3 +187,21 @@ function columnExists($pdo, $table, $column) {
     }
     return $cache[$key] = $found;
 }
+
+
+/**
+ * Who a plate belongs to when the caller did not say: its registered owner, otherwise the visitor of its most recent
+ * day pass. Returns ['name' => .., 'role' => ..] or null when the plate is unknown.
+ */
+function ownerForPlate($pdo, $plate) {
+    $norm = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)$plate));
+    if ($norm === '') return null;
+    $match = "REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?";
+    $stmt = $pdo->prepare("SELECT `owner_name`, `owner_role` FROM `vehicles` WHERE {$match} ORDER BY `is_retired` ASC, `id` DESC LIMIT 1");
+    $stmt->execute([$norm]);
+    if ($row = $stmt->fetch()) return ['name' => $row['owner_name'], 'role' => $row['owner_role'] ?: 'Registered Owner'];
+    $stmt = $pdo->prepare("SELECT `visitor_name` FROM `visitor_passes` WHERE {$match} ORDER BY `id` DESC LIMIT 1");
+    $stmt->execute([$norm]);
+    if ($row = $stmt->fetch()) return ['name' => $row['visitor_name'], 'role' => 'Visitor'];
+    return null;
+}
