@@ -276,6 +276,11 @@ const ApiClient = (function() {
     getShiftReport: async (from = '', to = '') => (await request(`shifts.php?scope=report${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
     getEvidence: async (params) => (await request('evidence.php?' + new URLSearchParams(params))).data,
     getEvidencePhoto: async (id) => (await request(`evidence.php?id=${id}`)).data,
+    // Sends one test e-mail through the server's SMTP account (admin). Resolves with the server's message, rejects with the reason.
+    sendTestMail: async (to) => {
+      const res = await request('mail_test.php', { method: 'POST', body: { to } });
+      return { ...res.data, message: res.message };
+    },
     runMaintenance: async () => { try { return (await request('maintenance.php', { method: 'POST', body: {} })).data; } catch (_) { return null; } },
 
     // Staff Accounts (admin only)

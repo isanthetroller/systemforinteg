@@ -1575,6 +1575,7 @@ def test_owner_notices(admin):
     import re, sqlite3, time
     section('Owner notices (portal + e-mail) and on-campus details')
     guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    call('PUT', 'settings.php', {'notify_entry_exit': 0}, admin)  # entry / exit mails have their own test
     secret = open(os.path.join(ROOT, 'backend', 'config', 'secret.php'), encoding='utf-8').read()
     smtp_cfg = re.search(r"define\('SP_SMTP_HOST',\s*'127\.0\.0\.1'\)", secret) and re.search(r"define\('SP_SMTP_PORT',\s*(\d+)\)", secret)
     smtp = FakeSmtp(int(smtp_cfg.group(1))) if smtp_cfg else None
@@ -2676,6 +2677,131 @@ def test_oncampus_after_case(admin):
     AUTO_PAY = True
 
 
+def test_passage_mail(admin):
+    """'Is this you?' e-mails on entry / exit, the 'this wasn't me' link, and the detailed blocked e-mail."""
+    import re, time, urllib.parse
+    global AUTO_PAY
+    section('E-mail: is this you? (entry / exit) and blocked e-mail with steps')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    secret = open(os.path.join(ROOT, 'backend', 'config', 'secret.php'), encoding='utf-8').read()
+    port = re.search(r"define\('SP_SMTP_PORT',\s*(\d+)\)", secret)
+    if not (port and re.search(r"define\('SP_SMTP_HOST',\s*'127\.0\.0\.1'\)", secret)):
+        print('  (SMTP is not pointed at 127.0.0.1 in secret.php: the e-mail checks are skipped)')
+        AUTO_PAY = True
+        return
+    smtp = FakeSmtp(int(port.group(1)))
+    try:
+        call('PUT', 'settings.php', {'notify_entry_exit': 1}, admin)
+
+        def wait_for(count, after=None):
+            for _ in range(60):
+                if len(smtp.messages) >= count:
+                    break
+                time.sleep(0.15)
+            return smtp.messages[count - 1] if len(smtp.messages) >= count else None
+
+        def deliver_pending():
+            call('POST', 'maintenance.php?force=1', token=admin)
+
+        code, res = call('POST', 'vehicles.php', {'plateNumber': 'MAL 1001', 'ownerName': 'Mia Mailer', 'ownerIdNumber': 'ML-1', 'vehicleType': '4-Wheel', 'ownerEmail': 'mia@example.com',
+                                                 'makeModelColor': 'Red Honda City',
+                                                 'authorizedDrivers': [{'fullName': 'Mia Mailer', 'relationship': 'Self (Owner)', 'licenseNo': 'N/A'}]}, admin)
+        veh = res['data']
+        call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id']}, admin)
+        driver = int(veh['authorizedDrivers'][0]['id'])
+        before = len(smtp.messages)
+
+        # ---- entry
+        code, res = call('POST', 'logs.php', {'plate': 'MAL 1001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver}, guard)
+        check('the entry is recorded', code == 201, res)
+        deliver_pending()
+        m = wait_for(before + 1)
+        check('the owner gets an "is this you?" e-mail for the entry', m is not None and m['to'] == ['mia@example.com'], [x['to'] for x in smtp.messages])
+        subject, text, msg = FakeSmtp.parse(m['raw'])
+        html = ''
+        for part in msg.walk():
+            if part.get_content_type() == 'text/html':
+                html = part.get_payload(decode=True).decode()
+        check('  ...the subject says what happened and asks', 'MAL 1001' in subject and 'entered campus' in subject and 'is this you' in subject.lower(), subject)
+        check('  ...it lists the details (gate, driver, vehicle, time)', all(k in text for k in ('Gate: ', 'Driver: Mia Mailer', 'Vehicle: Red Honda City', 'Time: ')), text[:400])
+        link = re.search(r'(https?://\S+notice_report\.php\?n=\d+&s=[A-Za-z0-9_-]+)', text)
+        check('  ...and carries a personal "this wasn\'t me" link', bool(link) and "This wasn't me" in html.replace('&#039;', "'"), text[-400:])
+
+        # ---- exit
+        code, res = call('POST', 'logs.php', {'plate': 'MAL 1001', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': driver}, guard)
+        deliver_pending()
+        m = wait_for(before + 2)
+        check('the exit is announced too', m is not None and 'left campus' in FakeSmtp.parse(m['raw'])[0], '')
+
+        # ---- the owner follows the link
+        url = link.group(1)
+        with urllib.request.urlopen(url) as r:
+            page = r.read().decode()
+        check('the link shows what was recorded and asks for confirmation (nothing happens yet)', 'Is this you?' in page and 'MAL 1001' in page and 'put my vehicle on hold' in page, page[:200])
+        code, res = call('GET', 'vehicles.php?plate=MAL1001', token=admin)
+        check('  ...opening the link changes nothing', res['data']['status'] != 'Blocked / Alert', res['data']['status'])
+        data = urllib.parse.urlencode({'n': re.search(r'n=(\d+)', url).group(1), 's': re.search(r's=([A-Za-z0-9_-]+)', url).group(1)}).encode()
+        with urllib.request.urlopen(urllib.request.Request(url.split('?')[0], data=data)) as r:
+            done = r.read().decode()
+        case_no = re.search(r'CASE-[0-9A-Z-]+', done)
+        check('pressing the button puts the vehicle on hold and gives a case number', 'on hold at the gate' in done and bool(case_no), done[:300])
+        code, res = call('GET', 'vehicles.php?plate=MAL1001', token=admin)
+        check('  ...the vehicle is blocked at the gate', res['data']['status'] == 'Blocked / Alert', res['data']['status'])
+        rows = call('GET', 'cases.php?status=active&q=MAL1001', token=admin)[1]['data']['cases']
+        check('  ...a Security case "Owner reports: this was not me" exists', any(c['title'] == 'Owner reports: this was not me' for c in rows), [c['title'] for c in rows])
+        with urllib.request.urlopen(urllib.request.Request(url.split('?')[0], data=data)) as r:
+            again = r.read().decode()
+        check('  ...reporting again gives the same case and no second case', case_no.group(0) in again and len([c for c in call('GET', 'cases.php?status=active&q=MAL1001', token=admin)[1]['data']['cases'] if c['title'] == 'Owner reports: this was not me']) == 1, '')
+        try:
+            urllib.request.urlopen(url.replace('s=', 's=x'))
+            bad = 200
+        except urllib.error.HTTPError as e:
+            bad = e.code
+        check('a link with a wrong signature is refused -> 400', bad == 400, bad)
+
+        # ---- the portal is not flooded by passage mails
+        temp = call('POST', 'students.php', {'owner_id_number': 'ML-1', 'action': 'issue'}, admin)[1]['data']['tempPassword']
+        tok = call('POST', 'auth.php?action=login&realm=student', {'username': 'ML-1', 'password': temp})[1]['data']['token']
+        call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Student-Mail-2026'}, tok)
+        kinds ={n['kind'] for n in call('GET', 'student.php?action=notices', token=tok)[1]['data']}
+        check('entry / exit mails do not fill the owner\'s portal notices', not ({'Entry', 'Exit'} & kinds), kinds)
+
+        # ---- the switch
+        call('PUT', 'settings.php', {'notify_entry_exit': 0}, admin)
+        count = len(smtp.messages)
+        call('POST', 'incidents.php', {'plateNumber': 'MAL 1001', 'reason': 'x'}, guard)  # keep the vehicle blocked, not part of the test
+        call('PUT', 'settings.php', {'notify_entry_exit': 0}, admin)
+        v2 = call('POST', 'vehicles.php', {'plateNumber': 'MAL 2002', 'ownerName': 'Mia Mailer', 'ownerIdNumber': 'ML-2', 'vehicleType': 'Motorcycle', 'ownerEmail': 'mia2@example.com',
+                                          'authorizedDrivers': [{'fullName': 'Mia Mailer', 'relationship': 'Self (Owner)'}]}, admin)[1]['data']
+        call('POST', 'payments.php', {'action': 'cash', 'vehicleId': v2['id']}, admin)
+        before_off = len(smtp.messages)
+        call('POST', 'logs.php', {'plate': 'MAL 2002', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': int(v2['authorizedDrivers'][0]['id'])}, guard)
+        deliver_pending()
+        time.sleep(1.0)
+        check('with the setting turned off, nothing is sent for an entry', len(smtp.messages) == before_off, len(smtp.messages) - before_off)
+        call('PUT', 'settings.php', {'notify_entry_exit': 1}, admin)
+
+        # ---- the blocked e-mail: details and steps
+        n0 = len(smtp.messages)
+        code, res = call('POST', 'incidents.php', {'plateNumber': 'MAL 2002', 'reason': 'Unauthorized / Unregistered Driver', 'driverName': 'Unknown Man', 'gatePoint': 'Gate 1 (Main Ingress)'}, guard)
+        case = res['data']['caseNumber']
+        m = wait_for(n0 + 1)
+        check('blocking a vehicle e-mails the owner at once', m is not None and m['to'] == ['mia2@example.com'], [x['to'] for x in smtp.messages[n0:]])
+        subject, text, msg = FakeSmtp.parse(m['raw'])
+        html = ''
+        for part in msg.walk():
+            if part.get_content_type() == 'text/html':
+                html = part.get_payload(decode=True).decode()
+        check('  ...the subject says action is needed', 'ACTION NEEDED' in subject and 'MAL 2002' in subject, subject)
+        check('  ...it lists the details (reason, gate, time, case number)', all(k in text for k in ('Reason: Unauthorized / Unregistered Driver', 'Gate: Gate 1', 'Time: ', f'Case number: {case}')), text[:500])
+        check('  ...and the numbered steps to get it cleared', 'What to do' in text and '1. Do not try to take the vehicle' in text and 'Security Office' in text and case in text.split('What to do')[1], text[-700:])
+        check('  ...with the "I did not authorize this" link', 'notice_report.php?n=' in text and 'I did not authorize this' in html, '')
+    finally:
+        smtp.stop()
+        AUTO_PAY = True
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -2710,6 +2836,7 @@ def main():
     test_cases(admin)
     test_visitor_photo(admin)
     test_oncampus_after_case(admin)
+    test_passage_mail(admin)
     test_audit_and_approvals(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)

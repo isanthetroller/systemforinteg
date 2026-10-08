@@ -147,7 +147,7 @@ switch ($action) {
         sendResponse(200, array_map(fn($row) => studentVehicleView($pdo, $row), ownVehicles($pdo, $ownerId, false)));
 
     case 'notices':
-        $stmt = $pdo->prepare("SELECT * FROM `owner_notices` WHERE `owner_id_number` = ? ORDER BY `id` DESC LIMIT 30");
+        $stmt = $pdo->prepare("SELECT * FROM `owner_notices` WHERE `owner_id_number` = ? AND `kind` NOT IN ('Entry', 'Exit') ORDER BY `id` DESC LIMIT 30");
         $stmt->execute([$ownerId]);
         sendResponse(200, array_map('noticeView', $stmt->fetchAll()));
 

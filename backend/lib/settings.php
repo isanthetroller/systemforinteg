@@ -7,6 +7,7 @@
 function spSettingDefinitions() {
     return [
         'parking_capacity' => [0, 0, 100000, 'Parking capacity (0 = not limited)'],
+        'notify_entry_exit' => [1, 0, 1, 'E-mail owners when their vehicle enters or leaves campus (1 = yes, 0 = no)'],
         'renewal_window_days' => [60, 1, 365, 'Renewal opens this many days before expiry'],
         'expiry_warning_days' => [30, 1, 365, 'Expiry notice to the owner, days before expiry'],
         'hold_reminder_days' => [3, 1, 60, 'Remind the owner every N days while a violation is unresolved'],

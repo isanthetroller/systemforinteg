@@ -301,6 +301,14 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
     }
     $pdo->commit();
 
+    if ($isApproval && $vehicle) {
+        try {
+            noticeVehiclePassage($pdo, $vehicle, $gateType, $gatePoint, $driverName, $driverRelationship, $occurred, gateActorLabel($actor), $logId);
+        } catch (Throwable $e) {
+            error_log('[Notices] passage notice failed: ' . $e->getMessage());
+        }
+    }
+
     return syncResult($ref, 'accepted', null, null, [
         'id' => $logId,
         'flags' => $flags,

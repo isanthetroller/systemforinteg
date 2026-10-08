@@ -168,6 +168,7 @@
     expiry_warning_days: 'Owners get an e-mail and a portal notice this many days before the pass expires.',
     hold_reminder_days: 'The owner is reminded this often while a violation stays unresolved.',
     exit_release_minutes: 'How long a one-time exit release stays usable.',
+    notify_entry_exit: 'Each time a registered vehicle enters or leaves, its owner gets an "is this you?" e-mail with a one-tap way to report it. Owners without an e-mail address are skipped.',
     evidence_retention_days: 'Guard photos are deleted after this many days (the record stays).',
   };
 
@@ -179,7 +180,13 @@
             <div class="text-[11px] text-slate-500">${esc(HELP[s.key] || '')} Default ${s.default}.</div></div>
           <input id="set_${esc(s.key)}" name="${esc(s.key)}" type="number" min="${s.min}" max="${s.max}" step="1" value="${s.value}" class="${input} w-28 text-right">
         </div>`).join('')}
-        <div class="px-4 py-3 flex justify-end"><button type="submit" class="${navy}">Save settings</button></div></form>`;
+        <div class="px-4 py-3 flex justify-end"><button type="submit" class="${navy}">Save settings</button></div></form>
+      <div class="bg-white border border-slate-200 rounded-lg shadow-2xs px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2">
+        <div class="flex-1 min-w-0"><div class="text-xs font-bold text-slate-800">E-mail to owners</div>
+          <div class="text-[11px] text-slate-500">Violation and blocked notices, passage alerts and renewal reminders go out by e-mail. Send yourself a test to check that the server can reach the mail account.</div></div>
+        <input id="mailTestTo" type="email" placeholder="you@example.com" aria-label="Send the test e-mail to" class="${input} w-full sm:w-60">
+        <button type="button" id="mailTestBtn" class="${plain}">Send test e-mail</button>
+      </div>`;
   }
 
   async function saveSettings(form) {
@@ -211,6 +218,23 @@
     document.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', () => decide(Number(b.dataset.reject), false)));
     if ($('dutyApply')) $('dutyApply').addEventListener('click', () => { dutyRange = { from: $('dutyFrom').value, to: $('dutyTo').value }; load(); });
     if ($('settingsForm')) $('settingsForm').addEventListener('submit', (e) => { e.preventDefault(); saveSettings(e.target); });
+    if ($('mailTestBtn')) $('mailTestBtn').addEventListener('click', async () => {
+      const to = $('mailTestTo').value.trim();
+      if (!to) { SP.showToast('Type the address to send the test to.', 'warning'); return; }
+      const btn = $('mailTestBtn');
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        const res = await ApiClient.sendTestMail(to);
+        SP.showToast(res.message, 'success');
+      } catch (err) {
+        if (window.Swal) Swal.fire({ icon: 'error', title: 'The test e-mail did not go out', text: err.message, confirmButtonColor: '#253475' });
+        else SP.showToast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send test e-mail';
+      }
+    });
   }
 
   async function refreshPending() {

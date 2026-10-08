@@ -325,6 +325,15 @@ function handleCreateLog($pdo, $actor) {
         sendResponse(500, null, 'Failed to record gate log.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
     }
 
+    // "Is this you?": tell the registered owner their vehicle came in / went out (never blocks the gate)
+    if ($isApproval && $vehicle) {
+        try {
+            noticeVehiclePassage($pdo, $vehicle, $gateType, $gatePoint, $driverName, $driverRelationship, date('Y-m-d H:i:s'), gateActorLabel($actor), $logId);
+        } catch (Throwable $e) {
+            error_log('[Notices] passage notice failed: ' . $e->getMessage());
+        }
+    }
+
     sendResponse(201, [
         'id' => $logId,
         'timestamp' => date('M d, Y • h:i A'),

@@ -85,8 +85,17 @@ function issueViolation($pdo, $actor, $vehicle, $type, $notes) {
     $incident = holdVehicle($pdo, $actor, $vehicle, $type, "Violation issued by {$label}: " . ($notes ?: $type));
     $id = insertViolation($pdo, $label, actorUserId($actor), $vehicle, $type, $notes, $incident['id']);
     queueOwnerNotice($pdo, $vehicle, 'Violation', "Violation: {$type}",
-        "A violation was recorded against your vehicle {$vehicle['plate_number']}.\nType: {$type}." . ($notes !== '' ? "\nNotes: {$notes}" : '')
-        . "\nUntil it is resolved by the Security Office, the vehicle cannot enter or leave campus.",
+        "A violation was recorded against your vehicle {$vehicle['plate_number']}. Until it is resolved by the Security Office, the vehicle cannot enter or leave campus.
+"
+        . "Violation: {$type}
+"
+        . ($notes !== '' ? "Notes: {$notes}
+" : '')
+        . "Time: " . date('M j, Y g:i A', spNow()) . "
+"
+        . "Vehicle: " . trim(($vehicle['make_model_color'] ?: $vehicle['vehicle_type'])) . "
+"
+        . "Case number: " . ($incident['caseNumber'] ?? ('V' . $id)),
         ['violationId' => $id, 'incidentId' => $incident['id']]);
     return ['violationId' => $id, 'incident' => $incident];
 }

@@ -91,5 +91,13 @@ function runMaintenance($pdo, $force = false) {
         error_log('[Maintenance] evidence: ' . $e->getMessage());
     }
 
+    // 5. E-mails still waiting (entry / exit mails on a host that cannot send after the response)
+    try {
+        $out['emailsSent'] = spMailConfigured() ? deliverPendingNotices($pdo) : 0;
+    } catch (Throwable $e) {
+        error_log('[Maintenance] mail: ' . $e->getMessage());
+        $out['emailsSent'] = 0;
+    }
+
     return $out;
 }
