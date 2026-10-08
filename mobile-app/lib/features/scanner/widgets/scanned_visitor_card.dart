@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/widgets/plate_badge.dart';
+import '../../../core/widgets/vehicle_photo_panel.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../theme/ncst_theme.dart';
 
@@ -95,6 +96,13 @@ class ScannedVisitorCard extends StatelessWidget {
                 lines: const ['This visitor is not recorded as inside campus. Check how they got in.'],
                 background: const Color(0xFFFEF3C7),
                 border: NcstColors.goldDark,
+              ),
+            ],
+            if (pass.vehiclePhoto != null && pass.vehiclePhoto!.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              VehiclePhotoPanel(
+                photoData: pass.vehiclePhoto!,
+                caption: isExit ? 'Photo taken at entry: compare it with the vehicle leaving' : 'Vehicle photo taken at entry',
               ),
             ],
             const SizedBox(height: 16),

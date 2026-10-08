@@ -2573,6 +2573,36 @@ def test_cases(admin):
     AUTO_PAY = True
 
 
+def test_visitor_photo(admin):
+    """The photo of a visitor's vehicle is stored with the pass and reaches the exit guard."""
+    import base64
+    section('Visitor vehicle photo')
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+    jpeg = 'data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff\xe0' + b'\x00' * 300 + b'\xff\xd9').decode()
+
+    def issue(plate, photo):
+        body = {'visitorName': 'Pat Photo', 'contactNumber': '0917 111 2222', 'plateNumber': plate, 'purposeOfVisit': 'Meeting', 'personToVisit': 'Registrar'}
+        if photo is not None:
+            body['vehiclePhoto'] = photo
+        return call('POST', 'visitors.php', body, guard)
+
+    code, res = issue('VPH 1001', jpeg)
+    check('a pass issued with a vehicle photo keeps it', code == 201 and res['data']['hasVehiclePhoto'] is True and res['data']['vehiclePhoto'].startswith('data:image/jpeg;base64,'), res)
+    code, res = call('GET', 'visitors.php', token=admin)
+    row = [r for r in res['data'] if r['plateNumber'] == 'VPH1001']
+    check('lists say there is a photo but do not carry the heavy picture', row and row[0]['hasVehiclePhoto'] is True and row[0]['vehiclePhoto'] is None, row)
+    code, v = verify({'plate': 'VPH 1001', 'gate_type': 'Egress'}, guard)
+    check('the gate scan carries the photo for the exit guard to compare', (v.get('visitor') or {}).get('vehiclePhoto', '').startswith('data:image/jpeg'), list((v.get('visitor') or {}).keys()))
+    code, res = issue('VPH 2002', 'assets/images/kriz_monares.jpg')
+    check('an old app placeholder path is ignored, the pass is still issued', code == 201 and res['data']['hasVehiclePhoto'] is False, res)
+    code, res = issue('VPH 3003', 'data:image/jpeg;base64,' + base64.b64encode(b'<html>not an image</html>').decode())
+    check('something that is not a picture is ignored, the pass is still issued', code == 201 and res['data']['hasVehiclePhoto'] is False, res)
+    code, res = issue('VPH 4004', 'data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff' + b'0' * 700000).decode())
+    check('an oversized picture is ignored, the pass is still issued', code == 201 and res['data']['hasVehiclePhoto'] is False, res)
+    code, res = issue('VPH 5005', None)
+    check('no photo at all is fine', code == 201 and res['data']['vehiclePhoto'] is None, res)
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -2605,6 +2635,7 @@ def main():
     test_owner_notices(admin)
     test_ops_phase2(admin)
     test_cases(admin)
+    test_visitor_photo(admin)
     test_audit_and_approvals(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)

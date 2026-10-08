@@ -29,6 +29,7 @@
 
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/photos.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 
@@ -462,6 +463,11 @@ function syncVisitorPass($pdo, $actor, $ref, $ts, array $p, $now) {
     if (columnExists($pdo, 'visitor_passes', 'synced_at')) {
         $columns[] = 'synced_at';
         $values[] = date('Y-m-d H:i:s', $now);
+    }
+    $photo = validImageDataUrl($p['vehiclePhoto'] ?? $p['vehicle_photo'] ?? $p['vehiclePhotoUrl'] ?? null);
+    if ($photo !== null && columnExists($pdo, 'visitor_passes', 'vehicle_photo')) {
+        $columns[] = 'vehicle_photo';
+        $values[] = $photo;
     }
     $pdo->beginTransaction();
     $marks = implode(', ', array_fill(0, count($columns), '?'));

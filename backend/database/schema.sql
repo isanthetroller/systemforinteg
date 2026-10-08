@@ -3,7 +3,7 @@
 -- Target Host: InfinityFree MySQL (phpMyAdmin)
 -- WARNING: FRESH INSTALL ONLY. This DROPS EVERY TABLE and recreates it empty (all data is lost).
 --          Import it once into an empty database (phpMyAdmin > Import) and nothing else is needed:
---          it already contains everything from migrations 001 to 010 (v2 security, visitor items,
+--          it already contains everything from migrations 001 to 011 (v2 security, visitor items,
 --          settings, vehicle status, VIP, offline sync, registration payments, owner notices,
 --          renewals / vehicle replacement, audit log & approvals, exit releases, evidence photos, guard shifts, cases).
 --          For an EXISTING database that must keep its data, run database/migrations/ instead.
@@ -258,6 +258,7 @@ CREATE TABLE IF NOT EXISTS `visitor_passes` (
   `created_by_user_id` INT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `synced_at` DATETIME NULL COMMENT 'Set when the pass was issued offline on a phone and synced later',
+  `vehicle_photo` MEDIUMTEXT NULL COMMENT 'Photo of the visitor vehicle taken at entry (data URL), shown to the exit guard',
   INDEX `idx_visitor_date` (`valid_date`),
   INDEX `idx_visitor_plate` (`plate_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

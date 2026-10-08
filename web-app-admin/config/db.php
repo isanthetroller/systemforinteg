@@ -455,6 +455,7 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'gate_logs', 'client_ref', 'TEXT NULL');
     ensureColumn($pdo, 'security_incidents', 'client_ref', 'TEXT NULL');
     ensureColumn($pdo, 'visitor_passes', 'synced_at', 'TEXT NULL');
+    ensureColumn($pdo, 'visitor_passes', 'vehicle_photo', 'TEXT NULL');
     $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_gate_logs_client_ref` ON `gate_logs` (`client_ref`)");
     $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_incidents_client_ref` ON `security_incidents` (`client_ref`)");
     ensureColumn($pdo, 'security_incidents', 'logged_by_user_id', 'INTEGER NULL');

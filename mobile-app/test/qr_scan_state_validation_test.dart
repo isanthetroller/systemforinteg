@@ -529,6 +529,43 @@ void main() {
       expect(dbLogs.single['action'], 'Exit Approved');
     });
 
+    testWidgets('The exit screen shows the vehicle photo on file, so the guard can compare it with the vehicle at the gate', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+      dbVehicles['ABC-1111']!['vehicle_photo'] =
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: ExitScannerScreen(currentGuard: guard2, onDecision: (_) {}))));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+      state.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(find.text('CLEARED (EXIT)'), findsOneWidget);
+      expect(find.byKey(const Key('vehiclePhotoPanel')), findsOneWidget);
+      expect(find.textContaining('compare it with the vehicle at the gate'), findsOneWidget);
+    });
+
+    testWidgets('A vehicle with no photo on file simply shows no photo panel', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      dbVehicles['ABC-1111']!['status'] = 'Inside Campus';
+
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: ExitScannerScreen(currentGuard: guard2, onDecision: (_) {}))));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(ExitScannerScreen));
+      state.testVerifyPass('ABC-1111');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      expect(find.text('CLEARED (EXIT)'), findsOneWidget);
+      expect(find.byKey(const Key('vehiclePhotoPanel')), findsNothing);
+    });
+
     testWidgets('Without a release the same vehicle on hold is still refused at the exit', (tester) async {
       await tester.binding.setSurfaceSize(const Size(800, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));

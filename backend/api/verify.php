@@ -454,5 +454,7 @@ function formatVisitorForGate($pdo, $v) {
         'exitTime' => $v['exit_time'],
         'status' => $v['status'],
         'items' => visitorPassItems($pdo, $v['id']),
+        // Taken by the entry guard; shown to whoever checks the vehicle at the exit
+        'vehiclePhoto' => !empty($v['vehicle_photo']) ? $v['vehicle_photo'] : null,
     ];
 }

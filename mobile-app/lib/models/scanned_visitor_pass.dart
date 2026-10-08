@@ -38,6 +38,9 @@ class ScannedVisitorPass {
   final String status;
   final List<VisitorPassItem> items;
 
+  /// The photo of the visitor's vehicle taken at entry (data URL), for the exit guard to compare. Null when none.
+  final String? vehiclePhoto;
+
   /// The server's verdict for this pass at this gate: VALID, MANUAL, NOT_YET_VALID, EXPIRED_TEMP, REVOKED...
   final String result;
   final bool accepted;
@@ -59,6 +62,7 @@ class ScannedVisitorPass {
     this.purposeOfVisit = '',
     this.personToVisit = '',
     this.items = const [],
+    this.vehiclePhoto,
     this.reason = '',
     this.warnings = const [],
     this.currentlyInside = false,
@@ -93,6 +97,7 @@ class ScannedVisitorPass {
       validDate: (v['validDate'] ?? v['valid_date'] ?? '').toString(),
       status: (v['status'] ?? '').toString(),
       items: items,
+      vehiclePhoto: (v['vehiclePhoto'] ?? v['vehicle_photo'])?.toString(),
       result: (data['result'] ?? '').toString(),
       accepted: data['accepted'] == true,
       reason: (data['reason'] ?? '').toString(),
@@ -130,6 +135,7 @@ class ScannedVisitorPass {
         quantity: int.tryParse((m['quantity'] ?? 1).toString()) ?? 1,
         description: (m['description'] ?? '').toString(),
       )).toList(),
+      vehiclePhoto: pass.vehiclePhotoUrl != null && pass.vehiclePhotoUrl!.startsWith('data:image/') ? pass.vehiclePhotoUrl : null,
       result: result,
       accepted: accepted,
       reason: reason,

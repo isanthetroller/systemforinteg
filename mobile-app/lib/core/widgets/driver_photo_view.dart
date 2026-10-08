@@ -168,7 +168,8 @@ class VehiclePhotoThumb extends StatelessWidget {
       } catch (_) {}
     }
     Widget content;
-    final targetW = (width * 2).round().clamp(60, 240);
+    // Enough pixels for a large preview (the vehicle photo panel), still small for thumbnails
+    final targetW = (width.isFinite ? width * 2 : 640).round().clamp(60, 720);
 
     if (raw.startsWith('data:image/') ||
         raw.startsWith('/9j/') ||
