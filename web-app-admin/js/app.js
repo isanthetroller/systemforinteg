@@ -234,6 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const editPlateNumber = document.getElementById('editPlateNumber');
   const editMakeModel = document.getElementById('editMakeModel');
   const editStickerYear = document.getElementById('editStickerYear');
+  const editPassValidUntil = document.getElementById('editPassValidUntil');
   const editPassClassVip = document.getElementById('editPassClassVip');
   const editRegStatus = document.getElementById('editRegStatus');
   const editCampusStatus = document.getElementById('editCampusStatus');
@@ -3438,6 +3439,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (editPlateNumber) editPlateNumber.value = v.plateNumber || '';
     if (editMakeModel) editMakeModel.value = v.makeModelColor || '';
     if (editStickerYear) editStickerYear.value = v.stickerYear || '2026';
+    if (editPassValidUntil) editPassValidUntil.value = v.passValidUntil || '';
     if (editPassClassVip) editPassClassVip.checked = !!v.isVip;
     if (editRegStatus) editRegStatus.value = v.registrationStatus || 'Active';
     if (editCampusStatus) {
@@ -3609,6 +3611,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const plateNumber = editPlateNumber ? editPlateNumber.value.trim().toUpperCase() : (v.plateNumber || '');
       const makeModelColor = editMakeModel ? editMakeModel.value.trim() : (v.makeModelColor || '');
       const stickerYear = editStickerYear ? editStickerYear.value.trim() : (v.stickerYear || '2026');
+      // Sent only when the administrator actually changed it (the server then asks for a reason)
+      const newPassDate = editPassValidUntil ? editPassValidUntil.value : '';
+      const passDateChanged = Boolean(newPassDate) && newPassDate !== (v.passValidUntil || '');
       const registrationStatus = editRegStatus ? editRegStatus.value : (v.registrationStatus || 'Active');
 
       // Read Authorized Drivers
@@ -3698,6 +3703,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhone: v.ownerPhone,
           ownerEmail: v.ownerEmail,
           stickerYear: v.stickerYear,
+          ...(passDateChanged ? { passValidUntil: newPassDate } : {}),
           passClass: requestedVip ? 'VIP' : 'Standard',
           registrationStatus: v.registrationStatus,
           ownerPhoto: v.ownerPhoto,
