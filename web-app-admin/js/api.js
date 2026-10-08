@@ -235,6 +235,17 @@ const ApiClient = (function() {
     getReleases: async () => (await request('releases.php')).data,
     cancelRelease: async (id) => (await request(`releases.php?id=${id}`, { method: 'DELETE' })).data,
 
+    // Cases: violations and security incidents as one process
+    getCases: async (params = {}) => {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+      return (await request(`cases.php${qs ? '?' + qs : ''}`)).data;
+    },
+    getCase: async (key) => (await request(`cases.php?key=${encodeURIComponent(key)}`)).data,
+    caseAction: async (key, action, fields = {}) => {
+      const res = await request('cases.php', { method: 'POST', body: { key, action, ...fields } });
+      return { ...res.data, message: res.message };
+    },
+
     // Admin Center: activity log, approvals, guard duty, settings
     getAuditLog: async (params = {}) => {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();

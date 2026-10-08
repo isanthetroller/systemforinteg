@@ -280,6 +280,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewHooks = {};
 
   function switchView(targetViewId) {
+    // Violations and Flagged & Blocked were merged into one Cases screen
+    if (targetViewId === 'flaggedView' || targetViewId === 'violationsView') targetViewId = 'casesView';
     if (!views[targetViewId]) return;
     // Views hidden for the current role cannot be opened
     if (views[targetViewId].classList.contains('admin-only') && window.SPAuth && !SPAuth.hasRole('admin')) return;
@@ -5074,6 +5076,11 @@ document.addEventListener('DOMContentLoaded', () => {
     closeDrawer,
     alert: window.SPAlert,
     reload: loadInitialDataFromApi,
+    openIncident(id) {
+      const inc = (state.incidents || []).find(x => x.id === id);
+      if (inc) openIncidentDrawer(inc);
+      return !!inc;
+    },
     openVehicle(id) {
       const v = state.vehicles.find(x => x.id === id);
       if (v) openVehicleDrawer(v);
