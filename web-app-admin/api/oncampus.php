@@ -27,6 +27,27 @@ $now = spNow();
 $nightStart = currentNightStart($now);
 $today = date('Y-m-d', $now);
 
+/**
+ * Timestamp (seconds) of the most recent time a case on this plate was closed (a security incident resolved or a
+ * violation resolved / dismissed), or null. A refused exit that happened BEFORE that moment is settled history: it no
+ * longer keeps the vehicle or visitor flagged as blocked.
+ */
+function lastCaseClosedTs($pdo, $plate) {
+    $norm = normalizePlate($plate);
+    $best = null;
+    $queries = [
+        "SELECT MAX(`resolved_at`) FROM `security_incidents` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `status` <> 'Held'",
+        "SELECT MAX(`resolved_at`) FROM `vehicle_violations` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `status` <> 'Pending'",
+    ];
+    foreach ($queries as $sql) {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$norm]);
+        $ts = strtotime((string)$stmt->fetchColumn());
+        if ($ts && ($best === null || $ts > $best)) $best = $ts;
+    }
+    return $best;
+}
+
 /* ---------- Registered vehicles ---------- */
 $vehicles = [];
 $candidateVehicles = $pdo->query("
@@ -79,7 +100,9 @@ foreach ($candidateVehicles as $v) {
     $lastExitDenied = $deniedStmt->fetch() ?: null;
     $hasExitDenied = false;
     if ($lastExitDenied && $entry) {
-        $hasExitDenied = strtotime($lastExitDenied['logged_at']) >= $entry['time'];
+        $deniedAt = strtotime($lastExitDenied['logged_at']);
+        $closedAt = lastCaseClosedTs($pdo, $v['plate_number']);
+        $hasExitDenied = $deniedAt >= $entry['time'] && ($closedAt === null || $deniedAt > $closedAt);
     }
 
     $hours = $entry ? round(max(0, $now - $entry['time']) / 3600, 1) : null;
@@ -146,7 +169,9 @@ foreach ($stmt->fetchAll() as $p) {
     $lastExitDenied = $deniedStmt->fetch() ?: null;
     $hasExitDenied = false;
     if ($lastExitDenied && $p['entry_time']) {
-        $hasExitDenied = strtotime($lastExitDenied['logged_at']) >= strtotime($p['entry_time']);
+        $deniedAt = strtotime($lastExitDenied['logged_at']);
+        $closedAt = lastCaseClosedTs($pdo, $p['plate_number']);
+        $hasExitDenied = $deniedAt >= strtotime($p['entry_time']) && ($closedAt === null || $deniedAt > $closedAt);
     }
 
     $entryTs = strtotime($p['entry_time']);

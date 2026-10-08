@@ -2618,6 +2618,62 @@ def test_visitor_photo(admin):
     check('a plate nobody knows stays Unknown', call('GET', f"cases.php?key=I{res['data']['id']}", token=admin)[1]['data']['ownerName'] == 'Unknown', '')
 
 
+def test_oncampus_after_case(admin):
+    """Closing a case stops the On Campus screen from showing the vehicle / visitor as blocked."""
+    import time
+    global AUTO_PAY
+    section('On Campus: a closed case no longer shows as blocked')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def on_campus(kind, plate):
+        data = call('GET', 'oncampus.php', token=admin)[1]['data']
+        return [r for r in data[kind] if r['plateNumber'].replace(' ', '').replace('-', '') == plate.replace(' ', '')][0]
+
+    def deny_exit_and_flag(plate, extra):
+        call('POST', 'logs.php', {'plate': plate, 'action': 'Exit Denied', 'gate_type': 'Egress', **extra}, guard)
+
+    # ---- a registered vehicle
+    code, res = call('POST', 'vehicles.php', {'plateNumber': 'OCC 1001', 'ownerName': 'Olive Campus', 'ownerIdNumber': 'OC-1', 'vehicleType': '4-Wheel',
+                                              'authorizedDrivers': [{'fullName': 'Olive Campus', 'relationship': 'Self (Owner)', 'licenseNo': 'N/A'}]}, admin)
+    veh = res['data']
+    call('POST', 'payments.php', {'action': 'cash', 'vehicleId': veh['id']}, admin)
+    driver = int(veh['authorizedDrivers'][0]['id'])
+    code, res = call('POST', 'logs.php', {'plate': 'OCC 1001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'driver_id': driver}, guard)
+    check('vehicle enters', code == 201, res)
+    time.sleep(1.1)
+    deny_exit_and_flag('OCC 1001', {'driver_id': driver})
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'OCC 1001', 'reason': 'Unauthorized / Unregistered Driver'}, guard)
+    key = 'I' + str(res['data']['id'])
+    row = on_campus('vehicles', 'OCC1001')
+    check('after a blocked exit the vehicle shows as blocked', row['exitDenied'] is True and row['activeHold'] is not None, row)
+    time.sleep(1.1)
+    code, res = call('POST', 'cases.php', {'key': key, 'action': 'close', 'outcome': 'Clearance signed', 'notes': 'Owner cleared this at the Security Office'}, admin)
+    check('the case is closed', code == 200, res)
+    row = on_campus('vehicles', 'OCC1001')
+    check('after the case is closed the vehicle is no longer blocked', row['exitDenied'] is False and row['activeHold'] is None, row)
+    time.sleep(1.1)
+    deny_exit_and_flag('OCC 1001', {'driver_id': driver})
+    check('a NEW refused exit after the closure flags it again', on_campus('vehicles', 'OCC1001')['exitDenied'] is True, '')
+
+    # ---- a visitor
+    code, res = call('POST', 'visitors.php', {'visitorName': 'Maria Santos', 'contactNumber': '0917 222 3333', 'plateNumber': 'OCC 2002', 'purposeOfVisit': 'Meeting', 'personToVisit': 'Registrar'}, guard)
+    pass_id = res['data']['id']
+    code, res = call('POST', 'logs.php', {'plate': 'OCC 2002', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': pass_id, 'driverName': 'Maria Santos'}, guard)
+    check('visitor enters', code == 201, res)
+    time.sleep(1.1)
+    deny_exit_and_flag('OCC 2002', {'visitor_pass_id': pass_id, 'driverName': 'Maria Santos'})
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'OCC 2002', 'reason': 'Unauthorized / Unregistered Driver'}, guard)
+    vkey = 'I' + str(res['data']['id'])
+    row = on_campus('visitors', 'OCC2002')
+    check('after a blocked exit the visitor shows as blocked', row['exitDenied'] is True and row['activeHold'] is not None, row)
+    time.sleep(1.1)
+    code, res = call('POST', 'cases.php', {'key': vkey, 'action': 'close', 'outcome': 'Clearance signed', 'notes': 'Visitor cleared by the Security Office'}, admin)
+    row = on_campus('visitors', 'OCC2002')
+    check('after the case is closed the visitor is no longer blocked', code == 200 and row['exitDenied'] is False and row['activeHold'] is None, row)
+    AUTO_PAY = True
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -2651,6 +2707,7 @@ def main():
     test_ops_phase2(admin)
     test_cases(admin)
     test_visitor_photo(admin)
+    test_oncampus_after_case(admin)
     test_audit_and_approvals(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
