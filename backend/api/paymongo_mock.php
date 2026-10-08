@@ -56,7 +56,7 @@ $h = fn($v) => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
 <div class="card">
   <span class="badge">TEST MODE - no real money</span>
   <h1>PayMongo test checkout</h1>
-  <p>Registration fee for <strong><?= $h($payment['plate_number']) ?></strong> (<?= $h($payment['owner_name']) ?>). This page only appears on a local development server with no PayMongo key.</p>
+  <p><?= ($payment["purpose"] ?? "") === "Renewal" ? "Pass renewal for" : "Registration fee for" ?> <strong><?= $h($payment['plate_number']) ?></strong> (<?= $h($payment['owner_name']) ?>). This page only appears on a local development server with no PayMongo key.</p>
   <div class="amount">PHP <?= number_format((float)$payment['amount'], 2) ?></div>
   <form method="post">
     <input type="hidden" name="session" value="<?= $h($session) ?>">

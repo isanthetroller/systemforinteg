@@ -1602,6 +1602,7 @@
           <div class="flex" role="tablist" aria-label="Cashier lists">
             <button type="button" role="tab" id="cashierTabAwaiting" aria-selected="true" class="px-3.5 py-2 text-xs font-bold border-b-2 border-ncst-navy text-ncst-navy cursor-pointer">Awaiting payment <span id="cashierTabAwaitingCount" class="ml-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px]">0</span></button>
             <button type="button" role="tab" id="cashierTabHistory" aria-selected="false" class="px-3.5 py-2 text-xs font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-800 cursor-pointer">Payment history</button>
+            <button type="button" role="tab" id="cashierTabRenewals" aria-selected="false" class="px-3.5 py-2 text-xs font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-800 cursor-pointer">Renewals <span id="cashierTabRenewalsCount" class="ml-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px]">0</span></button>
           </div>
           <div class="pb-2">
             <label for="cashierSearch" class="sr-only">Search plate, owner, ID or receipt</label>
@@ -1649,6 +1650,34 @@
                 <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Loading&hellip;</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div id="cashierRenewalsWrap" class="hidden space-y-3">
+          <div id="renewalsNote" class="text-[11px] px-3 py-2 rounded-md bg-slate-100 text-slate-700 border border-slate-200"></div>
+          <div id="renewalsBulkBar" class="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200 rounded-lg px-4 py-2.5 shadow-2xs">
+            <div id="renewalsSelectedInfo" class="text-xs text-slate-600">Nothing selected</div>
+            <button type="button" id="renewalsBulkBtn" disabled class="px-3.5 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-semibold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">Renew selected</button>
+          </div>
+          <div class="bg-white border border-slate-200 rounded-lg shadow-2xs overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead class="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
+                  <tr>
+                    <th scope="col" class="text-left font-bold px-4 py-2.5 w-8"><input type="checkbox" id="renewalsSelectAll" aria-label="Select every renewable pass"></th>
+                    <th scope="col" class="text-left font-bold px-4 py-2.5">Plate</th>
+                    <th scope="col" class="text-left font-bold px-4 py-2.5">Owner</th>
+                    <th scope="col" class="text-left font-bold px-4 py-2.5">Pass valid until</th>
+                    <th scope="col" class="text-left font-bold px-4 py-2.5">Renewal fee</th>
+                    <th scope="col" class="text-left font-bold px-4 py-2.5">New expiry</th>
+                    <th scope="col" class="text-right font-bold px-4 py-2.5">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="cashierRenewalsBody" class="divide-y divide-slate-100">
+                  <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Loading&hellip;</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -2872,7 +2901,7 @@
   <script src="js/auth.js?v=20261007g"></script>
   <script src="js/app.js?v=20261010b"></script>
   <script src="js/users.js?v=20261007d"></script>
-  <script src="js/payments.js?v=20261010a"></script>
+  <script src="js/payments.js?v=20261011a"></script>
   <script src="js/ops.js?v=20261010a"></script>
   <script src="js/cases.js?v=20261010b"></script>
   <script src="js/center.js?v=20261010a"></script>

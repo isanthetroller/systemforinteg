@@ -92,8 +92,8 @@ const StudentApi = (function () {
     async payments() { return (await request('student.php?action=payments')).data; },
     async notices() { return (await request('student.php?action=notices')).data; },
     // Starts a PayMongo checkout for one of my unpaid vehicles; returnUrl is where the checkout sends me back
-    async startPayment(vehicleId, returnUrl) {
-      return (await request('student_pay.php', { method: 'POST', body: { vehicleId, returnUrl } })).data;
+    async startPayment(vehicleId, returnUrl, purpose) {
+      return (await request('student_pay.php', { method: 'POST', body: { vehicleId, returnUrl, ...(purpose ? { purpose } : {}) } })).data;
     },
     async paymentStatus(paymentId) { return (await request(`student_pay.php?paymentId=${encodeURIComponent(paymentId)}`)).data; },
 

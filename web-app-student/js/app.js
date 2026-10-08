@@ -342,6 +342,29 @@
     return (data.cases || []).filter(c => c.status !== 'Closed' && normPlate(c.plateNumber) === normPlate(v.plateNumber));
   }
 
+  /** Renewal card: shown when the pass is inside the renewal window or already expired. */
+  function renewalCard(v) {
+    const r = v.renewal;
+    if (!r || !r.due || r.blocker === 'This vehicle was retired.') return '';
+    const when = r.expired
+      ? `Your pass expired on ${fmtDate(v.passValidUntil)}.`
+      : `Your pass expires on ${fmtDate(v.passValidUntil)} (${r.daysLeft} day${r.daysLeft === 1 ? '' : 's'} left).`;
+    const tone = r.expired ? 'bad' : 'warn';
+    const action = !r.eligible
+      ? `<p class="hint">${esc(r.blocker || 'Renewal is not available right now.')}</p>`
+      : r.fee > 0
+        ? `<button type="button" class="btn btn-gold" data-action="renew">Renew for ${peso(r.fee)} online</button>
+           <p class="hint">Or pay ${peso(r.fee)} at the cashier in the Campus Security Office. Your new pass appears here right after.</p>`
+        : '<p class="hint"><strong>Renewal is free for this vehicle.</strong> Ask the Campus Security Office to renew it; your new pass appears here right after.</p>';
+    return `<div class="card renew-card ${tone}">
+      <h2 class="card-title">${r.expired ? 'Renew your pass' : 'Renew your pass soon'}</h2>
+      <p class="card-sub">${esc(when)} ${r.expired ? 'Until it is renewed this vehicle cannot enter campus.' : 'Renew before then so your QR keeps working at the gate.'}</p>
+      <dl class="renew-facts"><div><dt>New pass valid until</dt><dd>${esc(fmtDate(r.newValidUntil))}</dd></div><div><dt>Fee</dt><dd>${r.fee > 0 ? peso(r.fee) : 'No fee'}</dd></div></dl>
+      ${action}
+      <p class="hint" id="renewError" role="alert" hidden></p>
+    </div>`;
+  }
+
   /* ---- My Pass ---- */
   function renderPass() {
     const tab = $('tabPass');
@@ -367,7 +390,7 @@
     } else if (v.registrationStatus === 'Suspended') {
       attention = attentionStrip('bad', 'Registration suspended', 'Please visit the Campus Security Office.');
     } else if (v.passExpired) {
-      attention = attentionStrip('warn', 'This pass has expired', 'Renew your sticker at the Campus Security Office to get a new pass.');
+      attention = attentionStrip('warn', 'This pass has expired', v.renewal && v.renewal.eligible ? 'Renew it below, or at the Campus Security Office, to get a new QR pass.' : 'Renew your sticker at the Campus Security Office to get a new pass.');
     }
 
     tab.innerHTML = `
@@ -398,6 +421,7 @@
         </div>
       </article>
       </div><div class="col">
+      ${renewalCard(v)}
       <div class="card gate-help"><h2 class="card-title">At the gate</h2><p class="card-sub">Three quick steps every time you drive in or out.</p><ol><li><span>1</span><div><strong>Open your pass</strong><p>Tap Show at Gate to make the QR code larger.</p></div></li><li><span>2</span><div><strong>Show it to the guard</strong><p>Keep your screen bright enough to scan.</p></div></li><li><span>3</span><div><strong>${v.isVip ? 'Wait for approval' : 'Confirm the driver'}</strong><p>${v.isVip ? 'The guard checks your pass before entry or exit.' : 'The guard checks the driver before entry or exit.'}</p></div></li></ol></div>
       <div class="card">
         <h2 class="card-title">Authorized drivers</h2>
@@ -417,6 +441,8 @@
     tab.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => { data.selected = Number(c.dataset.index); renderPass(); }));
     $('passQr').addEventListener('click', () => openZoom(v));
     tab.querySelector('[data-action="zoom"]').addEventListener('click', () => openZoom(v));
+    const renewBtn = tab.querySelector('[data-action="renew"]');
+    if (renewBtn) renewBtn.addEventListener('click', (e) => startPayment(v, e.currentTarget, 'renewal'));
     tab.querySelector('[data-action="save"]').addEventListener('click', () => savePassImage(v));
   }
 
@@ -451,14 +477,14 @@
     tab.querySelector('[data-action="pay"]').addEventListener('click', (e) => startPayment(v, e.currentTarget));
   }
 
-  async function startPayment(v, button) {
-    const err = $('payError');
+  async function startPayment(v, button, purpose) {
+    const err = $(purpose === 'renewal' ? 'renewError' : 'payError');
     err.hidden = true;
     button.disabled = true;
     const label = button.textContent;
     button.textContent = 'Opening secure checkout\u2026';
     try {
-      const r = await StudentApi.startPayment(v.id, location.origin + location.pathname);
+      const r = await StudentApi.startPayment(v.id, location.origin + location.pathname, purpose);
       window.location.href = r.checkoutUrl;
     } catch (e) {
       err.textContent = e.message || 'Could not start the payment. Please try again.';
@@ -494,7 +520,10 @@
       if (paidIndex >= 0) data.selected = paidIndex; // land on the vehicle that was just paid for
       renderAll();
     } catch (_) { /* the next poll refreshes */ }
-    if (payment && payment.status === 'Paid') toast(`Payment received (${payment.receiptNumber}). Your pass is ready.`, 'success');
+    if (payment && payment.status === 'Paid' && payment.purpose === 'Renewal') {
+      const renewed = (data.vehicles || []).find(x => x.id === payment.vehicleId);
+      toast(`Renewal paid (${payment.receiptNumber}). Your new pass is valid until ${fmtDate(renewed && renewed.passValidUntil)}.`, 'success');
+    } else if (payment && payment.status === 'Paid') toast(`Payment received (${payment.receiptNumber}). Your pass is ready.`, 'success');
     else toast('We have not received the payment yet. If you paid, your pass will appear shortly.');
   }
 
@@ -732,7 +761,7 @@
     const paid = (data.payments || []).filter(p => p.status === 'Paid');
     $('receiptsCard').hidden = !paid.length;
     $('receiptList').innerHTML = paid.map(p => `
-      <li><div><div class="name">${esc(p.plateNumber)} \u00b7 ${peso(p.amount)}</div>
+      <li><div><div class="name">${esc(p.plateNumber)} \u00b7 ${peso(p.amount)}${p.purpose === 'Renewal' ? ' \u00b7 Pass renewal' : ''}</div>
         <div class="sub">${esc(p.receiptNumber)} \u00b7 ${p.method === 'Cash' ? 'Cash at cashier' : 'Online'} \u00b7 ${esc(fmtDateTime(p.paidAt))}</div></div></li>`).join('');
   }
 

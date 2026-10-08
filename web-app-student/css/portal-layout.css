@@ -112,3 +112,12 @@
   .case { padding: 16px; }
   .steps li { font-size: 11px; }
 }
+
+/* ---------------------------------------------------------------- renewal card */
+.renew-card.bad { border-color: #fecaca; background: #fffafa; }
+.renew-card.warn { border-color: #fde68a; background: #fffdf5; }
+.renew-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
+.renew-facts div { padding: 12px; border-radius: 10px; background: #f5f7fb; border: 1px solid #e4e9f1; }
+.renew-facts dt { font-size: 12px; color: var(--muted); }
+.renew-facts dd { margin: 4px 0 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+.renew-card .btn { width: 100%; min-height: 48px; }
