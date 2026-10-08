@@ -30,6 +30,7 @@ require_once __DIR__ . '/../lib/records.php';
 require_once __DIR__ . '/../lib/campus.php';
 require_once __DIR__ . '/../lib/releases.php';
 require_once __DIR__ . '/../lib/capacity.php';
+require_once __DIR__ . '/../lib/cases.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendResponse(405, null, 'Method not allowed');
@@ -416,6 +417,8 @@ sendResponse(200, [
     'incident' => $incident,
     'exitRelease' => $exitRelease ? ['id' => (int)$exitRelease['id'], 'expiresAt' => $exitRelease['expires_at'], 'reason' => $exitRelease['reason'], 'releasedBy' => $exitRelease['released_by_label']] : null,
     'occupancy' => campusOccupancy($pdo),
+    // The open case that holds this vehicle and its latest step (so the guard can tell the owner what to do)
+    'case' => ($vehicle && $result === 'BANNED') ? caseOpenForPlate($pdo, $vehicle['plate_number']) : null,
     'currentlyInside' => $currentlyInside,
     // Where it is and who to call: shown to the guard when a vehicle that is already inside is scanned again
     'onCampus' => ($vehicle && $currentlyInside) ? onCampusDetails($pdo, $vehicle, $now) : null,

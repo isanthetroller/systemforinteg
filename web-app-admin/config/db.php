@@ -398,6 +398,19 @@ function initializeSqliteSchema($pdo) {
             `ended_at` TEXT NULL,
             `handover_notes` TEXT NULL
         );
+        CREATE TABLE IF NOT EXISTS `case_events` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `case_key` TEXT NOT NULL,
+            `event_type` TEXT NOT NULL,
+            `method` TEXT NULL,
+            `result` TEXT NULL,
+            `reference` TEXT NULL,
+            `note` TEXT NULL,
+            `actor_user_id` INTEGER NULL,
+            `actor_label` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS `idx_case_events_key` ON `case_events` (`case_key`);
         CREATE INDEX IF NOT EXISTS `idx_payments_vehicle` ON `payments` (`vehicle_id`);
         CREATE INDEX IF NOT EXISTS `idx_payments_owner` ON `payments` (`owner_id_number`);
         CREATE INDEX IF NOT EXISTS `idx_payments_session` ON `payments` (`provider_session_id`);

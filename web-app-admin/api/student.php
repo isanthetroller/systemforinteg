@@ -25,6 +25,7 @@ require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 require_once __DIR__ . '/../lib/payments.php';
 require_once __DIR__ . '/../lib/notices.php';
+require_once __DIR__ . '/../lib/cases.php';
 require_once __DIR__ . '/../lib/renewals.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
@@ -175,6 +176,30 @@ switch ($action) {
         }, $stmt->fetchAll());
         sendResponse(200, $rows);
 
+    case 'cases':
+        // Violations and security cases on the owner's vehicles, with a timeline that has no staff names or internal notes
+        $plates = ownPlates($pdo, $ownerId);
+        $stmt = $pdo->prepare("SELECT vv.*, v.`owner_name`, v.`owner_phone`, v.`owner_id_number`, v.`owner_role`
+            FROM `vehicle_violations` vv JOIN `vehicles` v ON v.`id` = vv.`vehicle_id`
+            WHERE v.`owner_id_number` = ? AND vv.`severity` = 'Violation' ORDER BY vv.`id` DESC LIMIT 50");
+        $stmt->execute([$ownerId]);
+        $vRows = $stmt->fetchAll();
+        $iRows = [];
+        if ($plates) {
+            $stmt = $pdo->prepare("SELECT * FROM `security_incidents`
+                WHERE `id` NOT IN (SELECT `incident_id` FROM `vehicle_violations` WHERE `incident_id` IS NOT NULL) AND " . plateInClause($plates) . "
+                ORDER BY `id` DESC LIMIT 50");
+            $stmt->execute($plates);
+            $iRows = $stmt->fetchAll();
+        }
+        $keys = array_merge(array_map(fn($r) => 'V' . $r['id'], $vRows), array_map(fn($r) => 'I' . $r['id'], $iRows));
+        $events = caseEventsFor($pdo, $keys);
+        $out = [];
+        foreach ($vRows as $r) { $k = 'V' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('violation', $r, $ev), $ev); }
+        foreach ($iRows as $r) { $k = 'I' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('incident', $r, $ev), $ev); }
+        usort($out, fn($a, $b) => strcmp((string)$b['openedAt'], (string)$a['openedAt']));
+        sendResponse(200, $out);
+
     case 'activity':
         $plates = ownPlates($pdo, $ownerId);
         if (!$plates) sendResponse(200, []);
@@ -223,5 +248,5 @@ switch ($action) {
         sendResponse(200, ['active' => $active, 'recent' => array_map(fn($r) => incidentView($pdo, $r), $stmt->fetchAll())]);
 
     default:
-        sendResponse(400, null, 'Unknown action. Use me, vehicles, payments, notices, violations, activity or alerts.');
+        sendResponse(400, null, 'Unknown action. Use me, vehicles, payments, notices, violations, cases, activity or alerts.');
 }

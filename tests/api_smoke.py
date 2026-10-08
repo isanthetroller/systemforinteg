@@ -2434,6 +2434,122 @@ def test_ops_phase2(admin):
     AUTO_PAY = True
 
 
+def test_cases(admin):
+    """Cases: violations and security incidents as one process with steps, outcomes and an owner-facing timeline."""
+    global AUTO_PAY
+    section('Cases (one process for violations and security incidents)')
+    AUTO_PAY = False
+    guard = login('guard.qa', 'Guard-QA-2026')[1]['data']['token']
+
+    def reg(plate, owner_id):
+        code, res = call('POST', 'vehicles.php', {'plateNumber': plate, 'ownerName': 'Cass Case', 'ownerIdNumber': owner_id, 'vehicleType': '4-Wheel', 'ownerEmail': f'{owner_id.lower()}@example.com',
+                                                 'authorizedDrivers': [{'fullName': 'Cass Case', 'relationship': 'Self (Owner)', 'licenseNo': 'N/A'}]}, admin)
+        v = res['data']
+        call('POST', 'payments.php', {'action': 'cash', 'vehicleId': v['id']}, admin)
+        temp = v['studentAccount']['tempPassword']
+        tok = call('POST', 'auth.php?action=login&realm=student', {'username': owner_id, 'password': temp})[1]['data']['token']
+        call('POST', 'auth.php?action=change_password', {'current_password': temp, 'new_password': 'Student-Case-2026'}, tok)
+        return v, tok
+
+    def issue(v, type_='Parking in Fire Lane / Restricted Zone', notes='Blocking the hydrant'):
+        code, res = call('POST', 'violations.php', {'vehicle_id': v['id'], 'type': type_, 'notes': notes}, guard)
+        return 'V' + str(res['data']['violation']['id'])
+
+    def act(key, token, **body):
+        return call('POST', 'cases.php', {'key': key, **body}, token)
+
+    def get(key, token=None):
+        return call('GET', f'cases.php?key={key}', token=token or admin)[1]['data']
+
+    v1, tok1 = reg('CSE 1001', 'CS-1')
+    key = issue(v1)
+    code, res = call('GET', 'cases.php', token=guard)
+    row = [c for c in res['data']['cases'] if c['key'] == key]
+    check('a new violation appears as an Open case (guards can list cases)', code == 200 and len(row) == 1 and row[0]['status'] == 'Open' and row[0]['type'] == 'Violation' and row[0]['step'] == 'Reported', row)
+    check('the incident behind a violation is not listed twice', not [c for c in res['data']['cases'] if c['kind'] == 'incident' and c['plateNumber'] == 'CSE 1001'], '')
+    check('the list has counts', res['data']['summary']['open'] >= 1 and res['data']['summary']['total'] >= 1, res['data']['summary'])
+    code, v = verify({'plate': 'CSE 1001', 'gate_type': 'Ingress'}, guard)
+    check('the gate scan shows the case holding the vehicle and its step', (v.get('case') or {}).get('key') == key and v['case']['step'] == 'Reported', v.get('case'))
+
+    code, res = act(key, guard, action='contact', method='Carrier pigeon', result='No answer')
+    check('an unknown contact method is refused -> 400', code == 400, res)
+    code, res = act(key, guard, action='contact', method='Phone call', result='No answer', note='Rang three times')
+    check('a guard logs a contact attempt', code == 200 and res['data']['case']['contactAttempts'] == 1 and res['data']['case']['step'] == 'Contact attempted', res)
+    code, res = act(key, guard, action='note', note='INTERNAL-SECRET: owner seems evasive')
+    check('a guard adds an internal note', code == 200, res)
+    code, res = act(key, guard, action='police', reason='Cannot reach the owner')
+    check('a guard cannot refer to the police -> 403', code == 403, code)
+    code, res = act(key, guard, action='close', outcome='Clearance signed', notes='Done')
+    check('a guard cannot close a case -> 403', code == 403, code)
+
+    code, res = act(key, admin, action='police')
+    check('referring to the police needs a reason -> 400', code == 400 and res['data']['code'] == 'REASON_REQUIRED', res)
+    code, res = act(key, admin, action='police', reason='Owner unreachable after repeated attempts', reference='BLOTTER-2026-114')
+    check('admin refers it to the police', code == 200 and res['data']['case']['policeReferred'] is True and res['data']['case']['step'] == 'Referred to police', res)
+    code, res = act(key, admin, action='police', reason='Again please')
+    check('...only once -> 409', code == 409, res)
+    rows = call('GET', 'student.php?action=notices', token=tok1)[1]['data']
+    check('the owner is told the case was referred to the police', any('referred it to the police' in r['message'] for r in rows), rows)
+
+    code, res = act(key, guard, action='awaiting', note='Owner phoned back, coming tomorrow')
+    check('a guard marks it as waiting for the owner', code == 200 and res['data']['case']['status'] == 'Awaiting clearance', res)
+    code, res = act(key, guard, action='awaiting')
+    check('...only once -> 409', code == 409, res)
+    code, res = call('GET', 'cases.php?status=awaiting', token=admin)
+    check('the Awaiting clearance filter finds it', any(c['key'] == key for c in res['data']['cases']), '')
+
+    code, res = call('GET', 'student.php?action=cases', token=tok1)
+    mine = [c for c in res['data'] if c['key'] == key]
+    blob = json.dumps(res['data'])
+    check('the owner sees the case with a plain-language next step', len(mine) == 1 and 'Security Office' in mine[0]['nextStep'] and mine[0]['status'] == 'Awaiting clearance', mine)
+    check('...the timeline shows the steps but no staff names and no internal notes', len(mine[0]['timeline']) >= 4 and 'INTERNAL-SECRET' not in blob and 'QA Guard' not in blob and 'BLOTTER' not in blob, blob[:300])
+    code, res = call('GET', 'student.php?action=cases', token=reg('CSE 9009', 'CS-9')[1])
+    check("another owner does not see this case", not [c for c in res['data'] if c['key'] == key], '')
+
+    code, res = act(key, admin, action='close', outcome='Clearance signed')
+    check('closing needs notes -> 400', code == 400, res)
+    code, res = act(key, admin, action='close', outcome='Paid in gold', notes='Signed at the office')
+    check('an unknown outcome is refused -> 400', code == 400, res)
+    code, res = act(key, admin, action='close', outcome='Clearance signed', notes='Owner signed the clearance form at the Security Office')
+    check('admin closes it with an outcome', code == 200 and res['data']['case']['status'] == 'Closed' and res['data']['case']['outcome'] == 'Clearance signed', res)
+    code, res = call('GET', 'vehicles.php?plate=CSE1001', token=admin)
+    check('...the hold is lifted', res['data']['isBanned'] is False and res['data']['registrationStatus'] == 'Active', res['data'])
+    d = get(key)
+    check('...the timeline records every step in order, with who did it', [t['type'] for t in d['timeline']] == ['reported', 'contact', 'note', 'police', 'awaiting', 'closed'] and d['timeline'][-1]['by'], [t['type'] for t in d['timeline']])
+    code, res = act(key, admin, action='note', note='Late note')
+    check('a closed case accepts no more steps -> 409', code == 409, res)
+    code, res = call('GET', 'audit.php?action=case.&q=CSE1001', token=admin)
+    check('contact, police and close are in the audit log', {'case.contact', 'case.police', 'case.close'} <= {r['action'] for r in res['data']['rows']}, {r['action'] for r in res['data']['rows']})
+
+    v2, _ = reg('CSE 2002', 'CS-2')
+    k2 = issue(v2, 'Overnight / Unauthorized Overtime Parking', 'Still on campus')
+    check('an overnight violation is typed Overnight', get(k2)['type'] == 'Overnight', get(k2)['type'])
+    code, res = act(k2, admin, action='police', reason='Owner is not answering')
+    check('police referral before any contact attempt -> 409 CONTACT_REQUIRED', code == 409 and res['data']['code'] == 'CONTACT_REQUIRED', res)
+    act(k2, admin, action='contact', method='In person', result='Wrong or unreachable number')
+    code, res = act(k2, admin, action='close', outcome='Dismissed', notes='Issued against the wrong vehicle')
+    check('with one administrator a dismissal is applied directly', code == 200 and res['data']['case']['outcome'] == 'Dismissed', res)
+    code, res = call('GET', 'vehicles.php?plate=CSE2002', token=admin)
+    check('...and the hold is lifted', res['data']['isBanned'] is False, res['data'])
+    code, res = call('GET', 'cases.php?status=closed&type=Overnight', token=admin)
+    check('the closed and type filters work', any(c['key'] == k2 for c in res['data']['cases']) and not any(c['key'] == key for c in res['data']['cases']), '')
+
+    v3, _ = reg('CSE 3003', 'CS-3')
+    code, res = call('POST', 'incidents.php', {'plateNumber': 'CSE 3003', 'reason': 'Unauthorized driver at the gate', 'ownerName': 'Cass Case', 'gatePoint': 'Gate 1 (Main Ingress)'}, guard)
+    k3 = 'I' + str(res['data']['id'])
+    c3 = get(k3)
+    check('a flagged vehicle is a Security case', c3['type'] == 'Security' and c3['status'] == 'Open' and c3['caseNumber'], c3)
+    code, res = act(k3, admin, action='close', outcome='Clearance signed', notes='Driver identified as the owner brother')
+    check('admin closes a security case', code == 200 and res['data']['case']['status'] == 'Closed', res)
+    code, res = call('GET', 'vehicles.php?plate=CSE3003', token=admin)
+    check('...the vehicle is released from Blocked / Alert', res['data']['status'] != 'Blocked / Alert', res['data']['status'])
+    code, res = call('GET', 'cases.php?key=V999999', token=admin)
+    check('an unknown case -> 404', code == 404, code)
+    code, res = call('GET', 'cases.php?key=oops', token=admin)
+    check('a malformed key -> 404', code == 404, code)
+    AUTO_PAY = True
+
+
 def main():
     if '--fresh' in sys.argv and os.path.exists(SQLITE_DB):
         os.remove(SQLITE_DB)
@@ -2465,6 +2581,7 @@ def main():
     test_loophole_fixes(admin)
     test_owner_notices(admin)
     test_ops_phase2(admin)
+    test_cases(admin)
     test_audit_and_approvals(admin)
     print(f'\n{passed} passed, {failed} failed')
     sys.exit(1 if failed else 0)
