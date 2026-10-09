@@ -79,6 +79,7 @@
       setSidebarCount(summary.unpaidCount);
       render();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       const msg = esc(err.message);
       $('cashierAwaitingBody').innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-ncst-crimson">${msg}</td></tr>`;
     }
@@ -320,6 +321,7 @@
         confirmButtonColor: '#253475',
       });
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       SP.showToast(err.message, 'error');
       updateBulkBar();
     }
@@ -356,6 +358,7 @@
         try {
           return await ApiClient.receiveCashPayment(v.vehicleId, tendered);
         } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
           Swal.showValidationMessage(err.message);
           return false;
         }
@@ -467,5 +470,8 @@
       if (document.hidden) return;
       if ($('cashierView').classList.contains('active')) load(); else refreshCount();
     }, 60000);
+  });
+  window.SPLive?.subscribe(async changed => {
+    if (changed.some(k => ['payments','vehicles','settings'].includes(k)) && window.SPAuth?.hasRole('admin')) { if ($('cashierView').classList.contains('active')) await load(); else await refreshCount(); }
   });
 })();

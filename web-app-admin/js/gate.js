@@ -608,4 +608,8 @@
       if (!$('gateView').classList.contains('active') && gate.cameraOn) stopCamera();
     }).observe($('gateView'), { attributes: true, attributeFilter: ['class'] });
   });
+  window.SPLive?.subscribe(async changed => {
+    if (!gate.result || gate.busy || !changed.some(k => ['vehicles','visitors','cases','movements','settings'].includes(k))) return;
+    resetResult(); SP.showToast('Gate information changed. Scan or check the pass again before approval.', 'warning');
+  });
 })();

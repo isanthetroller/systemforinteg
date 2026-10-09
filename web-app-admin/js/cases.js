@@ -66,6 +66,7 @@
       setSidebarCount(res.summary.open + res.summary.awaiting);
       render();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       $('casesBody').innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
     }
   }
@@ -134,7 +135,8 @@
 
   async function openCase(key) {
     let c;
-    try { c = await ApiClient.getCase(key); } catch (err) { SP.showToast(err.message, 'error'); return; }
+    try { c = await ApiClient.getCase(key); } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); return; }
     showCase(c);
   }
 
@@ -176,6 +178,7 @@
     buttons.push('<button id="drawerCancelBtnInner" type="button" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">Close</button>');
 
     SP.openDrawer(`Case — ${c.plateNumber}`, c.key, html, `<div class="flex flex-wrap items-center gap-2">${buttons.join('')}</div>`);
+    $('drawerContent').dataset.liveCase = c.key;
     const footer = $('drawerFooter');
     footer.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => act(c, b.dataset.act)));
     $('drawerContent').querySelectorAll('[data-photo]').forEach(b => b.addEventListener('click', () => showPhoto(Number(b.dataset.photo))));
@@ -186,7 +189,8 @@
       const p = await ApiClient.getEvidencePhoto(id);
       if (typeof Swal === 'undefined' || !p.image) return;
       Swal.fire({ imageUrl: p.image, imageAlt: 'Evidence photo', title: p.plateRead ? `Plate read: ${p.plateRead}${p.plateMatches === false ? ' (does not match)' : ''}` : 'Evidence photo', confirmButtonText: 'Close', confirmButtonColor: '#253475' });
-    } catch (err) { SP.showToast(err.message, 'error'); }
+    } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); }
   }
 
   /* ------------------------------------------------------------------------
@@ -204,6 +208,7 @@
       if (res.case) showCase(res.case); else openCase(c.key);
       return true;
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       return err.message;
     }
   }
@@ -311,7 +316,8 @@
         a.download = `securepark-cases-${new Date().toISOString().slice(0, 10)}.csv`;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-      } catch (err) { SP.showToast(err.message, 'error'); }
+      } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); }
     });
     $('casesType').addEventListener('change', (e) => { filter.type = e.target.value; filter.page = 1; load(); });
     $('casesSearch').addEventListener('input', (e) => {
@@ -321,5 +327,11 @@
     if (window.SPAuth) SPAuth.whenAuthenticated(load);
     document.addEventListener('sp:gate-passage', () => { if ($('casesView').classList.contains('active')) load(); });
     setInterval(() => { if (!document.hidden && window.SPAuth && SPAuth.isAuthenticated()) load(); }, 60000);
+  });
+  window.SPLive?.subscribe(async changed => {
+    if (!changed.some(k => ['cases','vehicles','evidence'].includes(k))) return;
+    await load();
+    const key = $('drawerContent').dataset.liveCase;
+    if (key && !$('drawerOverlay').classList.contains('hidden') && !window.Swal?.isVisible()) showCase(await ApiClient.getCase(key));
   });
 })();

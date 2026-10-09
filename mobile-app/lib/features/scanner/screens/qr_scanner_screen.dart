@@ -92,6 +92,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   @override
   void initState() {
     super.initState();
+    ApiService.liveRevision.addListener(_onExternalChange);
     WidgetsBinding.instance.addObserver(this);
     if (widget.initialVehicle != null) {
       final v = widget.initialVehicle!;
@@ -132,10 +133,48 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     }
   }
 
+  String? _liveQr;
+  Future<void> _onExternalChange() async {
+    final previous = _movementPreview;
+    if (!mounted ||
+        _isSubmitting ||
+        _movementRetryPending ||
+        previous == null ||
+        _liveQr == null) {
+      return;
+    }
+    try {
+      final next = await ApiService.movementRequest({
+        'action': 'prepare',
+        'qr_code': _liveQr,
+        'lookup_method': _manualLookup ? 'manual' : 'qr',
+      });
+      if (!mounted || _isSubmitting || !identical(previous, _movementPreview)) {
+        return;
+      }
+      final changed =
+          next['accepted'] != true ||
+          jsonEncode(next['vehicle'] ?? next['visitor']) !=
+              jsonEncode(previous['vehicle'] ?? previous['visitor']) ||
+          (next['movement'] as Map?)?['currentStatus'] !=
+              (previous['movement'] as Map?)?['currentStatus'];
+      if (changed) {
+        setState(() {
+          _movementInvalidated = true;
+          _movementError =
+              'This vehicle or pass changed. Scan again before confirming.';
+        });
+      }
+    } catch (_) {
+      // Keep the preview; its confirmation is still revalidated by the server.
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
+    ApiService.liveRevision.removeListener(_onExternalChange);
     super.dispose();
   }
 
@@ -245,6 +284,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   }
 
   Future<void> _prepareMovement(String qr) async {
+    _liveQr = qr;
     try {
       final preview = await ApiService.movementRequest({
         'action': 'prepare',

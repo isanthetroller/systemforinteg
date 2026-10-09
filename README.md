@@ -265,4 +265,9 @@ on connection. No additional movement table or separate mobile database is requi
 - `python sync_backend.py --check`: verifies the source/deployment mirror.
 - From `mobile-app/`: `flutter analyze`, `flutter test`, `flutter build apk --debug`.
 
-All integration work and recovery commits remain local until explicitly authorized for publication.
+## October 9 synchronization update
+
+The authenticated polling transport, mobile session/pass fixes and validation results are documented in
+[Mobile synchronization update](docs/mobile-realtime-update-2026-10-09.md).
+The user authorized publication on the separate `feature/realtime-sync-mobile-20261009` branch.
+Branch publication does not deploy the backend or install a mobile APK; use an updated shared API when testing.

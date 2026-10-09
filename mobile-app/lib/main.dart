@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import 'core/constants/api_constants.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'services/local_cache_service.dart';
@@ -13,7 +15,9 @@ void main() async {
   await LocalCacheService.init();
 
   // Initialize persistent server endpoint (defaults to live cloud, persists user selection)
-  ApiConstants.baseUrl = LocalCacheService.getServerBaseUrl(defaultUrl: ApiConstants.defaultBaseUrl);
+  ApiConstants.baseUrl = LocalCacheService.getServerBaseUrl(
+    defaultUrl: ApiConstants.defaultBaseUrl,
+  );
 
   // Start automated background synchronization queue for offline data flush
   SyncQueueService().startAutoSync();
@@ -24,7 +28,8 @@ void main() async {
   // In a mobile terminal scanning QR passes with camera textures and photos, capping to 40 images / 25 MB
   // aggressively evicts stale bitmaps and reduces RAM pressure.
   PaintingBinding.instance.imageCache.maximumSize = 40;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 25 * 1024 * 1024; // 25 MB
+  PaintingBinding.instance.imageCache.maximumSizeBytes =
+      25 * 1024 * 1024; // 25 MB
 
   runApp(const NcstGateSecurityApp());
 }
@@ -33,7 +38,10 @@ void main() async {
 class _SyncOnResume with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) SyncQueueService().stopAutoSync();
     if (state == AppLifecycleState.resumed) {
+      SyncQueueService().startAutoSync();
+      SyncQueueService().requestRefresh();
       unawaited(SyncQueueService().processQueue());
     }
   }

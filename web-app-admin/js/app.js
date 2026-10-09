@@ -2648,6 +2648,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function openDrawer(title, subtitle, contentHtml, footerHtml) {
     drawerTitle.textContent = title;
     drawerSubtitle.textContent = subtitle;
+    liveDrawer = null;
+    drawerContent.dataset.liveCase = '';
     drawerContent.innerHTML = contentHtml;
     drawerFooter.innerHTML = footerHtml || `
       <button id="drawerCancelBtnInner" class="px-3.5 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">
@@ -2662,7 +2664,9 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerOverlay.classList.add('flex');
   }
 
+  let liveDrawer = null;
   function closeDrawer() {
+    liveDrawer = null;
     drawerOverlay.classList.add('hidden');
     drawerOverlay.classList.remove('flex');
   }
@@ -2971,6 +2975,7 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
 
     openDrawer(`Vehicle Details — ${v.plateNumber}`, v.plateNumber, html, footerHtml);
+    liveDrawer = {kind:'vehicle', id:v.id};
 
     // Every case this vehicle has had, open or closed
     if (window.ApiClient && v.plateNumber) {
@@ -3156,6 +3161,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     openDrawer(`Security Stop — ${inc.caseNumber}`, inc.plateNumber, html, footerHtml);
+    liveDrawer = {kind:'incident', id:inc.id};
     if (window.SPClip) {
       SPClip.mount(document.getElementById('incidentClipHost'), { logId: inc.logId, plate: inc.plateNumber, action: '', loggedAt: inc.reportedAt, gatePoint: inc.gatePoint });
     }
@@ -3357,6 +3363,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>`;
 
     openDrawer(`Gate record — ${log.plateNumber}`, log.timestamp, html, auditFooter);
+    liveDrawer = {kind:'log', id:log.id};
     if (showClip) SPClip.mount(document.getElementById('auditClipHost'), { logId: log.id, plate: log.plateNumber, action: log.action, loggedAt: log.loggedAt, gatePoint: log.gatePoint });
     const auditFlagBtn = document.getElementById('auditFlagBtn');
     if (auditFlagBtn) auditFlagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(auditVehicle, { context: `Gate log: ${log.action} at ${log.gatePoint}, ${log.timestamp}` }));
@@ -5135,18 +5142,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const VEHICLES_REFRESH_MS = 60 * 1000;
   let lastVehiclesLoad = 0;
 
-  async function loadInitialDataFromApi(silent = false, forceVehicles = false) {
+  let coreLoadGeneration = 0;
+  async function loadInitialDataFromApi(silent = false, forceVehicles = false, strict = false) {
+    const mine = ++coreLoadGeneration;
     if (!window.ApiClient) return;
     try {
       const needVehicles = !silent || forceVehicles || (Date.now() - lastVehiclesLoad) >= VEHICLES_REFRESH_MS;
       const [vehicles, logs, incidents, visitors, onCampus] = await Promise.all([
-        needVehicles ? ApiClient.getVehicles().catch(() => null) : Promise.resolve(null),
-        ApiClient.getLogs().catch(() => null),
-        ApiClient.getIncidents().catch(() => null),
-        ApiClient.getVisitorPasses().catch(() => null),
-        ApiClient.getOnCampus().catch(() => null)
+        needVehicles ? ApiClient.getVehicles().catch(error => { if (strict) throw error; return null; }) : Promise.resolve(null),
+        ApiClient.getLogs().catch(error => { if (strict) throw error; return null; }),
+        ApiClient.getIncidents().catch(error => { if (strict) throw error; return null; }),
+        ApiClient.getVisitorPasses().catch(error => { if (strict) throw error; return null; }),
+        ApiClient.getOnCampus().catch(error => { if (strict) throw error; return null; })
       ]);
 
+      if (mine !== coreLoadGeneration || (window.SPAuth && !SPAuth.isAuthenticated())) return;
       let hasUpdate = false;
       if (vehicles && Array.isArray(vehicles)) {
         state.vehicles = vehicles.map(v => normalizeVehicle(v));
@@ -5179,6 +5189,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!silent) console.log('[App] Synchronized state with backend.');
       }
     } catch (err) {
+      if (strict) throw err;
       console.warn('[App] Backend sync note:', err.message);
     }
     // Feature modules (gate monitor, violations, ...) refresh their panels on this
@@ -5188,6 +5199,13 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ==========================================================================
      Bridge for feature modules (auth.js, users.js, ...)
      ========================================================================== */
+  window.SPLive?.subscribe(async changed => {
+    if (!liveDrawer || drawerOverlay.classList.contains('hidden') || !changed.some(k => ['vehicles','movements','cases','visitors','evidence'].includes(k))) return;
+    const {kind,id} = liveDrawer;
+    const record = ({vehicle:state.vehicles, incident:state.incidents, log:state.auditLogs}[kind] || []).find(r => String(r.id) === String(id));
+    if (!record) { closeDrawer(); showToast('This record is no longer available.', 'warning'); return; }
+    ({vehicle:openVehicleDrawer, incident:openIncidentDrawer, log:openAuditDrawer}[kind])(record);
+  });
   window.SP = {
     state,
     switchView,
@@ -5229,25 +5247,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadInitialDataFromApi();
   }
 
-  // Background refresh: every 30 seconds, and never while the tab is hidden (free hosting has a daily request limit)
-  setInterval(() => {
-    if (document.hidden) return;
-    if (!window.SPAuth || SPAuth.isAuthenticated()) {
-      loadInitialDataFromApi(true);
-    }
-  }, 30000);
-
-  // Instant refresh when user returns to window
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && (!window.SPAuth || SPAuth.isAuthenticated())) {
-      loadInitialDataFromApi(true);
-    }
-  });
-
-  // Instant refresh on gate passage events
-  document.addEventListener('sp:gate-passage', () => {
-    loadInitialDataFromApi(true, true);
-  });
+  document.addEventListener('sp:gate-passage', () => window.SPLive?.wake());
 
   // Global dismiss listener for Vehicle Directory row overflow menus
   document.addEventListener('click', (e) => {

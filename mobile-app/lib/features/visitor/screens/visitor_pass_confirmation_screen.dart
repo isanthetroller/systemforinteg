@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+
 import '../../../core/utils/date_time_utils.dart';
 import '../../../core/widgets/plate_badge.dart';
 import '../../../core/widgets/qr_code_widget.dart';
 import '../../../models/visitor_pass_model.dart';
 import '../../../theme/ncst_theme.dart';
+import '../../../repositories/visitor_repository.dart';
+import '../../../services/api_service.dart';
 
-class VisitorPassConfirmationScreen extends StatelessWidget {
+class VisitorPassConfirmationScreen extends StatefulWidget {
   final VisitorPass pass;
   final VoidCallback onFinish;
 
@@ -15,6 +18,91 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
     required this.onFinish,
   });
 
+  @override
+  State<VisitorPassConfirmationScreen> createState() =>
+      _VisitorPassConfirmationState();
+}
+
+class _VisitorPassConfirmationState
+    extends State<VisitorPassConfirmationScreen> {
+  final _repository = VisitorRepository();
+  VisitorPass? _currentPass;
+  VisitorPass get pass => _currentPass ?? widget.pass;
+  VoidCallback get onFinish => widget.onFinish;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentPass = widget.pass;
+    _repository.passesNotifier.addListener(_onPassChanged);
+    ApiService.liveRevision.addListener(_onPassChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant VisitorPassConfirmationScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pass != widget.pass) _currentPass = widget.pass;
+  }
+
+  @override
+  void dispose() {
+    _repository.passesNotifier.removeListener(_onPassChanged);
+    ApiService.liveRevision.removeListener(_onPassChanged);
+    super.dispose();
+  }
+
+  void _onPassChanged() {
+    if (!mounted) return;
+    VisitorPass? latest;
+    for (final candidate in _repository.passesNotifier.value) {
+      if ((widget.pass.dbId != null && candidate.dbId == widget.pass.dbId) ||
+          candidate.passId == widget.pass.passId) {
+        latest = candidate;
+        break;
+      }
+    }
+    // A pending local pass can remain available until the server assigns an ID.
+    if (latest == null && widget.pass.dbId == null) latest = _currentPass;
+    setState(() {
+      _currentPass = latest;
+    });
+  }
+
+  Widget _unavailableContent(BuildContext context, {bool dialog = false}) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.info_outline, size: 36, color: NcstColors.navy),
+          const SizedBox(height: 16),
+          Text(
+            pass.visitorName,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _currentPass == null
+                ? 'This pass is no longer available.'
+                : 'This pass is ${pass.statusDisplay.toLowerCase()}.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'The QR code is unavailable. Check the latest pass before continuing.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: dialog ? () => Navigator.of(context).pop() : onFinish,
+            child: Text(dialog ? 'Close' : 'Return to gate'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Displays an extra-large, pure white, high-contrast modal of the QR code
   /// designed specifically for visitors to photograph with their smartphone camera
   /// from the driver's seat or outside the vehicle window without glare.
@@ -22,202 +110,233 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
     showDialog(
       context: context,
       barrierColor: Colors.black87,
-      builder: (ctx) {
-        final screenWidth = MediaQuery.of(ctx).size.width;
-        final qrSize = (screenWidth * 0.72).clamp(240.0, 330.0);
+      builder: (context) => AnimatedBuilder(
+        animation: Listenable.merge([
+          _repository.passesNotifier,
+          ApiService.liveRevision,
+        ]),
+        builder: (ctx, _) {
+          if (_currentPass == null || !pass.isActive) {
+            return Dialog(child: _unavailableContent(ctx, dialog: true));
+          }
+          final screenWidth = MediaQuery.of(ctx).size.width;
+          final qrSize = (screenWidth * 0.72).clamp(240.0, 330.0);
 
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 420),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.35),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
-                ),
-              ],
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
             ),
-            padding: const EdgeInsets.all(22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Top Header Notice for Camera
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: NcstColors.gold.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: NcstColors.goldDark, width: 1.5),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 420),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(7),
-                        decoration: const BoxDecoration(
-                          color: NcstColors.goldDark,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.camera_alt_rounded,
-                          color: Colors.white,
-                          size: 18,
-                        ),
+                ],
+              ),
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Top Header Notice for Camera
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: NcstColors.gold.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: NcstColors.goldDark,
+                        width: 1.5,
                       ),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'SNAP PHOTO NOW',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900,
-                                color: NcstColors.navyDark,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                            Text(
-                              'Point your camera at this QR code',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: NcstColors.slate800,
-                              ),
-                            ),
-                          ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(7),
+                          decoration: const BoxDecoration(
+                            color: NcstColors.goldDark,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 18),
-
-                // Large Monospace Pass ID
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: NcstColors.navy.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    pass.passId,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: NcstColors.navy,
-                      letterSpacing: 1.0,
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'SNAP PHOTO NOW',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                  color: NcstColors.navyDark,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              Text(
+                                'Point your camera at this QR code',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: NcstColors.slate800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                const SizedBox(height: 14),
+                  const SizedBox(height: 18),
 
-                // Hero High-Contrast QR Code
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: NcstColors.slate200, width: 2),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.06),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  padding: const EdgeInsets.all(12),
-                  child: QrCodeWidget(
-                    data: pass.toQrPayload(),
-                    size: qrSize,
-                    foregroundColor: NcstColors.navyDark,
-                    backgroundColor: Colors.white,
-                    showBorder: false,
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // License Plate Badge
-                PlateBadge(
-                  plateNumber: pass.plateNumber,
-                  isProminent: true,
-                ),
-                const SizedBox(height: 8),
-
-                // Validity Expiration Callout
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(
-                      Icons.access_time_rounded,
-                      size: 16,
-                      color: NcstColors.goldDark,
+                  // Large Monospace Pass ID
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
                     ),
-                    const SizedBox(width: 5),
-                    Text(
-                      'Valid until ${DateTimeUtils.formatTime(pass.expiryTime)}',
+                    decoration: BoxDecoration(
+                      color: NcstColors.navy.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      pass.passId,
                       style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: NcstColors.slate800,
+                        fontFamily: 'monospace',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: NcstColors.navy,
+                        letterSpacing: 1.0,
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Present this photo to the gate guard upon exit',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: NcstColors.slate500,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 18),
+                  const SizedBox(height: 14),
 
-                // Close Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: NcstColors.navy,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      elevation: 0,
+                  // Hero High-Contrast QR Code
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: NcstColors.slate200, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
                     ),
-                    child: const Text(
-                      'RETURN TO PASS DETAILS',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.6,
+                    padding: const EdgeInsets.all(12),
+                    child: QrCodeWidget(
+                      data: pass.toQrPayload(),
+                      size: qrSize,
+                      foregroundColor: NcstColors.navyDark,
+                      backgroundColor: Colors.white,
+                      showBorder: false,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // License Plate Badge
+                  PlateBadge(plateNumber: pass.plateNumber, isProminent: true),
+                  const SizedBox(height: 8),
+
+                  // Validity Expiration Callout
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.access_time_rounded,
+                        size: 16,
+                        color: NcstColors.goldDark,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        'Valid until ${DateTimeUtils.formatTime(pass.expiryTime)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: NcstColors.slate800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Present this photo to the gate guard upon exit',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: NcstColors.slate500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Close Button
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: NcstColors.navy,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        'RETURN TO PASS DETAILS',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.6,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_currentPass == null || !pass.isActive) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Visitor pass'),
+          automaticallyImplyLeading: false,
+        ),
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(child: _unavailableContent(context)),
+          ),
+        ),
+      );
+    }
     final media = MediaQuery.of(context);
     final isCompact = media.size.width < 360;
 
@@ -252,11 +371,17 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                 children: [
                   // 1. Photo Instruction Banner for Visitor
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
                       color: NcstColors.gold.withValues(alpha: 0.16),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: NcstColors.goldDark, width: 1.5),
+                      border: Border.all(
+                        color: NcstColors.goldDark,
+                        width: 1.5,
+                      ),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.03),
@@ -341,8 +466,10 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         // Card Header
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -368,11 +495,18 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                               ],
                             ),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 9,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
                                 color: NcstColors.greenLight,
                                 borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: NcstColors.green.withValues(alpha: 0.3)),
+                                border: Border.all(
+                                  color: NcstColors.green.withValues(
+                                    alpha: 0.3,
+                                  ),
+                                ),
                               ),
                               child: const Text(
                                 'ACTIVE',
@@ -402,8 +536,10 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                                   foregroundColor: NcstColors.navyDark,
                                 ),
                                 const SizedBox(height: 10),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
+                                Wrap(
+                                  alignment: WrapAlignment.center,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  spacing: 4,
                                   children: const [
                                     Icon(
                                       Icons.zoom_in_rounded,
@@ -456,36 +592,67 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                           ),
                           child: Column(
                             children: [
-                              _buildMetaRow('Entry Time', DateTimeUtils.formatTime(pass.entryTime)),
+                              _buildMetaRow(
+                                'Entry Time',
+                                DateTimeUtils.formatTime(pass.entryTime),
+                              ),
                               const SizedBox(height: 6),
-                              _buildMetaRow('Valid Until', DateTimeUtils.formatTime(pass.expiryTime)),
+                              _buildMetaRow(
+                                'Valid Until',
+                                DateTimeUtils.formatTime(pass.expiryTime),
+                              ),
                               const SizedBox(height: 6),
                               _buildMetaRow('Entry Gate', pass.gatePoint),
                               const SizedBox(height: 6),
-                              _buildMetaRow('Issued By', pass.registeredByGuard),
-                              if (pass.contactNumber != null && pass.contactNumber!.isNotEmpty) ...[
+                              _buildMetaRow(
+                                'Issued By',
+                                pass.registeredByGuard,
+                              ),
+                              if (pass.contactNumber != null &&
+                                  pass.contactNumber!.isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                _buildMetaRow('Contact Mobile', pass.contactNumber!),
+                                _buildMetaRow(
+                                  'Contact Mobile',
+                                  pass.contactNumber!,
+                                ),
                               ],
-                              if (pass.personToVisit != null && pass.personToVisit!.isNotEmpty) ...[
+                              if (pass.personToVisit != null &&
+                                  pass.personToVisit!.isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                _buildMetaRow('Visiting Host', pass.personToVisit!),
+                                _buildMetaRow(
+                                  'Visiting Host',
+                                  pass.personToVisit!,
+                                ),
                               ],
-                              if (pass.purposeOfVisit != null && pass.purposeOfVisit!.isNotEmpty) ...[
+                              if (pass.purposeOfVisit != null &&
+                                  pass.purposeOfVisit!.isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                _buildMetaRow('Purpose of Visit', pass.purposeOfVisit!),
+                                _buildMetaRow(
+                                  'Purpose of Visit',
+                                  pass.purposeOfVisit!,
+                                ),
                               ],
-                              if (pass.vehicleModel != null && pass.vehicleModel!.isNotEmpty) ...[
+                              if (pass.vehicleModel != null &&
+                                  pass.vehicleModel!.isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                _buildMetaRow('Vehicle Model', pass.vehicleModel!),
+                                _buildMetaRow(
+                                  'Vehicle Model',
+                                  pass.vehicleModel!,
+                                ),
                               ],
                               if (pass.vehiclePhotoUrl != null) ...[
                                 const SizedBox(height: 6),
-                                _buildMetaRow('Vehicle Photo', 'Captured & Stored'),
+                                _buildMetaRow(
+                                  'Vehicle Photo',
+                                  'Captured & Stored',
+                                ),
                               ],
                               if (pass.items.isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                _buildMetaRow('Declared Items', '${pass.items.length} item(s) registered'),
+                                _buildMetaRow(
+                                  'Declared Items',
+                                  '${pass.items.length} item(s) registered',
+                                ),
                               ],
                             ],
                           ),
@@ -496,17 +663,21 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                   const SizedBox(height: 20),
 
                   // 3. Bottom Action Buttons
-                  Row(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       // Fullscreen QR Button
-                      Expanded(
+                      SizedBox(
                         child: OutlinedButton.icon(
                           onPressed: () => _showFullscreenQr(context),
                           icon: const Icon(Icons.fullscreen_rounded, size: 20),
                           label: const Text('FULLSCREEN QR'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: NcstColors.navy,
-                            side: const BorderSide(color: NcstColors.navy, width: 1.5),
+                            side: const BorderSide(
+                              color: NcstColors.navy,
+                              width: 1.5,
+                            ),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
@@ -514,13 +685,16 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(height: 12),
 
                       // Complete Entry Button
-                      Expanded(
+                      SizedBox(
                         child: ElevatedButton.icon(
                           onPressed: onFinish,
-                          icon: const Icon(Icons.check_circle_rounded, size: 20),
+                          icon: const Icon(
+                            Icons.check_circle_rounded,
+                            size: 20,
+                          ),
                           label: const Text('CLEARED (TO GO)'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: NcstColors.green,
@@ -541,13 +715,19 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Pass receipt shared / sent to campus print queue.'),
+                          content: Text(
+                            'Pass receipt shared / sent to campus print queue.',
+                          ),
                           backgroundColor: NcstColors.navy,
                           duration: Duration(seconds: 2),
                         ),
                       );
                     },
-                    icon: const Icon(Icons.print_outlined, size: 16, color: NcstColors.slate600),
+                    icon: const Icon(
+                      Icons.print_outlined,
+                      size: 16,
+                      color: NcstColors.slate600,
+                    ),
                     label: const Text(
                       'Print Physical Decal / Ticket',
                       style: TextStyle(
@@ -568,22 +748,30 @@ class VisitorPassConfirmationScreen extends StatelessWidget {
 
   Widget _buildMetaRow(String label, String value) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: NcstColors.slate600,
+        Expanded(
+          flex: 2,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: NcstColors.slate600,
+            ),
           ),
         ),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: NcstColors.slate900,
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 3,
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: NcstColors.slate900,
+            ),
           ),
         ),
       ],

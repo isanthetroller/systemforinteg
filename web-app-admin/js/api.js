@@ -53,6 +53,7 @@ const ApiClient = (function() {
      on a shared gate PC ends the session.
      ------------------------------------------------------------------------ */
   const TOKEN_KEY = 'sp_staff_token';
+  let freshReadDepth = 0;
   const CACHE_KEYS = ['sp_cache_stats', 'sp_cache_vehicles', 'sp_cache_logs', 'sp_cache_incidents'];
 
   function getToken() {
@@ -161,6 +162,9 @@ const ApiClient = (function() {
   }
 
   return {
+    isFresh: () => freshReadDepth > 0,
+    getUpdates: async () => (await request('updates.php', {cache:'no-store'})).data,
+    async fresh(fn) { freshReadDepth++; try { return await fn(); } finally { freshReadDepth--; } },
     getBaseUrl: () => baseUrl,
     setBaseUrl: (url) => { baseUrl = url.replace(/\/+$/, ''); },
     hasToken: () => !!getToken(),
@@ -328,7 +332,7 @@ const ApiClient = (function() {
         }
         return res.data;
       } catch (err) {
-        if (!qs && !isAuthError(err)) {
+        if (!freshReadDepth && !qs && !isAuthError(err)) {
           try {
             const cached = localStorage.getItem('sp_cache_vehicles');
             if (cached) {
@@ -476,7 +480,7 @@ const ApiClient = (function() {
         }
         return res.data;
       } catch (err) {
-        if (!qs && !isAuthError(err)) {
+        if (!freshReadDepth && !qs && !isAuthError(err)) {
           try {
             const cached = localStorage.getItem('sp_cache_logs');
             if (cached) return JSON.parse(cached);
@@ -504,7 +508,7 @@ const ApiClient = (function() {
         }
         return res.data;
       } catch (err) {
-        if (!qs && !isAuthError(err)) {
+        if (!freshReadDepth && !qs && !isAuthError(err)) {
           try {
             const cached = localStorage.getItem('sp_cache_incidents');
             if (cached) return JSON.parse(cached);

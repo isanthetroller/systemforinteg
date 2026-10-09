@@ -1,3 +1,8 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:systemforinteg/services/api_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:systemforinteg/models/user_model.dart';
 import 'package:systemforinteg/models/vehicle_model.dart';
@@ -7,6 +12,17 @@ import 'package:systemforinteg/repositories/visitor_repository.dart';
 import 'package:systemforinteg/services/auth_service.dart';
 
 void main() {
+  setUp(() {
+    AuthService().setRepository(MockAuthRepository());
+    ApiService.setClientForTesting(
+      MockClient(
+        (request) async =>
+            http.Response(jsonEncode({'status': 'success', 'data': null}), 200),
+      ),
+    );
+  });
+  tearDown(ApiService.resetClient);
+
   group('1. Authentication & Role Determination', () {
     test('Login as Guard 1 routes to Entrance role and Gate 1', () async {
       final authRepo = MockAuthRepository();
@@ -56,32 +72,35 @@ void main() {
   });
 
   group('2. Visitor Registration & Temporary QR Pass', () {
-    test('Create temporary visitor pass with 8-hour expiry and unique ID', () async {
-      final repo = VisitorRepository();
-      final now = DateTime.now();
+    test(
+      'Create temporary visitor pass with 8-hour expiry and unique ID',
+      () async {
+        final repo = VisitorRepository();
+        final now = DateTime.now();
 
-      final pass = VisitorPass(
-        passId: 'NCST-VIS-2026-TEST-99',
-        visitorName: 'Juan Dela Cruz',
-        plateNumber: 'ABC-9999',
-        vehiclePhotoUrl: 'assets/images/kriz_monares.jpg',
-        entryTime: now,
-        expiryTime: now.add(const Duration(hours: 8)),
-        status: VisitorPassStatus.active,
-        registeredByGuard: 'Officer J. Hernandez',
-        gatePoint: 'Gate 1 (Main Ingress)',
-      );
+        final pass = VisitorPass(
+          passId: 'NCST-VIS-2026-TEST-99',
+          visitorName: 'Juan Dela Cruz',
+          plateNumber: 'ABC-9999',
+          vehiclePhotoUrl: 'assets/images/kriz_monares.jpg',
+          entryTime: now,
+          expiryTime: now.add(const Duration(hours: 8)),
+          status: VisitorPassStatus.active,
+          registeredByGuard: 'Officer J. Hernandez',
+          gatePoint: 'Gate 1 (Main Ingress)',
+        );
 
-      await repo.registerPass(pass);
+        await repo.registerPass(pass);
 
-      // Verify pass retrieval by ID
-      final retrieved = await repo.lookupPass('NCST-VIS-2026-TEST-99');
-      expect(retrieved, isNotNull);
-      expect(retrieved!.visitorName, 'Juan Dela Cruz');
-      expect(retrieved.plateNumber, 'ABC-9999');
-      expect(retrieved.isActive, isTrue);
-      expect(retrieved.isExpired, isFalse);
-    });
+        // Verify pass retrieval by ID
+        final retrieved = await repo.lookupPass('NCST-VIS-2026-TEST-99');
+        expect(retrieved, isNotNull);
+        expect(retrieved!.visitorName, 'Juan Dela Cruz');
+        expect(retrieved.plateNumber, 'ABC-9999');
+        expect(retrieved.isActive, isTrue);
+        expect(retrieved.isExpired, isFalse);
+      },
+    );
 
     test('Structured QR serialization and parsing preserve integrity', () {
       final now = DateTime.now();
@@ -174,7 +193,10 @@ void main() {
       );
       // STRICT RULE VERIFICATION:
       expect(visitor.canBeFlagged, isFalse);
-      expect(visitor.hasActiveFlag, isFalse); // hasActiveFlag is guarded and evaluates to false!
+      expect(
+        visitor.hasActiveFlag,
+        isFalse,
+      ); // hasActiveFlag is guarded and evaluates to false!
     });
   });
 

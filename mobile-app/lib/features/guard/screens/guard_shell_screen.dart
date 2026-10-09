@@ -43,6 +43,8 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     _currentUser = widget.user;
     _auditLogs = List<AuditLogEntry>.from(_repository.getInitialAuditLogs());
     _fetchLiveLogs();
+    ApiService.sessionError.addListener(_onSessionEnded);
+    ApiService.currentSessionUser.addListener(_onSessionUpdated);
     SyncQueueService().lastSyncTimeNotifier.addListener(_onAutoSyncCompleted);
   }
 
@@ -51,13 +53,38 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     SyncQueueService().lastSyncTimeNotifier.removeListener(
       _onAutoSyncCompleted,
     );
+    ApiService.sessionError.removeListener(_onSessionEnded);
+    ApiService.currentSessionUser.removeListener(_onSessionUpdated);
     super.dispose();
+  }
+
+  void _onSessionEnded() {
+    final message = ApiService.sessionError.value;
+    if (!mounted || message == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AuthService().userNotifier.value = null;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (_) => false,
+      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
+
+  void _onSessionUpdated() {
+    final user = ApiService.currentSessionUser.value;
+    if (!mounted || user == null) return;
+    setState(() {
+      _currentUser = GuardUser.fromJson(user);
+    });
   }
 
   void _onAutoSyncCompleted() {
     if (mounted) {
       final cached = LocalCacheService.getCachedLogs();
-      if (cached.isNotEmpty) {
+      {
         setState(() {
           _auditLogs = cached;
         });
@@ -70,7 +97,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     SyncQueueService().requestRefresh();
     await SyncQueueService().processQueue();
     final serverLogs = LocalCacheService.getCachedLogs();
-    if (mounted && serverLogs.isNotEmpty) {
+    if (mounted) {
       setState(() {
         _auditLogs = serverLogs;
       });

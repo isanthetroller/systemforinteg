@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
 import '../core/constants/api_constants.dart';
 import '../models/vehicle_model.dart';
 import '../models/visitor_pass_model.dart';
@@ -27,7 +29,7 @@ enum WriteOutcome {
   /// The server understood and said no (banned vehicle, unknown plate, duplicate pass...). Do not queue it.
   refused,
 
-  /// No connection, timeout, server error or expired session. Queue it and try again later.
+  /// No connection, timeout or temporary server error. Queue it and try again later.
   unreachable,
 }
 
@@ -36,6 +38,47 @@ class ApiService {
   static http.Client _client = http.Client();
   static String? _testCookie;
   static String? authToken;
+  static final ValueNotifier<String?> sessionError = ValueNotifier(null);
+  static final ValueNotifier<Map<String, dynamic>?> currentSessionUser =
+      ValueNotifier(null);
+  static final ValueNotifier<int> liveRevision = ValueNotifier(0);
+  static bool lastFetchWasLive = false;
+  static Map<String, String>? _revisions;
+  static Future<Map<String, dynamic>> fetchUpdates() async {
+    final res = await _get(Uri.parse('${ApiConstants.baseUrl}/updates.php'));
+    if (res.statusCode != 200) {
+      throw StateError('Could not refresh the current session.');
+    }
+    return Map<String, dynamic>.from(
+      (jsonDecode(res.body) as Map)['data'] as Map,
+    );
+  }
+
+  static Future<List<VisitorPass>> fetchVisitorPasses() async {
+    final res = await _get(
+      Uri.parse('${ApiConstants.baseUrl}/visitors.php?all=1'),
+    );
+    if (res.statusCode != 200) {
+      throw StateError('Could not refresh visitor passes.');
+    }
+    return ((jsonDecode(res.body) as Map)['data'] as List)
+        .map((p) => VisitorPass.fromJson(Map<String, dynamic>.from(p as Map)))
+        .toList();
+  }
+
+  static void acknowledgeUpdates(Map<String, String> revisions) {
+    _revisions = revisions;
+    liveRevision.value++;
+  }
+
+  static Map<String, String>? get revisions => _revisions;
+  static void _rejectSession() {
+    if (authToken == null) return;
+    authToken = null;
+    _revisions = null;
+    sessionError.value =
+        'Your session has ended or your account was disabled. Sign in again.';
+  }
 
   /// The server's message for the last refused write, or why it could not be sent.
   static String? lastWriteError;
@@ -68,6 +111,9 @@ class ApiService {
     _client = http.Client();
     _testCookie = null;
     authToken = null;
+    _revisions = null;
+    sessionError.value = null;
+    currentSessionUser.value = null;
   }
 
   /// Helper to solve InfinityFree AES anti-bot challenge automatically
@@ -94,10 +140,20 @@ class ApiService {
           cipherBytes.add(int.parse(cipherHex.substring(i, i + 2), radix: 16));
         }
 
-        final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.cbc, padding: null));
-        final decrypted = encrypter.decryptBytes(enc.Encrypted(Uint8List.fromList(cipherBytes)), iv: iv);
-        final cookie = decrypted.map((b) => b.toRadixString(16).padLeft(2, '0')).join('').toLowerCase();
-        debugPrint('[ApiService] Successfully solved InfinityFree bot challenge cookie: $cookie');
+        final encrypter = enc.Encrypter(
+          enc.AES(key, mode: enc.AESMode.cbc, padding: null),
+        );
+        final decrypted = encrypter.decryptBytes(
+          enc.Encrypted(Uint8List.fromList(cipherBytes)),
+          iv: iv,
+        );
+        final cookie = decrypted
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join('')
+            .toLowerCase();
+        debugPrint(
+          '[ApiService] Successfully solved InfinityFree bot challenge',
+        );
         return cookie;
       }
     } catch (e) {
@@ -121,8 +177,11 @@ class ApiService {
   /// Specialized headers for image loading (Accept: image/* and anti-bot cookie)
   static Map<String, String> get imageHeaders {
     final headers = <String, String>{
-      'User-Agent': ApiConstants.defaultHeaders['User-Agent'] ?? 'SecurePark-GateScanner/2.4',
-      'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      'User-Agent':
+          ApiConstants.defaultHeaders['User-Agent'] ??
+          'SecurePark-GateScanner/2.4',
+      'Accept':
+          'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
     };
     if (_testCookie != null && _testCookie!.isNotEmpty) {
       headers['Cookie'] = '__test=$_testCookie';
@@ -156,12 +215,16 @@ class ApiService {
 
     try {
       final uri = Uri.parse(cleanUrl);
-      var res = await _client.get(uri, headers: imageHeaders).timeout(ApiConstants.timeout);
+      var res = await _client
+          .get(uri, headers: imageHeaders)
+          .timeout(ApiConstants.timeout);
       if (res.body.contains('slowAES.decrypt')) {
         final solved = _solveInfinityFreeChallenge(res.body);
         if (solved != null) {
           _testCookie = solved;
-          res = await _client.get(uri, headers: imageHeaders).timeout(ApiConstants.timeout);
+          res = await _client
+              .get(uri, headers: imageHeaders)
+              .timeout(ApiConstants.timeout);
         }
       }
       if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
@@ -179,20 +242,19 @@ class ApiService {
 
   static Future<http.Response> _get(Uri uri) async {
     try {
-      var res = await _client.get(uri, headers: _buildHeaders()).timeout(ApiConstants.timeout);
+      var res = await _client
+          .get(uri, headers: _buildHeaders())
+          .timeout(ApiConstants.timeout);
       if (res.body.contains('slowAES.decrypt')) {
         final solved = _solveInfinityFreeChallenge(res.body);
         if (solved != null) {
           _testCookie = solved;
-          res = await _client.get(uri, headers: _buildHeaders()).timeout(ApiConstants.timeout);
+          res = await _client
+              .get(uri, headers: _buildHeaders())
+              .timeout(ApiConstants.timeout);
         }
       }
-      // If 401 Unauthorized occurs and authToken was set, clear expired token and retry once with scanner key
-      if (res.statusCode == 401 && authToken != null) {
-        debugPrint('[ApiService] 401 with authToken; clearing token and retrying with scanner API key');
-        authToken = null;
-        res = await _client.get(uri, headers: _buildHeaders()).timeout(ApiConstants.timeout);
-      }
+      if (res.statusCode == 401) _rejectSession();
       return res;
     } catch (_) {
       return http.Response('{"status":"offline"}', 503);
@@ -202,23 +264,25 @@ class ApiService {
   static Future<http.Response> _post(Uri uri, String body) async {
     try {
       // If not authenticated with InfinityFree test cookie yet, ping status to solve cookie
-      if (_testCookie == null && (uri.host.endsWith('rf.gd') || uri.host.endsWith('site.je'))) {
-        await _get(Uri.parse('${ApiConstants.baseUrl}${ApiConstants.statsEndpoint}'));
+      if (_testCookie == null &&
+          (uri.host.endsWith('rf.gd') || uri.host.endsWith('site.je'))) {
+        await _get(
+          Uri.parse('${ApiConstants.baseUrl}${ApiConstants.statsEndpoint}'),
+        );
       }
-      var res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
+      var res = await _client
+          .post(uri, headers: _buildHeaders(), body: body)
+          .timeout(ApiConstants.timeout);
       if (res.body.contains('slowAES.decrypt')) {
         final solved = _solveInfinityFreeChallenge(res.body);
         if (solved != null) {
           _testCookie = solved;
-          res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
+          res = await _client
+              .post(uri, headers: _buildHeaders(), body: body)
+              .timeout(ApiConstants.timeout);
         }
       }
-      // If 401 Unauthorized occurs on POST and authToken was set, clear expired token and retry once
-      if (res.statusCode == 401 && authToken != null) {
-        debugPrint('[ApiService] 401 on POST with authToken; clearing token and retrying with scanner API key');
-        authToken = null;
-        res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
-      }
+      if (res.statusCode == 401) _rejectSession();
       return res;
     } catch (_) {
       return http.Response('{"status":"offline"}', 503);
@@ -230,10 +294,16 @@ class ApiService {
     final clean = query.trim();
     if (clean.isEmpty) return null;
     VehicleRecord? record;
-    if (clean.startsWith('{') || clean.contains('"plateNumber"') || clean.startsWith('NCST-QR-')) {
-      record = (await lookupVehicleByQr(clean)) ?? (await lookupVehicleByPlate(clean));
+    if (clean.startsWith('{') ||
+        clean.contains('"plateNumber"') ||
+        clean.startsWith('NCST-QR-')) {
+      record =
+          (await lookupVehicleByQr(clean)) ??
+          (await lookupVehicleByPlate(clean));
     } else {
-      record = (await lookupVehicleByPlate(clean)) ?? (await lookupVehicleByQr(clean));
+      record =
+          (await lookupVehicleByPlate(clean)) ??
+          (await lookupVehicleByQr(clean));
     }
     if (record != null) return record;
 
@@ -244,13 +314,19 @@ class ApiService {
   /// Query backend for a vehicle by QR pass code or payload
   static Future<VehicleRecord?> lookupVehicleByQr(String qr) async {
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.vehiclesEndpoint}?qr=${Uri.encodeComponent(qr)}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.vehiclesEndpoint}?qr=${Uri.encodeComponent(qr)}',
+      );
       final res = await _get(uri);
 
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] != null) {
-          final record = VehicleRecord.fromQrJson(body['data'], rawPayload: 'SERVER_DB_RECORD', isSyncedWithDb: true);
+          final record = VehicleRecord.fromQrJson(
+            body['data'],
+            rawPayload: 'SERVER_DB_RECORD',
+            isSyncedWithDb: true,
+          );
           await LocalCacheService.upsertVehicle(record);
           MockData.upsertVehicle(record);
           return record;
@@ -267,13 +343,19 @@ class ApiService {
   /// Query backend for a vehicle by plate number
   static Future<VehicleRecord?> lookupVehicleByPlate(String plate) async {
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.vehiclesEndpoint}?plate=${Uri.encodeComponent(plate)}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.vehiclesEndpoint}?plate=${Uri.encodeComponent(plate)}',
+      );
       final res = await _get(uri);
 
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] != null) {
-          final record = VehicleRecord.fromQrJson(body['data'], rawPayload: 'SERVER_DB_RECORD', isSyncedWithDb: true);
+          final record = VehicleRecord.fromQrJson(
+            body['data'],
+            rawPayload: 'SERVER_DB_RECORD',
+            isSyncedWithDb: true,
+          );
           await LocalCacheService.upsertVehicle(record);
           MockData.upsertVehicle(record);
           return record;
@@ -288,36 +370,55 @@ class ApiService {
   }
 
   /// Fetch all registered vehicles from the MySQL database
-  static Future<List<VehicleRecord>> fetchVehicles() async {
+  static Future<List<VehicleRecord>> fetchVehicles({
+    bool requireLive = false,
+  }) async {
+    lastFetchWasLive = false;
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.vehiclesEndpoint}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.vehiclesEndpoint}',
+      );
       final res = await _get(uri);
 
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] is List) {
           final list = body['data'] as List;
-          final records = list.map((item) => VehicleRecord.fromQrJson(item as Map<String, dynamic>)).toList();
+          final records = list
+              .map(
+                (item) =>
+                    VehicleRecord.fromQrJson(item as Map<String, dynamic>),
+              )
+              .toList();
           await LocalCacheService.saveVehicles(list);
+          lastFetchWasLive = true;
           return records;
         }
       }
     } catch (e) {
       debugPrint('[ApiService] Fetch vehicles failed or offline: $e');
     }
+    if (requireLive) throw StateError('The server did not return fresh data.');
     // Return cached records if Wi-Fi disappeared
     final cached = LocalCacheService.getCachedVehicles();
     if (cached.isNotEmpty) {
-      debugPrint('[ApiService] Wi-Fi offline: loaded ${cached.length} vehicles from local cache');
+      debugPrint(
+        '[ApiService] Wi-Fi offline: loaded ${cached.length} vehicles from local cache',
+      );
       return cached;
     }
     return [];
   }
 
   /// Fetch all recent gate audit logs from the MySQL database
-  static Future<List<AuditLogEntry>> fetchLogs() async {
+  static Future<List<AuditLogEntry>> fetchLogs({
+    bool requireLive = false,
+  }) async {
+    lastFetchWasLive = false;
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.logsEndpoint}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.logsEndpoint}',
+      );
       final res = await _get(uri);
 
       if (res.statusCode == 200) {
@@ -325,38 +426,53 @@ class ApiService {
         if (body['status'] == 'success' && body['data'] is List) {
           final list = body['data'] as List;
           final logs = list
-              .map((item) => AuditLogEntry.fromJson(item as Map<String, dynamic>))
+              .map(
+                (item) => AuditLogEntry.fromJson(item as Map<String, dynamic>),
+              )
               .toList();
           await LocalCacheService.saveLogs(list);
+          lastFetchWasLive = true;
           return logs;
         }
       }
     } catch (e) {
       debugPrint('[ApiService] Fetch logs failed or offline: $e');
     }
+    if (requireLive) throw StateError('The server did not return fresh data.');
     // Return cached logs if Wi-Fi disappeared
     final cached = LocalCacheService.getCachedLogs();
     if (cached.isNotEmpty) {
-      debugPrint('[ApiService] Wi-Fi offline: loaded ${cached.length} logs from local cache');
+      debugPrint(
+        '[ApiService] Wi-Fi offline: loaded ${cached.length} logs from local cache',
+      );
       return cached;
     }
     return [];
   }
 
   /// Test connectivity to a target backend API base URL
-  static Future<Map<String, dynamic>> testConnection([String? customUrl]) async {
+  static Future<Map<String, dynamic>> testConnection([
+    String? customUrl,
+  ]) async {
     final targetUrl = (customUrl != null && customUrl.trim().isNotEmpty)
         ? customUrl.trim()
         : ApiConstants.baseUrl;
     try {
       final uri = Uri.parse('$targetUrl${ApiConstants.statsEndpoint}');
-      final res = await _client.get(uri, headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'SecurePark-GateScanner/2.4',
-      }).timeout(const Duration(seconds: 4));
+      final res = await _client
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'User-Agent': 'SecurePark-GateScanner/2.4',
+            },
+          )
+          .timeout(const Duration(seconds: 4));
 
       final body = res.body;
-      if (res.statusCode == 200 || body.contains('"status"') || body.contains('slowAES')) {
+      if (res.statusCode == 200 ||
+          body.contains('"status"') ||
+          body.contains('slowAES')) {
         return {
           'success': true,
           'statusCode': res.statusCode,
@@ -398,6 +514,8 @@ class ApiService {
           final token = data['token'] as String?;
           if (token != null && token.isNotEmpty) {
             authToken = token;
+            sessionError.value = null;
+            _revisions = null;
             debugPrint('[ApiService] Session token established.');
             unawaited(fetchSystemSettings());
           }
@@ -405,7 +523,9 @@ class ApiService {
         } else {
           throw Exception(body['message'] ?? 'Authentication failed');
         }
-      } else if (res.statusCode == 400 || res.statusCode == 401 || res.statusCode == 403) {
+      } else if (res.statusCode == 400 ||
+          res.statusCode == 401 ||
+          res.statusCode == 403) {
         try {
           final Map<String, dynamic> body = jsonDecode(res.body);
           throw Exception(body['message'] ?? 'Authentication failed');
@@ -414,7 +534,9 @@ class ApiService {
           throw Exception('Authentication failed (HTTP ${res.statusCode})');
         }
       } else if (res.statusCode == 503) {
-        throw Exception('Cannot connect to server at ${ApiConstants.baseUrl}. Please verify your network or server URL setting.');
+        throw Exception(
+          'Cannot connect to server at ${ApiConstants.baseUrl}. Please verify your network or server URL setting.',
+        );
       } else {
         try {
           final Map<String, dynamic> body = jsonDecode(res.body);
@@ -424,7 +546,9 @@ class ApiService {
         } catch (e) {
           if (e is Exception && e.toString().contains('Exception:')) rethrow;
         }
-        throw Exception('Server error (HTTP ${res.statusCode}). Unable to sign in.');
+        throw Exception(
+          'Server error (HTTP ${res.statusCode}). Unable to sign in.',
+        );
       }
     } catch (e) {
       debugPrint('[ApiService] Login exception: $e');
@@ -448,10 +572,16 @@ class ApiService {
 
   /// Classifies a server reply to a live write.
   static WriteOutcome _outcomeOf(http.Response res) {
-    final looksLikeHtml = res.body.contains('<html') || res.body.contains('<!DOCTYPE');
-    if ((res.statusCode == 200 || res.statusCode == 201) && !looksLikeHtml) return WriteOutcome.accepted;
+    final looksLikeHtml =
+        res.body.contains('<html') || res.body.contains('<!DOCTYPE');
+    if ((res.statusCode == 200 || res.statusCode == 201) && !looksLikeHtml) {
+      return WriteOutcome.accepted;
+    }
     // 5xx (including the synthetic 503 "offline"), timeouts, rate limits, expired session and anti-bot pages: try again later
-    if (looksLikeHtml || res.statusCode >= 500 || res.statusCode == 408 || res.statusCode == 429 || res.statusCode == 401) {
+    if (looksLikeHtml ||
+        res.statusCode >= 500 ||
+        res.statusCode == 408 ||
+        res.statusCode == 429) {
       return WriteOutcome.unreachable;
     }
     return WriteOutcome.refused;
@@ -460,12 +590,17 @@ class ApiService {
   static String? _messageOf(http.Response res) {
     try {
       final body = jsonDecode(res.body);
-      if (body is Map && body['message'] != null) return body['message'].toString();
+      if (body is Map && body['message'] != null) {
+        return body['message'].toString();
+      }
     } catch (_) {}
     return null;
   }
 
-  static Future<WriteOutcome> _postForOutcome(String endpoint, Map<String, dynamic> payload) async {
+  static Future<WriteOutcome> _postForOutcome(
+    String endpoint,
+    Map<String, dynamic> payload,
+  ) async {
     try {
       lastResponseData = null;
       final uri = Uri.parse('${ApiConstants.baseUrl}$endpoint');
@@ -479,7 +614,9 @@ class ApiService {
           }
         } catch (_) {}
       } else if (outcome == WriteOutcome.refused) {
-        lastWriteError = _messageOf(res) ?? 'The server refused this request (${res.statusCode}).';
+        lastWriteError =
+            _messageOf(res) ??
+            'The server refused this request (${res.statusCode}).';
       } else if (outcome == WriteOutcome.unreachable) {
         lastWriteError = 'No connection to the server.';
       }
@@ -493,13 +630,27 @@ class ApiService {
 
   /// Changes the signed-in guard's own password (needed at first sign-in, when the account still has a temporary one).
   /// Returns null on success, otherwise a message the guard can read.
-  static Future<String?> changePassword({required String currentPassword, required String newPassword}) async {
+  static Future<String?> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}/auth.php?action=change_password');
-      final res = await _post(uri, jsonEncode({'current_password': currentPassword, 'new_password': newPassword}));
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}/auth.php?action=change_password',
+      );
+      final res = await _post(
+        uri,
+        jsonEncode({
+          'current_password': currentPassword,
+          'new_password': newPassword,
+        }),
+      );
       if (res.statusCode == 200) return null;
-      if (res.statusCode >= 500) return 'No connection to the server. Try again.';
-      return _messageOf(res) ?? 'The password could not be changed (HTTP ${res.statusCode}).';
+      if (res.statusCode >= 500) {
+        return 'No connection to the server. Try again.';
+      }
+      return _messageOf(res) ??
+          'The password could not be changed (HTTP ${res.statusCode}).';
     } catch (e) {
       debugPrint('[ApiService] changePassword note: $e');
       return 'No connection to the server. Try again.';
@@ -509,16 +660,23 @@ class ApiService {
   /// Sends queued offline events to /api/sync.php in one request.
   /// Returns one result per event (`accepted`, `duplicate` or `rejected`), or null when the server
   /// could not be reached or could not process the batch, in which case everything stays queued.
-  static Future<List<Map<String, dynamic>>?> syncEvents(List<Map<String, dynamic>> events) async {
+  static Future<List<Map<String, dynamic>>?> syncEvents(
+    List<Map<String, dynamic>> events,
+  ) async {
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.syncEndpoint}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.syncEndpoint}',
+      );
       final res = await _post(uri, jsonEncode({'events': events}));
       if (res.statusCode != 200) return null;
       final body = jsonDecode(res.body);
       final data = body is Map ? body['data'] : null;
       final results = data is Map ? data['results'] : null;
       if (results is! List) return null;
-      return results.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      return results
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
     } catch (e) {
       debugPrint('[ApiService] syncEvents note: $e');
       return null;
@@ -527,7 +685,8 @@ class ApiService {
 
   /// Direct HTTP post for a gate log (live write)
   static Future<bool> postGateLogDirect(Map<String, dynamic> payload) async {
-    return (await _postForOutcome(ApiConstants.logsEndpoint, payload)) == WriteOutcome.accepted;
+    return (await _postForOutcome(ApiConstants.logsEndpoint, payload)) ==
+        WriteOutcome.accepted;
   }
 
   /// Post gate passage (Entry or Exit). It is always cached locally so the guard UI shows it at once.
@@ -550,7 +709,9 @@ class ApiService {
     // 'qr' (scanned) or 'manual' (the guard typed the plate): supervisors see how often each guard looks vehicles up by hand
     String lookupMethod = 'qr',
   }) async {
-    final gateType = (action.contains('Exit') || action.contains('Egress')) ? 'Egress' : 'Ingress';
+    final gateType = (action.contains('Exit') || action.contains('Egress'))
+        ? 'Egress'
+        : 'Ingress';
     final clientRef = SyncQueueService.newClientRef();
     final occurredAt = DateTime.now();
     lastGateLogId = null;
@@ -563,7 +724,8 @@ class ApiService {
       if (driverId != null && driverId > 0) 'driver_id': driverId,
       // An existing visitor day pass: the entry is recorded against it, and the server insists the guard has
       // checked the items declared on it (items_verified) before it accepts the entry.
-      if (visitorPassId != null && visitorPassId > 0) 'visitor_pass_id': visitorPassId,
+      if (visitorPassId != null && visitorPassId > 0)
+        'visitor_pass_id': visitorPassId,
       if (itemsVerified) 'items_verified': true,
       'lookupMethod': lookupMethod,
       'gatePoint': gatePoint,
@@ -579,9 +741,14 @@ class ApiService {
     };
 
     GateStatus localStatus = GateStatus.inside;
-    if (action.contains('Denied') || status.toLowerCase().contains('denied') || status.toLowerCase().contains('blocked')) {
+    if (action.contains('Denied') ||
+        status.toLowerCase().contains('denied') ||
+        status.toLowerCase().contains('blocked')) {
       localStatus = GateStatus.blocked;
-    } else if (action.contains('Exit') || action.contains('Egress') || status.toLowerCase().contains('exit') || status.toLowerCase().contains('depart')) {
+    } else if (action.contains('Exit') ||
+        action.contains('Egress') ||
+        status.toLowerCase().contains('exit') ||
+        status.toLowerCase().contains('depart')) {
       localStatus = GateStatus.exited;
     }
 
@@ -604,15 +771,21 @@ class ApiService {
     final outcome = await _postForOutcome(ApiConstants.logsEndpoint, payload);
     if (outcome == WriteOutcome.accepted) {
       lastGateLogId = int.tryParse('${lastResponseData?['id'] ?? ''}');
-      if (action == 'Entry Recorded' || action == 'Exit Approved') unawaited(flushOwnerNotices());
+      if (action == 'Entry Recorded' || action == 'Exit Approved') {
+        unawaited(flushOwnerNotices());
+      }
       debugPrint('[ApiService] Gate passage logged to server for $plateNumber');
-      unawaited(LocalCacheService.updateVehicleCampusStatus(plateNumber, status));
+      unawaited(
+        LocalCacheService.updateVehicleCampusStatus(plateNumber, status),
+      );
       MockData.updateVehicleCampusStatus(plateNumber, status);
       unawaited(SyncQueueService().processQueue());
       return true;
     }
     if (outcome == WriteOutcome.refused) {
-      debugPrint('[ApiService] Server refused the gate passage for $plateNumber: $lastWriteError');
+      debugPrint(
+        '[ApiService] Server refused the gate passage for $plateNumber: $lastWriteError',
+      );
       // It was NOT recorded: take our own copy back out, so the guard's list and inside-count do not show a
       // passage the server never accepted, and let the dashboard reload from the cache.
       await LocalCacheService.removeLocalLog(localEntry.id);
@@ -635,27 +808,46 @@ class ApiService {
 
   /// Direct HTTP post for a security incident (live write)
   static Future<bool> reportIncidentDirect(Map<String, dynamic> payload) async {
-    return (await _postForOutcome(ApiConstants.incidentsEndpoint, payload)) == WriteOutcome.accepted;
+    return (await _postForOutcome(ApiConstants.incidentsEndpoint, payload)) ==
+        WriteOutcome.accepted;
   }
 
   /// Issues a violation to a vehicle (the vehicle is then on hold and the owner is notified). Online only: a
   /// violation is never queued. Returns null on success, otherwise a message the guard can read.
-  static Future<String?> issueViolation({required String plateNumber, required String type, String notes = ''}) async {
+  static Future<String?> issueViolation({
+    required String plateNumber,
+    required String type,
+    String notes = '',
+  }) async {
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.violationsEndpoint}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}${ApiConstants.violationsEndpoint}',
+      );
       lastViolationId = null;
-      final res = await _post(uri, jsonEncode({'plate': plateNumber, 'type': type, 'notes': notes}));
+      final res = await _post(
+        uri,
+        jsonEncode({'plate': plateNumber, 'type': type, 'notes': notes}),
+      );
       if (res.statusCode == 200 || res.statusCode == 201) {
         try {
           final body = jsonDecode(res.body);
-          final violation = body is Map ? (body['data'] is Map ? body['data']['violation'] : null) : null;
-          if (violation is Map) lastViolationId = int.tryParse('${violation['id']}');
+          final violation = body is Map
+              ? (body['data'] is Map ? body['data']['violation'] : null)
+              : null;
+          if (violation is Map) {
+            lastViolationId = int.tryParse('${violation['id']}');
+          }
         } catch (_) {}
         return null;
       }
-      if (res.statusCode == 401) return 'Your session expired. Sign in again to issue a violation.';
-      if (res.statusCode >= 500) return 'No connection to the server. Try again.';
-      return _messageOf(res) ?? 'The violation could not be recorded (HTTP ${res.statusCode}).';
+      if (res.statusCode == 401) {
+        return 'Your session expired. Sign in again to issue a violation.';
+      }
+      if (res.statusCode >= 500) {
+        return 'No connection to the server. Try again.';
+      }
+      return _messageOf(res) ??
+          'The violation could not be recorded (HTTP ${res.statusCode}).';
     } catch (e) {
       debugPrint('[ApiService] issueViolation note: $e');
       return 'No connection to the server. Try again.';
@@ -683,14 +875,21 @@ class ApiService {
       'client_ref': clientRef,
     };
 
-    final outcome = await _postForOutcome(ApiConstants.incidentsEndpoint, payload);
+    final outcome = await _postForOutcome(
+      ApiConstants.incidentsEndpoint,
+      payload,
+    );
     if (outcome == WriteOutcome.accepted) return true;
     if (outcome == WriteOutcome.refused) {
-      debugPrint('[ApiService] Server refused the incident for $plateNumber: $lastWriteError');
+      debugPrint(
+        '[ApiService] Server refused the incident for $plateNumber: $lastWriteError',
+      );
       return false;
     }
 
-    debugPrint('[ApiService] Offline: queuing security incident for $plateNumber');
+    debugPrint(
+      '[ApiService] Offline: queuing security incident for $plateNumber',
+    );
     await SyncQueueService().enqueue(
       type: 'incident',
       payload: payload,
@@ -701,8 +900,11 @@ class ApiService {
   }
 
   /// Direct HTTP post for visitor pass creation (live write)
-  static Future<bool> postVisitorPassDirect(Map<String, dynamic> payload) async {
-    return (await _postForOutcome(ApiConstants.visitorsEndpoint, payload)) == WriteOutcome.accepted;
+  static Future<bool> postVisitorPassDirect(
+    Map<String, dynamic> payload,
+  ) async {
+    return (await _postForOutcome(ApiConstants.visitorsEndpoint, payload)) ==
+        WriteOutcome.accepted;
   }
 
   /// Issues a visitor pass.
@@ -716,9 +918,14 @@ class ApiService {
     lastCreatedVisitorPass = null;
     final clientRef = SyncQueueService.newClientRef();
     final occurredAt = DateTime.now();
-    final Map<String, dynamic> payload = Map<String, dynamic>.from(pass.toJson());
+    final Map<String, dynamic> payload = Map<String, dynamic>.from(
+      pass.toJson(),
+    );
 
-    final outcome = await _postForOutcome(ApiConstants.visitorsEndpoint, payload);
+    final outcome = await _postForOutcome(
+      ApiConstants.visitorsEndpoint,
+      payload,
+    );
     if (outcome == WriteOutcome.accepted) {
       if (lastResponseData != null) {
         try {
@@ -729,11 +936,15 @@ class ApiService {
       return true;
     }
     if (outcome == WriteOutcome.refused) {
-      debugPrint('[ApiService] Server refused visitor pass ${pass.passId}: $lastWriteError');
+      debugPrint(
+        '[ApiService] Server refused visitor pass ${pass.passId}: $lastWriteError',
+      );
       return false;
     }
 
-    debugPrint('[ApiService] Offline: queuing visitor pass ${pass.passId} for automatic sync');
+    debugPrint(
+      '[ApiService] Offline: queuing visitor pass ${pass.passId} for automatic sync',
+    );
     await SyncQueueService().enqueue(
       type: 'visitor_pass',
       payload: payload,
@@ -745,13 +956,20 @@ class ApiService {
   }
 
   /// Direct HTTP post for visitor exit checkout (live write)
-  static Future<bool> postVisitorExitDirect(String passId, String plateNumber) async {
+  static Future<bool> postVisitorExitDirect(
+    String passId,
+    String plateNumber,
+  ) async {
     final payload = <String, dynamic>{
       'passId': passId,
       'plateNumber': plateNumber,
       'exitTime': DateTime.now().toIso8601String(),
     };
-    return (await _postForOutcome('${ApiConstants.visitorsEndpoint}?action=exit', payload)) == WriteOutcome.accepted;
+    return (await _postForOutcome(
+          '${ApiConstants.visitorsEndpoint}?action=exit',
+          payload,
+        )) ==
+        WriteOutcome.accepted;
   }
 
   /// Post visitor checkout upon exit; queued with its real time when offline
@@ -764,17 +982,24 @@ class ApiService {
       'exitTime': occurredAt.toIso8601String(),
     };
 
-    final outcome = await _postForOutcome('${ApiConstants.visitorsEndpoint}?action=exit', payload);
+    final outcome = await _postForOutcome(
+      '${ApiConstants.visitorsEndpoint}?action=exit',
+      payload,
+    );
     if (outcome == WriteOutcome.accepted) {
       unawaited(SyncQueueService().processQueue());
       return true;
     }
     if (outcome == WriteOutcome.refused) {
-      debugPrint('[ApiService] Server refused the checkout of $passId / $plateNumber: $lastWriteError');
+      debugPrint(
+        '[ApiService] Server refused the checkout of $passId / $plateNumber: $lastWriteError',
+      );
       return false;
     }
 
-    debugPrint('[ApiService] Offline: queuing visitor checkout for $passId / $plateNumber');
+    debugPrint(
+      '[ApiService] Offline: queuing visitor checkout for $passId / $plateNumber',
+    );
     await SyncQueueService().enqueue(
       type: 'visitor_exit',
       payload: payload,
@@ -789,7 +1014,9 @@ class ApiService {
     final clean = query.trim();
     if (clean.isEmpty) return null;
     try {
-      final uri = Uri.parse('${ApiConstants.baseUrl}/visitors.php?q=${Uri.encodeComponent(clean)}');
+      final uri = Uri.parse(
+        '${ApiConstants.baseUrl}/visitors.php?q=${Uri.encodeComponent(clean)}',
+      );
       final res = await _get(uri);
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
@@ -827,9 +1054,14 @@ class ApiService {
       final uri = Uri.parse('${ApiConstants.baseUrl}/evidence.php');
       final res = await _post(uri, jsonEncode(payload));
       if (res.statusCode == 200 || res.statusCode == 201) return null;
-      if (res.statusCode == 401) return 'Your session expired. Sign in again to send photos.';
-      if (res.statusCode >= 500) return 'No connection to the server. The photo was not sent.';
-      return _messageOf(res) ?? 'The photo could not be saved (HTTP ${res.statusCode}).';
+      if (res.statusCode == 401) {
+        return 'Your session expired. Sign in again to send photos.';
+      }
+      if (res.statusCode >= 500) {
+        return 'No connection to the server. The photo was not sent.';
+      }
+      return _messageOf(res) ??
+          'The photo could not be saved (HTTP ${res.statusCode}).';
     } catch (e) {
       debugPrint('[ApiService] uploadEvidence note: $e');
       return 'No connection to the server. The photo was not sent.';
@@ -842,7 +1074,9 @@ class ApiService {
       final res = await _get(Uri.parse('${ApiConstants.baseUrl}/shifts.php'));
       if (res.statusCode != 200) return null;
       final body = jsonDecode(res.body);
-      if (body is Map && body['data'] is Map) return Map<String, dynamic>.from(body['data']);
+      if (body is Map && body['data'] is Map) {
+        return Map<String, dynamic>.from(body['data']);
+      }
     } catch (e) {
       debugPrint('[ApiService] fetchShifts note: $e');
     }
@@ -852,12 +1086,20 @@ class ApiService {
   /// Goes on duty at [gate]. Returns {'shift': .., 'handover': ..} or {'error': message}.
   static Future<Map<String, dynamic>> startShift(String gate) async {
     try {
-      final res = await _post(Uri.parse('${ApiConstants.baseUrl}/shifts.php'), jsonEncode({'action': 'start', 'gate': gate}));
+      final res = await _post(
+        Uri.parse('${ApiConstants.baseUrl}/shifts.php'),
+        jsonEncode({'action': 'start', 'gate': gate}),
+      );
       final body = jsonDecode(res.body);
-      if ((res.statusCode == 200 || res.statusCode == 201) && body is Map && body['data'] is Map) {
+      if ((res.statusCode == 200 || res.statusCode == 201) &&
+          body is Map &&
+          body['data'] is Map) {
         return Map<String, dynamic>.from(body['data']);
       }
-      return {'error': _messageOf(res) ?? 'Could not go on duty (HTTP ${res.statusCode}).'};
+      return {
+        'error':
+            _messageOf(res) ?? 'Could not go on duty (HTTP ${res.statusCode}).',
+      };
     } catch (e) {
       return {'error': 'No connection to the server.'};
     }
@@ -866,10 +1108,14 @@ class ApiService {
   /// Ends my shift with an optional handover note. Returns null on success, otherwise a message to show.
   static Future<String?> endShift(String notes) async {
     try {
-      final res = await _post(Uri.parse('${ApiConstants.baseUrl}/shifts.php'), jsonEncode({'action': 'end', 'notes': notes}));
+      final res = await _post(
+        Uri.parse('${ApiConstants.baseUrl}/shifts.php'),
+        jsonEncode({'action': 'end', 'notes': notes}),
+      );
       if (res.statusCode == 200) return null;
       if (res.statusCode == 409) return null; // not on duty: nothing to end
-      return _messageOf(res) ?? 'Could not end the shift (HTTP ${res.statusCode}).';
+      return _messageOf(res) ??
+          'Could not end the shift (HTTP ${res.statusCode}).';
     } catch (e) {
       return 'No connection to the server.';
     }
@@ -933,7 +1179,8 @@ class ApiService {
       if (res.statusCode == 200) {
         lastVerifyError = null;
         final Map<String, dynamic> body = jsonDecode(res.body);
-        if (body['status'] == 'success' && body['data'] is Map<String, dynamic>) {
+        if (body['status'] == 'success' &&
+            body['data'] is Map<String, dynamic>) {
           return body['data'] as Map<String, dynamic>;
         }
         return body;
@@ -959,26 +1206,39 @@ class ApiService {
 
   /// Fetch system configuration settings (e.g. visitor pass validity duration)
   /// from the backend API (/api/settings.php).
-  static Future<Map<String, dynamic>?> fetchSystemSettings() async {
+  static Future<Map<String, dynamic>?> fetchSystemSettings({
+    bool requireLive = false,
+  }) async {
     try {
       final uri = Uri.parse('${ApiConstants.baseUrl}/settings.php');
       final res = await _get(uri);
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
         if (body['status'] == 'success' && body['data'] != null) {
-          final data = body['data'] as Map<String, dynamic>;
-          final hours = int.tryParse(data['visitor_pass_validity_hours']?.toString() ?? '');
+          final raw = body['data'];
+          final data = raw is List
+              ? <String, dynamic>{
+                  for (final row in raw)
+                    (row as Map)['key'].toString(): row['value'],
+                }
+              : Map<String, dynamic>.from(raw as Map);
+          final hours = int.tryParse(
+            data['visitor_pass_validity_hours']?.toString() ?? '',
+          );
           if (hours != null && hours > 0) {
             await LocalCacheService.saveVisitorPassValidityHours(hours);
-            debugPrint('[ApiService] Updated visitor pass validity duration rule to $hours hours');
+            debugPrint(
+              '[ApiService] Updated visitor pass validity duration rule to $hours hours',
+            );
           }
           return data;
         }
       }
     } catch (e) {
+      if (requireLive) rethrow;
       debugPrint('[ApiService] fetchSystemSettings note: $e');
     }
+    if (requireLive) throw StateError('Could not refresh system settings.');
     return null;
   }
 }
-

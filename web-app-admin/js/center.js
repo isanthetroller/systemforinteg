@@ -53,7 +53,9 @@
       if (mine !== ticket) return;
       body.innerHTML = html;
       wire();
+      $('settingsForm')?.addEventListener('input', () => { $('settingsForm').dataset.dirty = 'true'; });
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       if (mine === ticket) body.innerHTML = `<div class="px-4 py-6 text-center text-ncst-crimson text-xs">${esc(err.message)}</div>`;
     }
   }
@@ -133,7 +135,8 @@
       SP.showToast(res.message || 'Done.', 'success');
       if (SP.reload) SP.reload(true, true);
       load();
-    } catch (err) { SP.showToast(err.message, 'error'); }
+    } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); }
   }
 
   /* ---------------------------------------------------------------- Guard duty */
@@ -197,7 +200,8 @@
       SP.showToast('Settings saved.', 'success');
       if (window.SPOps) SPOps.refreshOccupancy();
       load();
-    } catch (err) { SP.showToast(err.message, 'error'); }
+    } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); }
   }
 
   /* ---------------------------------------------------------------- Wiring */
@@ -228,6 +232,7 @@
         const res = await ApiClient.sendTestMail(to);
         SP.showToast(res.message, 'success');
       } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
         if (window.Swal) Swal.fire({ icon: 'error', title: 'The test e-mail did not go out', text: err.message, confirmButtonColor: '#253475' });
         else SP.showToast(err.message, 'error');
       } finally {
@@ -255,5 +260,14 @@
     });
     if (window.SPAuth) SPAuth.whenAuthenticated(refreshPending);
     setInterval(() => { if (!document.hidden) refreshPending(); }, 60000);
+  });
+  window.SPLive?.subscribe(async changed => {
+    if (!window.SPAuth?.hasRole('admin')) return;
+    if (changed.includes('approvals')) await refreshPending();
+    if (!$('centerView').classList.contains('active')) return;
+    const domain = {log:'activity', approvals:'approvals', duty:'shifts', settings:'settings'}[tab];
+    if (!changed.includes(domain) && !(tab === 'duty' && changed.includes('movements'))) return;
+    if (tab === 'settings' && $('settingsForm')?.dataset.dirty === 'true') { SP.showToast('Settings changed elsewhere. Reload before saving.', 'warning'); return; }
+    await load();
   });
 })();

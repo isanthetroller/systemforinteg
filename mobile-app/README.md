@@ -1,5 +1,11 @@
 # NCST SecurePark — Mobile Gate Security Terminal (Flutter)
 
+## Latest synchronization update
+
+See [October 9 mobile update](../docs/mobile-realtime-update-2026-10-09.md) for authenticated five-second
+polling, session revocation, live visitor cards, verification results and compatible backend setup.
+The tested update passes automated checks; physical phone/camera and deployment MySQL validation remain outstanding.
+
 A specialized cross-platform mobile application engineered for National College of Science and Technology (NCST) gate security officers. Built on Flutter 3 / Material Design 3, the terminal provides rapid QR gate pass scanning, optical verification against campus databases, multi-driver authorization checks, and immediate synchronization with the campus backend.
 
 ---
