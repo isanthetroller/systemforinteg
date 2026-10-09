@@ -70,6 +70,7 @@ const StudentApi = (function () {
   }
 
   return {
+    updates: async () => (await request('updates.php')).data,
     hasToken: () => !!getToken(),
 
     async login(studentId, password) {

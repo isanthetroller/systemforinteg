@@ -216,6 +216,7 @@
       }
       render();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       body.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
     }
   }
@@ -443,6 +444,7 @@
       SP.showToast(res.message, 'success');
       load();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       SP.showToast(err.message, 'error');
     }
   }
@@ -690,6 +692,7 @@
       const file = new File([blob], `${state.current.passCode}.png`, { type: 'image/png' });
       await navigator.share({ files: [file], title: 'NCST Visitor Day Pass', text: `Valid only on ${state.current.validDate}` });
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       if (err && err.name !== 'AbortError') SP.showToast('Sharing failed. Use Download PNG instead.');
     }
   }
@@ -768,4 +771,9 @@
   });
 
   window.SPVisitors = { openCreate, openCard };
+  window.SPLive?.subscribe(async changed => {
+    if (!changed.some(k => ['visitors','movements','cases'].includes(k))) return;
+    if ($('visitorsView').classList.contains('active')) await load();
+    if (state.current && !$('visitorCardModal').classList.contains('hidden')) openCard(await ApiClient.getVisitorPass(state.current.id));
+  });
 })();

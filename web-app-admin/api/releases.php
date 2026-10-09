@@ -11,6 +11,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/releases.php';
+require_once __DIR__ . '/../lib/campus.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -34,7 +35,7 @@ if ($method === 'POST') {
     if (!vehicleIsOnHold($pdo, $vehicle)) {
         sendResponse(409, ['code' => 'NOT_ON_HOLD'], "{$vehicle['plate_number']} is not on hold, so there is nothing to release.");
     }
-    if ($vehicle['status'] !== 'Inside Campus') {
+    if (!vehicleRecordedInside($pdo, $vehicle)) {
         sendResponse(409, ['code' => 'NOT_INSIDE'], "{$vehicle['plate_number']} is not recorded inside campus. An exit release only lets a vehicle that is inside leave.");
     }
     if (activeExitRelease($pdo, $vehicle['id'])) {

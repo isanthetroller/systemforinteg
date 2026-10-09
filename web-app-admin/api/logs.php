@@ -9,6 +9,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/movements.php';
 require_once __DIR__ . '/../lib/releases.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -121,6 +122,7 @@ function handleCreateLog($pdo, $actor) {
     $isApproval = in_array($action, ['Entry Recorded', 'Exit Approved'], true);
 
     $vehicle = findVehicleByPlate($pdo, $plateNumber);
+    $observedRevision = $vehicle ? movementRevision($pdo, $vehicle['plate_number']) : null;
     $isVip = isVipVehicle($vehicle);
     $visitor = null;
     if (!empty($data['visitor_pass_id'])) {
@@ -131,6 +133,8 @@ function handleCreateLog($pdo, $actor) {
     } elseif (!$vehicle) {
         $visitor = findVisitorPassByPlate($pdo, $plateNumber, date('Y-m-d'), true);
     }
+
+    $observedVisitorRevision = $visitor ? movementRevision($pdo, $visitor['plate_number']) : null;
 
     /* ---- Driver confirmation ------------------------------------------- */
     $driverName = trim((string)($data['driverName'] ?? $data['driver_name'] ?? ''));
@@ -280,8 +284,37 @@ function handleCreateLog($pdo, $actor) {
         $notes = trim($notes . ' [Mobile operator: ' . $data['guardName'] . ']');
     }
 
-    $pdo->beginTransaction();
+    movementBegin($pdo);
     try {
+        if ($isApproval && $vehicle) {
+            $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
+            $fresh = $pdo->prepare("SELECT * FROM `vehicles` WHERE `id` = ?" . $lock);
+            $fresh->execute([$vehicle['id']]);
+            $freshVehicle = $fresh->fetch();
+            if (!$freshVehicle || $freshVehicle['status'] !== $vehicle['status'] || movementRevision($pdo, $vehicle['plate_number']) !== $observedRevision) {
+                movementEnd($pdo, false);
+                sendResponse(409, ['code' => 'STALE_SCAN'], 'Another transaction changed this vehicle. Scan it again before confirming.');
+            }
+        }
+        if ($isApproval && $vehicle) {
+            $usedRelease = $gateType === 'Egress' && vehicleIsOnHold($pdo, $freshVehicle) ? activeExitRelease($pdo, $vehicle['id']) : null;
+            $invalidStanding = !$usedRelease && (vehicleIsOnHold($pdo, $freshVehicle) || $freshVehicle['registration_status'] === 'Suspended');
+            $invalidEntry = $gateType === 'Ingress' && ((int)($freshVehicle['is_retired'] ?? 0) || ($freshVehicle['payment_status'] ?? 'Paid') === 'Unpaid' || vehiclePassExpired($freshVehicle, date('Y-m-d')));
+            if ($invalidStanding || $invalidEntry) {
+                movementEnd($pdo, false);
+                sendResponse(403, ['code' => 'ACCESS_DENIED'], 'The vehicle no longer qualifies for this passage. Check its current registration and hold status.');
+            }
+        }
+        if ($isApproval && !$vehicle && $visitor) {
+            $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
+            $fresh = $pdo->prepare("SELECT `status`, `entry_time`, `exit_time` FROM `visitor_passes` WHERE `id` = ?" . $lock);
+            $fresh->execute([$visitor['id']]);
+            $current = $fresh->fetch();
+            if (!$current || $current['status'] !== $visitor['status'] || $current['entry_time'] !== $visitor['entry_time'] || $current['exit_time'] !== $visitor['exit_time'] || movementRevision($pdo, $visitor['plate_number']) !== $observedVisitorRevision) {
+                movementEnd($pdo, false);
+                sendResponse(409, ['code' => 'STALE_SCAN'], 'Another transaction changed this visitor pass. Scan it again before confirming.');
+            }
+        }
         $logId = recordGateLog($pdo, $actor, [
             'plate' => $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $plateNumber),
             'vehicleType' => $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : ($data['vehicleType'] ?? null)),
@@ -319,9 +352,9 @@ function handleCreateLog($pdo, $actor) {
         if ($usedRelease && $isApproval) {
             consumeExitRelease($pdo, $usedRelease, gateActorLabel($actor));
         }
-        $pdo->commit();
+        movementEnd($pdo, true);
     } catch (Exception $e) {
-        $pdo->rollBack();
+        movementEnd($pdo, false);
         sendResponse(500, null, 'Failed to record gate log.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
     }
 

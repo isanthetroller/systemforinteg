@@ -572,7 +572,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: GuardShellScreen(user: guard(GuardRole.entrance))));
       await tester.pump(const Duration(milliseconds: 300));
 
-      await tester.tap(find.byTooltip('Switch Guard Role / Account'));
+      await tester.tap(find.byTooltip('Guard account'));
       await tester.pumpAndSettle();
       expect(find.text('Scan sound & vibration: ON'), findsOneWidget);
       await tester.tap(find.byKey(const Key('toggleScanSound')));
@@ -580,7 +580,7 @@ void main() {
       expect(ScanFeedback.enabled, isFalse);
       expect(heard, isEmpty);
 
-      await tester.tap(find.byTooltip('Switch Guard Role / Account'));
+      await tester.tap(find.byTooltip('Guard account'));
       await tester.pumpAndSettle();
       expect(find.text('Scan sound & vibration: OFF'), findsOneWidget);
       await tester.tap(find.byKey(const Key('toggleScanSound')));

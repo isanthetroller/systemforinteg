@@ -68,10 +68,11 @@ foreach ($candidateVehicles as $v) {
             SELECT `logged_at` FROM `gate_logs` 
             WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
               AND `action` = 'Exit Approved'
-              AND `logged_at` >= ?
+              AND (`logged_at` > ? OR (`logged_at` = ? AND `id` > ?))
             LIMIT 1
         ");
-        $exitStmt->execute([normalizePlate($v['plate_number']), date('Y-m-d H:i:s', $entry['time'])]);
+        $entryAt = date('Y-m-d H:i:s', $entry['time']);
+        $exitStmt->execute([normalizePlate($v['plate_number']), $entryAt, $entryAt, $entry['logId'] ?? 0]);
         if ($exitStmt->fetch()) {
             continue;
         }

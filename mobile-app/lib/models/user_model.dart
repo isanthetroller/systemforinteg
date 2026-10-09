@@ -31,8 +31,8 @@ class GuardUser {
   bool get isEntranceGuard => role == GuardRole.entrance;
   bool get isExitGuard => role == GuardRole.exit;
 
-  String get roleDisplayName => isEntranceGuard ? 'Guard 1 — Entrance' : 'Guard 2 — Exit';
-  String get gateDisplayName => isEntranceGuard ? 'Gate 1 (Main Ingress)' : 'Gate 2 (Main Egress)';
+  String get roleDisplayName => 'Security Guard — IN / OUT';
+  String get gateDisplayName => assignedGate;
 
   Map<String, dynamic> toJson() => {
     'id': id,

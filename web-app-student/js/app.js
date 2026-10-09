@@ -16,7 +16,7 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const data = { me: null, vehicles: [], violations: [], cases: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
-  const POLL_MS = 15000;
+  const POLL_MS = 5000;
   const DEFAULT_TITLE = document.title;
   let pollTimer = null;
 
@@ -286,28 +286,41 @@
     pollTimer = null;
   }
 
+  function syncStatus(state) {
+    document.body.dataset.syncState = state;
+    let banner = $('ownerSyncStatus');
+    if (!banner) {
+      banner = document.createElement('div'); banner.id = 'ownerSyncStatus';
+      banner.setAttribute('role', 'status');
+      banner.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:60;padding:10px 16px;border-radius:8px;background:#fff5e8;color:#854d0e;font-size:13px;box-shadow:0 2px 8px #0002';
+      document.body.append(banner);
+    }
+    banner.hidden = state === 'live';
+    banner.textContent = 'Connection lost. Showing earlier information. Trying again…';
+  }
+  let refreshBusy = false, revisions = null;
   async function refresh() {
-    if (!data.me || document.hidden || $('screenApp').hidden) return;
+    if (!data.me || document.hidden || $('screenApp').hidden || refreshBusy) return;
+    refreshBusy = true;
     try {
-      const [me, alerts, activity, notices] = await Promise.all([StudentApi.me(), StudentApi.alerts(), StudentApi.activity(), StudentApi.notices()]);
-      const before = JSON.stringify([data.me.summary, data.alerts, data.activity.slice(0, 20), (data.notices || []).map(n => n.id)]);
-      if (before === JSON.stringify([me.summary, alerts, activity.slice(0, 20), notices.map(n => n.id)])) return;
-
-      const knownNotices = new Set((data.notices || []).map(n => n.id));
-      const newNotice = notices.find(n => !knownNotices.has(n.id));
-
+      const update = await StudentApi.updates();
+      if (revisions && JSON.stringify(update.revisions) === JSON.stringify(revisions)) { syncStatus('live'); return; }
+      const passChanged = !revisions || ['vehicles', 'cases', 'session'].some(k => update.revisions[k] !== revisions[k]);
+      const [me, vehicles, violations, activity, alerts, payments, notices, cases] = await Promise.all([
+        StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices(), StudentApi.cases()
+      ]);
+      if ($('screenApp').hidden || !StudentApi.hasToken()) return;
       const known = new Set(data.alerts.active.map(a => a.id));
       const raised = alerts.active.filter(a => !known.has(a.id));
-      const standingChanged = JSON.stringify(me.summary) !== JSON.stringify(data.me.summary);
-      Object.assign(data, { me, alerts, activity, notices });
-      if (standingChanged || raised.length || alerts.active.length !== known.size || newNotice) {
-        const [vehicles, violations, payments, cases] = await Promise.all([StudentApi.vehicles(), StudentApi.violations(), StudentApi.payments(), StudentApi.cases()]);
-        Object.assign(data, { vehicles, violations, payments, cases });
-      }
-      renderAll();
+      Object.assign(data, {me, vehicles, violations, activity, alerts, payments, notices, cases});
+      data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
+      $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
+      if (passChanged && !$('qrZoom').hidden) $('qrZoom').hidden = true;
+      renderAll(); revisions = update.revisions;
+      syncStatus('live');
       if (raised.length) notifyFlag(raised[0]);
-      else if (newNotice) toast(`${newNotice.title} (${newNotice.plateNumber})`, 'error');
-    } catch (_) { /* a missed check is retried on the next tick; sign-out is handled by the API client */ }
+    } catch (_) { syncStatus('offline'); }
+    finally { refreshBusy = false; }
   }
 
   function notifyFlag(a) {

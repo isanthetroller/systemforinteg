@@ -152,36 +152,16 @@ function requireStaffOrScanner($pdo) {
         return requireStaff($pdo, ['admin', 'guard'], true);
     }
 
-    $key = $_SERVER['HTTP_X_API_KEY'] ?? '';
-    $keyValid = $key !== '' && hash_equals(SP_SCANNER_API_KEY, $key);
-    $keyRequired = defined('SP_SCANNER_KEY_REQUIRED') ? SP_SCANNER_KEY_REQUIRED : true;
-
-    if ($keyValid) {
-        return [
-            'id' => null,
-            'username' => 'mobile-scanner',
-            'full_name' => 'Mobile Scanner',
-            'role' => 'scanner',
-            'badge_number' => null,
-            'is_scanner' => true,
-        ];
-    }
-
-    // A request without a valid scanner key that presents an invalid session token is rejected
+    // A rejected staff session must never become a scanner/device session.
     if (getBearerToken() !== null) {
         sendResponse(401, ['code' => 'AUTH_REQUIRED'], 'Session expired or invalid. Please sign in again.');
     }
-
-    if (!$keyRequired) {
-        return [
-            'id' => null,
-            'username' => 'mobile-scanner',
-            'full_name' => 'Mobile Scanner',
-            'role' => 'scanner',
-            'badge_number' => null,
-            'is_scanner' => true,
-        ];
+    $key = $_SERVER['HTTP_X_API_KEY'] ?? '';
+    if ($key !== '' && hash_equals(SP_SCANNER_API_KEY, $key)) {
+        return ['id' => null, 'username' => 'mobile-scanner', 'full_name' => 'Mobile Scanner',
+            'role' => 'scanner', 'badge_number' => null, 'is_scanner' => true];
     }
+    // Anonymous legacy access is no longer accepted, even on an older configuration.
     sendResponse(401, ['code' => 'AUTH_REQUIRED'], 'Please sign in or provide a valid scanner key.');
 }
 

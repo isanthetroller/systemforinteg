@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../../models/user_model.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../repositories/gate_repository.dart';
@@ -13,7 +14,6 @@ import '../../cases/screens/cases_screen.dart';
 import '../../dashboard/widgets/audit_log_card.dart';
 import '../../dashboard/widgets/dashboard_kpi_row.dart';
 import '../../dashboard/widgets/quick_scan_banner.dart';
-import '../../scanner/screens/exit_scanner_screen.dart';
 import '../../scanner/screens/qr_scanner_screen.dart';
 import '../../visitor/screens/visitor_registration_screen.dart';
 import '../widgets/handover_note_field.dart';
@@ -22,10 +22,7 @@ import '../widgets/shift_banner.dart';
 class GuardShellScreen extends StatefulWidget {
   final GuardUser user;
 
-  const GuardShellScreen({
-    super.key,
-    required this.user,
-  });
+  const GuardShellScreen({super.key, required this.user});
 
   @override
   State<GuardShellScreen> createState() => _GuardShellScreenState();
@@ -34,6 +31,7 @@ class GuardShellScreen extends StatefulWidget {
 class _GuardShellScreenState extends State<GuardShellScreen> {
   late GuardUser _currentUser;
   int _selectedIndex = 0;
+  bool _movementPending = false;
 
   // Shared Dashboard State
   late List<AuditLogEntry> _auditLogs;
@@ -47,19 +45,48 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     _currentUser = widget.user;
     _auditLogs = List<AuditLogEntry>.from(_repository.getInitialAuditLogs());
     _fetchLiveLogs();
+    ApiService.sessionError.addListener(_onSessionEnded);
+    ApiService.currentSessionUser.addListener(_onSessionUpdated);
     SyncQueueService().lastSyncTimeNotifier.addListener(_onAutoSyncCompleted);
   }
 
   @override
   void dispose() {
-    SyncQueueService().lastSyncTimeNotifier.removeListener(_onAutoSyncCompleted);
+    SyncQueueService().lastSyncTimeNotifier.removeListener(
+      _onAutoSyncCompleted,
+    );
+    ApiService.sessionError.removeListener(_onSessionEnded);
+    ApiService.currentSessionUser.removeListener(_onSessionUpdated);
     super.dispose();
+  }
+
+  void _onSessionEnded() {
+    final message = ApiService.sessionError.value;
+    if (!mounted || message == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AuthService().userNotifier.value = null;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (_) => false,
+      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
+
+  void _onSessionUpdated() {
+    final user = ApiService.currentSessionUser.value;
+    if (!mounted || user == null) return;
+    setState(() {
+      _currentUser = GuardUser.fromJson(user);
+    });
   }
 
   void _onAutoSyncCompleted() {
     if (mounted) {
       final cached = LocalCacheService.getCachedLogs();
-      if (cached.isNotEmpty) {
+      {
         setState(() {
           _auditLogs = cached;
         });
@@ -72,26 +99,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     SyncQueueService().requestRefresh();
     await SyncQueueService().processQueue();
     final serverLogs = LocalCacheService.getCachedLogs();
-    if (mounted && serverLogs.isNotEmpty) {
+    if (mounted) {
       setState(() {
         _auditLogs = serverLogs;
       });
     }
-  }
-
-  void _switchRole(GuardRole newRole) {
-    setState(() {
-      _currentUser = GuardUser(
-        id: newRole == GuardRole.entrance ? 'GRD-ENTRANCE-01' : 'GRD-EXIT-02',
-        username: newRole == GuardRole.entrance ? 'guard1' : 'guard2',
-        fullName: newRole == GuardRole.entrance ? 'Officer J. Hernandez' : 'Officer R. Mendoza',
-        badgeNumber: newRole == GuardRole.entrance ? 'NCST-SEC-01' : 'NCST-SEC-02',
-        role: newRole,
-        assignedGate: newRole == GuardRole.entrance ? 'Gate 1 (Main Ingress)' : 'Gate 2 (Main Egress)',
-        loginTime: DateTime.now(),
-      );
-      _selectedIndex = 0;
-    });
   }
 
   Future<void> _toggleScanFeedback() async {
@@ -108,6 +120,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   }
 
   void _confirmLogout() {
+    if (_movementPending) return;
     var handoverNote = '';
     final onDuty = ShiftBanner.onDuty.value;
     showDialog(
@@ -118,7 +131,9 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Are you sure you want to end your security guard shift and sign out?'),
+            const Text(
+              'Are you sure you want to end your security guard shift and sign out?',
+            ),
             if (onDuty) ...[
               const SizedBox(height: 12),
               HandoverNoteField(
@@ -131,7 +146,10 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('CANCEL')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('CANCEL'),
+          ),
           ElevatedButton(
             onPressed: () async {
               final note = handoverNote.trim();
@@ -170,7 +188,9 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   }
 
   int get _blockedTodayCount => _auditLogs.where((l) => l.isBlocked).length;
-  int get _totalEntriesToday => _auditLogs.where((l) => l.isInside || l.action.toLowerCase().contains('entry')).length;
+  int get _totalEntriesToday => _auditLogs
+      .where((l) => l.isInside || l.action.toLowerCase().contains('entry'))
+      .length;
 
   List<AuditLogEntry> get _filteredLogs {
     return _auditLogs.where((log) {
@@ -192,11 +212,16 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   Widget build(BuildContext context) {
     final isEntrance = _currentUser.isEntranceGuard;
 
-    return Scaffold(
-      backgroundColor: _selectedIndex == 1 ? Colors.black : NcstColors.slate100,
-      appBar: _buildAppBar(isEntrance),
-      body: _buildBody(isEntrance),
-      bottomNavigationBar: _buildBottomNav(isEntrance),
+    return PopScope(
+      canPop: !_movementPending,
+      child: Scaffold(
+        backgroundColor: _selectedIndex == 1
+            ? Colors.black
+            : NcstColors.slate100,
+        appBar: _buildAppBar(isEntrance),
+        body: _buildBody(isEntrance),
+        bottomNavigationBar: _buildBottomNav(isEntrance),
+      ),
     );
   }
 
@@ -232,7 +257,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
                   ),
                   const SizedBox(width: 5),
                   Text(
-                    _currentUser.roleDisplayName,
+                    _currentUser.fullName,
                     style: const TextStyle(fontSize: 11, color: Colors.white70),
                   ),
                 ],
@@ -242,9 +267,9 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
         ],
       ),
       actions: [
-        // Role Switcher Button (Allows instant switching between Guard 1 and Guard 2)
+        // The checkpoint comes from the authenticated account, not a local role switch.
         PopupMenuButton<String>(
-          tooltip: 'Switch Guard Role / Account',
+          tooltip: 'Guard account',
           icon: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
@@ -256,48 +281,29 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  isEntrance ? 'G1 (IN)' : 'G2 (OUT)',
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white),
+                  'IN / OUT',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
                 ),
-                const Icon(Icons.arrow_drop_down, color: Colors.white, size: 16),
+                const Icon(
+                  Icons.arrow_drop_down,
+                  color: Colors.white,
+                  size: 16,
+                ),
               ],
             ),
           ),
           onSelected: (val) {
-            if (val == 'switch_to_entrance') {
-              _switchRole(GuardRole.entrance);
-            } else if (val == 'switch_to_exit') {
-              _switchRole(GuardRole.exit);
-            } else if (val == 'toggle_sound') {
+            if (val == 'toggle_sound') {
               _toggleScanFeedback();
             } else if (val == 'logout') {
               _confirmLogout();
             }
           },
           itemBuilder: (ctx) => [
-            PopupMenuItem(
-              value: 'switch_to_entrance',
-              enabled: !isEntrance,
-              child: Row(
-                children: const [
-                  Icon(Icons.login_rounded, size: 18, color: NcstColors.green),
-                  SizedBox(width: 8),
-                  Flexible(child: Text('Switch to Guard 1 (Entrance)', overflow: TextOverflow.ellipsis)),
-                ],
-              ),
-            ),
-            PopupMenuItem(
-              value: 'switch_to_exit',
-              enabled: isEntrance,
-              child: Row(
-                children: const [
-                  Icon(Icons.logout_rounded, size: 18, color: NcstColors.navy),
-                  SizedBox(width: 8),
-                  Flexible(child: Text('Switch to Guard 2 (Exit)', overflow: TextOverflow.ellipsis)),
-                ],
-              ),
-            ),
-            const PopupMenuDivider(),
             PopupMenuItem(
               key: const Key('toggleScanSound'),
               value: 'toggle_sound',
@@ -314,7 +320,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
               value: 'logout',
               child: Row(
                 children: const [
-                  Icon(Icons.power_settings_new, size: 18, color: NcstColors.crimson),
+                  Icon(
+                    Icons.power_settings_new,
+                    size: 18,
+                    color: NcstColors.crimson,
+                  ),
                   SizedBox(width: 8),
                   Flexible(child: Text('Sign Out of Terminal', overflow: TextOverflow.ellipsis, style: TextStyle(color: NcstColors.crimson))),
                 ],
@@ -328,79 +338,45 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   }
 
   Widget _buildBody(bool isEntrance) {
-    if (isEntrance) {
-      // Guard 1 — Entrance
-      switch (_selectedIndex) {
-        case 0:
-          return _buildDashboardFeed(isEntrance);
-        case 1:
-          return QrScannerScreen(
-            isEmbedded: true,
-            repository: _repository,
-            onDecision: (entry) {
-              setState(() {
-                _auditLogs.removeWhere((l) => l.id == entry.id);
-                _auditLogs.insert(0, entry);
-                _selectedIndex = 0;
-              });
-              _fetchLiveLogs();
-            },
-            onReturnToDashboard: () {
-              setState(() {
-                _selectedIndex = 0;
-              });
-              _fetchLiveLogs();
-            },
-            onNavigateToVisitorRegistration: () {
-              setState(() {
-                _selectedIndex = 2;
-              });
-            },
-          );
-        case 2:
-          return VisitorRegistrationScreen(
-            currentGuard: _currentUser,
-            onReturnToDashboard: () {
-              setState(() {
-                _selectedIndex = 0;
-              });
-              _fetchLiveLogs();
-            },
-          );
-        case 3:
-          return const CasesScreen();
-        default:
-          return const SizedBox.shrink();
-      }
-    } else {
-      // Guard 2 — Exit: Dashboard and Scan / Exit only (no visitor)
-      switch (_selectedIndex) {
-        case 0:
-          return _buildDashboardFeed(isEntrance);
-        case 1:
-          return ExitScannerScreen(
-            isEmbedded: true,
-            currentGuard: _currentUser,
-            onDecision: (entry) {
-              setState(() {
-                _auditLogs.removeWhere((l) => l.id == entry.id);
-                _auditLogs.insert(0, entry);
-                _selectedIndex = 0;
-              });
-              _fetchLiveLogs();
-            },
-            onReturnToDashboard: () {
-              setState(() {
-                _selectedIndex = 0;
-              });
-              _fetchLiveLogs();
-            },
-          );
-        case 2:
-          return const CasesScreen();
-        default:
-          return const SizedBox.shrink();
-      }
+    switch (_selectedIndex) {
+      case 0:
+        return _buildDashboardFeed(isEntrance);
+      case 1:
+        return QrScannerScreen(
+          isEmbedded: true,
+          automaticMovement: true,
+          currentGuard: _currentUser,
+          onMovementPendingChanged: (pending) {
+            if (mounted) setState(() => _movementPending = pending);
+          },
+          repository: _repository,
+          onDecision: (entry) {
+            setState(() {
+              _auditLogs.removeWhere((l) => l.id == entry.id);
+              _auditLogs.insert(0, entry);
+              _selectedIndex = 0;
+            });
+            _fetchLiveLogs();
+          },
+          onReturnToDashboard: () {
+            setState(() => _selectedIndex = 0);
+            _fetchLiveLogs();
+          },
+          onNavigateToVisitorRegistration: () =>
+              setState(() => _selectedIndex = 2),
+        );
+      case 2:
+        return VisitorRegistrationScreen(
+          currentGuard: _currentUser,
+          onReturnToDashboard: () {
+            setState(() => _selectedIndex = 0);
+            _fetchLiveLogs();
+          },
+        );
+      case 3:
+        return const CasesScreen();
+      default:
+        return const SizedBox.shrink();
     }
   }
 
@@ -465,57 +441,47 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
       ),
       child: BottomNavigationBar(
         currentIndex: _selectedIndex,
-        onTap: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
+        onTap: _movementPending
+            ? null
+            : (index) {
+                setState(() {
+                  _selectedIndex = index;
+                });
+              },
         backgroundColor: NcstColors.white,
         selectedItemColor: NcstColors.green,
         unselectedItemColor: NcstColors.slate500,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11),
-        unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11),
+        selectedLabelStyle: const TextStyle(
+          fontWeight: FontWeight.w800,
+          fontSize: 11,
+        ),
+        unselectedLabelStyle: const TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
         elevation: 8,
-        items: isEntrance
-            ? const [
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.dashboard_outlined),
-                  activeIcon: Icon(Icons.dashboard),
-                  label: 'Dashboard',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.qr_code_scanner_outlined),
-                  activeIcon: Icon(Icons.qr_code_scanner),
-                  label: 'Scan / Entry',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.person_add_alt_1_outlined),
-                  activeIcon: Icon(Icons.person_add_alt_1),
-                  label: 'Visitor',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.folder_open_outlined),
-                  activeIcon: Icon(Icons.folder_open),
-                  label: 'Cases',
-                ),
-              ]
-            : const [
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.dashboard_outlined),
-                  activeIcon: Icon(Icons.dashboard),
-                  label: 'Dashboard',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.qr_code_scanner_outlined),
-                  activeIcon: Icon(Icons.qr_code_scanner),
-                  label: 'Scan / Exit',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.folder_open_outlined),
-                  activeIcon: Icon(Icons.folder_open),
-                  label: 'Cases',
-                ),
-              ],
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard_outlined),
+            activeIcon: Icon(Icons.dashboard),
+            label: 'Dashboard',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.qr_code_scanner_outlined),
+            activeIcon: Icon(Icons.qr_code_scanner),
+            label: 'Scan IN / OUT',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_add_alt_1_outlined),
+            activeIcon: Icon(Icons.person_add_alt_1),
+            label: 'Visitor',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.folder_open_outlined),
+            activeIcon: Icon(Icons.folder_open),
+            label: 'Cases',
+          ),
+        ],
       ),
     );
   }

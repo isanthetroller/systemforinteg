@@ -143,7 +143,7 @@ class ScannedPersonCard extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            vehicle.flagReason ?? 'Vehicle is suspended or banned by administrator / 3-strike policy. Do not allow entrance.',
+                            vehicle.flagReason ?? 'Vehicle registration is suspended or a case is unresolved. Contact the Security Office before approving.',
                             style: const TextStyle(fontWeight: FontWeight.w600, color: NcstColors.slate800, fontSize: 11.5),
                           ),
                         ],

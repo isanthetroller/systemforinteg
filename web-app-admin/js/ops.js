@@ -161,4 +161,7 @@
     setInterval(() => { if (!document.hidden) refreshOccupancy(); }, 60 * 1000);
     document.addEventListener('sp:gate-passage', refreshOccupancy);
   });
+  window.SPLive?.subscribe(async changed => {
+    if (changed.some(k => ['movements','visitors','settings'].includes(k))) await refreshOccupancy();
+  });
 })();

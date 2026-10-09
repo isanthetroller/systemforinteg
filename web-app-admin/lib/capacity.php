@@ -20,7 +20,11 @@ function campusInsideCounts($pdo) {
                SELECT 1 FROM `gate_logs`
                WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER(`vehicles`.`plate_number`), '-', ''), ' ', '')
                  AND `action` = 'Exit Approved'
-                 AND `logged_at` >= `vehicles`.`last_entry_time`
+                 AND (`logged_at` > `vehicles`.`last_entry_time` OR (`logged_at` = `vehicles`.`last_entry_time` AND `id` > COALESCE((
+                     SELECT MAX(e.`id`) FROM `gate_logs` e
+                     WHERE REPLACE(REPLACE(UPPER(e.`plate_number`), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER(`vehicles`.`plate_number`), '-', ''), ' ', '')
+                       AND e.`action` = 'Entry Recorded' AND e.`logged_at` = `vehicles`.`last_entry_time`
+                 ), 0)))
            ))
     ")->fetch()['cnt'];
     $visitors = (int)$pdo->query("

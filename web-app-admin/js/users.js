@@ -85,6 +85,7 @@
       staff = await ApiClient.getUsers();
       render();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       if (body) body.innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
     }
   }
@@ -163,6 +164,7 @@
       }
       load();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       errEl.textContent = err.message;
       errEl.classList.remove('hidden');
     } finally {
@@ -198,6 +200,7 @@
       }
       load();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       SP.showToast(err.message, 'error');
     }
   }
@@ -219,6 +222,7 @@
       SP.showToast(`${u.username} is now ${status}.`, 'success');
       load();
     } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
       SP.showToast(err.message, 'error');
     }
   }
@@ -257,5 +261,8 @@
         SP.showToast('Copy failed. Select the password and copy it manually.');
       }
     });
+  });
+  window.SPLive?.subscribe(async changed => {
+    if (changed.includes('staff') && $('staffView').classList.contains('active')) await load();
   });
 })();

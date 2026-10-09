@@ -73,7 +73,7 @@ void main() {
     expect(find.text('CLEARED (TO GO)'), findsOneWidget);
   });
 
-  testWidgets('Login as Guard 1 routes to Entrance Dashboard and navigation', (WidgetTester tester) async {
+  testWidgets('Guard 1 can open the shared IN / OUT scanner', (WidgetTester tester) async {
     await tester.pumpWidget(const NcstGateSecurityApp());
     await tester.pump();
 
@@ -88,12 +88,12 @@ void main() {
 
     // 3. Should arrive at Guard 1 Entrance Dashboard
     expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.text('Scan / Entry'), findsOneWidget);
+    expect(find.text('Scan IN / OUT'), findsOneWidget);
     expect(find.text('Visitor'), findsOneWidget);
     expect(find.text('AUDIT LOG'), findsOneWidget);
   });
 
-  testWidgets('Login as Guard 2 routes to Exit Dashboard and navigation', (WidgetTester tester) async {
+  testWidgets('Guard 2 can open the same IN / OUT scanner and visitor tools', (WidgetTester tester) async {
     await tester.pumpWidget(const NcstGateSecurityApp());
     await tester.pump();
 
@@ -107,8 +107,8 @@ void main() {
 
     // 3. Should arrive at Guard 2 Exit Dashboard with only Dashboard & Scan / Exit (no visitor)
     expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.text('Scan / Exit'), findsOneWidget);
+    expect(find.text('Scan IN / OUT'), findsOneWidget);
     expect(find.text('Active Passes'), findsNothing);
-    expect(find.text('Visitor'), findsNothing);
+    expect(find.text('Visitor'), findsOneWidget);
   });
 }

@@ -9,7 +9,6 @@ import 'package:systemforinteg/features/scanner/screens/exit_scanner_screen.dart
 import 'package:systemforinteg/features/scanner/screens/qr_scanner_screen.dart';
 import 'package:systemforinteg/features/scanner/widgets/scan_rejection_view.dart';
 import 'package:systemforinteg/models/user_model.dart';
-import 'package:systemforinteg/models/vehicle_model.dart';
 import 'package:systemforinteg/services/api_service.dart';
 import 'package:systemforinteg/services/evidence_service.dart';
 import 'package:systemforinteg/services/local_cache_service.dart';
@@ -27,16 +26,6 @@ void main() {
   final Set<String> releasedExits = <String>{};
   final List<Map<String, dynamic>> dbEvidence = [];
   int evidenceStatus = 201;
-
-  final guard1 = GuardUser(
-    id: 'guard-01',
-    username: 'guard1',
-    fullName: 'Officer Entrance',
-    badgeNumber: 'G-101',
-    role: GuardRole.entrance,
-    assignedGate: 'Gate 1 (Main Ingress)',
-    loginTime: DateTime.now(),
-  );
 
   final guard2 = GuardUser(
     id: 'guard-02',

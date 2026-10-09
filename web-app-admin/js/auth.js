@@ -262,6 +262,12 @@
   });
 
   window.SPAuth = {
+    updateUser(user) {
+      const previous = session.user;
+      if (!previous || user.id !== previous.id) return;
+      applyUser(user);
+      if (previous.role !== user.role && window.SP) SP.switchView(user.role === 'admin' ? 'dashboardView' : 'gateView');
+    },
     whenAuthenticated(fn) {
       session.callbacks.push(fn);
       if (session.user && !session.user.mustChangePassword) fn(session.user);

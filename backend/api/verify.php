@@ -41,6 +41,7 @@ $data = getJsonInput();
 $qrCode = isset($data['qr_code']) ? trim((string)$data['qr_code']) : '';
 $plateInput = isset($data['plate']) ? trim((string)$data['plate']) : '';
 $gateType = (isset($data['gate_type']) && $data['gate_type'] === 'Egress') ? 'Egress' : 'Ingress';
+$movementPrepare = !empty($spMovementPreparation);
 
 if ($qrCode === '' && $plateInput === '') {
     sendResponse(400, null, 'Provide a scanned qr_code or a plate to look up.');
@@ -183,6 +184,14 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
 /* --------------------------------------------------------------------------
    2. Visitor pass rules & security incident holds
    -------------------------------------------------------------------------- */
+if ($movementPrepare) {
+    $insideForMovement = ($vehicle || $visitor) && movementInside($vehicle ?: $visitor, $vehicle ? 'vehicle' : 'visitor', $pdo);
+    $gateType = $insideForMovement ? 'Egress' : 'Ingress';
+    if ($insideForMovement && $result === 'EXPIRED') {
+        $warnings[] = $reasonDetail;
+        $result = 'VALID';
+    }
+}
 $revokedInside = $visitor && $visitor['status'] === 'Revoked'
     && !empty($visitor['entry_time']) && empty($visitor['exit_time']);
 
@@ -333,7 +342,7 @@ if ($result === 'MANUAL') {
 
 $currentlyInside = false;
 if ($vehicle) {
-    $currentlyInside = $vehicle['status'] === 'Inside Campus';
+    $currentlyInside = vehicleRecordedInside($pdo, $vehicle);
     if ($accepted && $gateType === 'Ingress' && $currentlyInside) {
         $warnings[] = 'Vehicle is already recorded inside campus (missed exit scan?).';
     }
@@ -348,7 +357,7 @@ if ($vehicle) {
    5. Side effects: log every rejection; open incidents for forged / revoked passes
    -------------------------------------------------------------------------- */
 $autoLogged = false;
-if (!$accepted && $result !== 'NOT_FOUND') {
+if (!$movementPrepare && !$accepted && $result !== 'NOT_FOUND') {
     $plateForLog = $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $claimedPlate);
     $ownerName = $vehicle['owner_name'] ?? ($visitor['visitor_name'] ?? null);
     $vehicleType = $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : null);
@@ -420,6 +429,8 @@ sendResponse(200, [
     // The open case that holds this vehicle and its latest step (so the guard can tell the owner what to do)
     'case' => ($vehicle && $result === 'BANNED') ? caseOpenForPlate($pdo, $vehicle['plate_number']) : null,
     'currentlyInside' => $currentlyInside,
+    'movement' => $movementPrepare && $accepted && ($vehicle || $visitor)
+        ? issueMovementTicket($pdo, $actor, $vehicle ?: $visitor, $vehicle ? 'vehicle' : 'visitor', ($data['lookup_method'] ?? '') === 'manual' || $passType === 'manual' ? 'manual' : 'qr') : null,
     // Where it is and who to call: shown to the guard when a vehicle that is already inside is scanned again
     'onCampus' => ($vehicle && $currentlyInside) ? onCampusDetails($pdo, $vehicle, $now) : null,
     'vehicle' => $vehicle ? vehicleForOutput($pdo, $vehicle, false) : null,

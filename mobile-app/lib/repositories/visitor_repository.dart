@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+
 import '../data/mock_data.dart';
 import '../models/visitor_pass_model.dart';
 import '../services/api_service.dart';
@@ -15,7 +17,8 @@ class VisitorRepository {
   }
 
   final List<VisitorPass> _passes = [];
-  final ValueNotifier<List<VisitorPass>> passesNotifier = ValueNotifier<List<VisitorPass>>([]);
+  final ValueNotifier<List<VisitorPass>> passesNotifier =
+      ValueNotifier<List<VisitorPass>>([]);
 
   /// Initial test dataset covering all operational pass states:
   /// - Active pass (ready for exit checkout)
@@ -40,60 +43,76 @@ class VisitorRepository {
           visitorName: 'Maria Elena Gomez',
           plateNumber: 'NDK-1234',
           vehiclePhotoUrl: 'assets/images/kriz_monares.jpg',
-        entryTime: now.subtract(const Duration(hours: 1, minutes: 20)),
-        expiryTime: now.add(const Duration(hours: 6, minutes: 40)),
-        status: VisitorPassStatus.active,
-        registeredByGuard: 'Officer J. Hernandez',
-        gatePoint: 'Gate 1 (Main Ingress)',
-        notes: 'Campus Registrar Appointment',
-      ),
+          entryTime: now.subtract(const Duration(hours: 1, minutes: 20)),
+          expiryTime: now.add(const Duration(hours: 6, minutes: 40)),
+          status: VisitorPassStatus.active,
+          registeredByGuard: 'Officer J. Hernandez',
+          gatePoint: 'Gate 1 (Main Ingress)',
+          notes: 'Campus Registrar Appointment',
+        ),
 
-      // 2. Expired Pass (Overtime stay > 8 hours ago)
-      VisitorPass(
-        passId: 'NCST-VIS-2026-1002',
-        visitorName: 'Pedro Santos Jr.',
-        plateNumber: 'VIS-EXPIRED',
-        vehiclePhotoUrl: null,
-        entryTime: now.subtract(const Duration(hours: 9, minutes: 45)),
-        expiryTime: now.subtract(const Duration(hours: 1, minutes: 45)), // Expired
-        status: VisitorPassStatus.expired,
-        registeredByGuard: 'Officer J. Hernandez',
-        gatePoint: 'Gate 1 (Main Ingress)',
-        notes: 'Overtime Visitor Stay',
-      ),
+        // 2. Expired Pass (Overtime stay > 8 hours ago)
+        VisitorPass(
+          passId: 'NCST-VIS-2026-1002',
+          visitorName: 'Pedro Santos Jr.',
+          plateNumber: 'VIS-EXPIRED',
+          vehiclePhotoUrl: null,
+          entryTime: now.subtract(const Duration(hours: 9, minutes: 45)),
+          expiryTime: now.subtract(
+            const Duration(hours: 1, minutes: 45),
+          ), // Expired
+          status: VisitorPassStatus.expired,
+          registeredByGuard: 'Officer J. Hernandez',
+          gatePoint: 'Gate 1 (Main Ingress)',
+          notes: 'Overtime Visitor Stay',
+        ),
 
-      // 3. Blocked Pass (Security Incident / Blacklisted)
-      VisitorPass(
-        passId: 'NCST-VIS-2026-1003',
-        visitorName: 'Juan Carlos Reyes',
-        plateNumber: 'VIS-BLOCKED',
-        vehiclePhotoUrl: null,
-        entryTime: now.subtract(const Duration(hours: 2)),
-        expiryTime: now.add(const Duration(hours: 6)),
-        status: VisitorPassStatus.blocked,
-        registeredByGuard: 'Officer J. Hernandez',
-        gatePoint: 'Gate 1 (Main Ingress)',
-        notes: 'Security Blacklist: Trespassing / Reckless driving',
-      ),
+        // 3. Blocked Pass (Security Incident / Blacklisted)
+        VisitorPass(
+          passId: 'NCST-VIS-2026-1003',
+          visitorName: 'Juan Carlos Reyes',
+          plateNumber: 'VIS-BLOCKED',
+          vehiclePhotoUrl: null,
+          entryTime: now.subtract(const Duration(hours: 2)),
+          expiryTime: now.add(const Duration(hours: 6)),
+          status: VisitorPassStatus.blocked,
+          registeredByGuard: 'Officer J. Hernandez',
+          gatePoint: 'Gate 1 (Main Ingress)',
+          notes: 'Security Blacklist: Trespassing / Reckless driving',
+        ),
 
-      // 4. Used Pass (Already checked out previously)
-      VisitorPass(
-        passId: 'NCST-VIS-2026-1004',
-        visitorName: 'Ana Patricia Lim',
-        plateNumber: 'VIS-USED',
-        vehiclePhotoUrl: null,
-        entryTime: now.subtract(const Duration(hours: 4)),
-        expiryTime: now.add(const Duration(hours: 4)),
-        exitTime: now.subtract(const Duration(hours: 1)),
-        status: VisitorPassStatus.used,
-        registeredByGuard: 'Officer J. Hernandez',
-        gatePoint: 'Gate 1 (Main Ingress)',
-        notes: 'Regular Campus Visit - Completed',
-      ),
-    ]);
+        // 4. Used Pass (Already checked out previously)
+        VisitorPass(
+          passId: 'NCST-VIS-2026-1004',
+          visitorName: 'Ana Patricia Lim',
+          plateNumber: 'VIS-USED',
+          vehiclePhotoUrl: null,
+          entryTime: now.subtract(const Duration(hours: 4)),
+          expiryTime: now.add(const Duration(hours: 4)),
+          exitTime: now.subtract(const Duration(hours: 1)),
+          status: VisitorPassStatus.used,
+          registeredByGuard: 'Officer J. Hernandez',
+          gatePoint: 'Gate 1 (Main Ingress)',
+          notes: 'Regular Campus Visit - Completed',
+        ),
+      ]);
     }
 
     passesNotifier.value = List.unmodifiable(_passes);
+  }
+
+  Future<void> refreshFromServer() async {
+    final fresh = await ApiService.fetchVisitorPasses();
+    final pending = _passes
+        .where((p) => p.dbId == null && !fresh.any((r) => r.passId == p.passId))
+        .toList();
+    _passes
+      ..clear()
+      ..addAll([...fresh, ...pending]);
+    passesNotifier.value = List.unmodifiable(_passes);
+    await LocalCacheService.saveVisitorPasses(
+      _passes.map((p) => p.toCacheJson()).toList(),
+    );
   }
 
   List<VisitorPass> getAllPasses() => List.unmodifiable(_passes);
@@ -108,13 +127,17 @@ class VisitorRepository {
   Future<VisitorPass> registerPass(VisitorPass pass) async {
     final issued = await ApiService.postVisitorPass(pass);
     if (!issued) {
-      throw VisitorPassNotIssued(ApiService.lastWriteError ?? 'The server refused this pass.');
+      throw VisitorPassNotIssued(
+        ApiService.lastWriteError ?? 'The server refused this pass.',
+      );
     }
 
     final actualPass = ApiService.lastCreatedVisitorPass ?? pass;
     _passes.insert(0, actualPass);
     passesNotifier.value = List.unmodifiable(_passes);
-    await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toCacheJson()).toList());
+    await LocalCacheService.saveVisitorPasses(
+      _passes.map((p) => p.toCacheJson()).toList(),
+    );
 
     return actualPass;
   }
@@ -129,7 +152,9 @@ class VisitorRepository {
     if (parsed != null) {
       // Find matching in local registry
       final existing = _passes.cast<VisitorPass?>().firstWhere(
-        (p) => p?.passId == parsed.passId || p?.plateNumber.toUpperCase() == parsed.plateNumber.toUpperCase(),
+        (p) =>
+            p?.passId == parsed.passId ||
+            p?.plateNumber.toUpperCase() == parsed.plateNumber.toUpperCase(),
         orElse: () => null,
       );
       return existing ?? parsed;
@@ -143,9 +168,13 @@ class VisitorRepository {
     }
 
     // 3. Normalized plate match
-    final normQuery = clean.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+    final normQuery = clean
+        .replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')
+        .toLowerCase();
     for (final p in _passes) {
-      final normPlate = p.plateNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+      final normPlate = p.plateNumber
+          .replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')
+          .toLowerCase();
       if (normPlate == normQuery) {
         return p;
       }
@@ -166,7 +195,9 @@ class VisitorRepository {
       );
       _passes[idx] = updated;
       passesNotifier.value = List.unmodifiable(_passes);
-      await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toCacheJson()).toList());
+      await LocalCacheService.saveVisitorPasses(
+        _passes.map((p) => p.toCacheJson()).toList(),
+      );
 
       // Notify backend
       unawaited(ApiService.postVisitorExit(passId, updated.plateNumber));
@@ -185,7 +216,9 @@ class VisitorRepository {
       );
       _passes[idx] = updated;
       passesNotifier.value = List.unmodifiable(_passes);
-      await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toCacheJson()).toList());
+      await LocalCacheService.saveVisitorPasses(
+        _passes.map((p) => p.toCacheJson()).toList(),
+      );
       return true;
     }
     return false;

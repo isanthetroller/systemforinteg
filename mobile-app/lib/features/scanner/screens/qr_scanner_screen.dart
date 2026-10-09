@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+
 import '../../../core/utils/scanner_controller_safe.dart';
 import '../../../data/mock_data.dart';
 import '../../../models/scanned_visitor_pass.dart';
@@ -26,6 +28,7 @@ import '../../../core/widgets/evidence_button.dart';
 import '../../../services/evidence_service.dart';
 import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
+import '../widgets/movement_confirmation_card.dart';
 
 class QrScannerScreen extends StatefulWidget {
   final Function(AuditLogEntry) onDecision;
@@ -34,6 +37,9 @@ class QrScannerScreen extends StatefulWidget {
   final bool isEmbedded;
   final GateRepository repository;
   final VehicleRecord? initialVehicle;
+  final GuardUser? currentGuard;
+  final bool automaticMovement;
+  final ValueChanged<bool>? onMovementPendingChanged;
 
   const QrScannerScreen({
     super.key,
@@ -43,13 +49,17 @@ class QrScannerScreen extends StatefulWidget {
     this.isEmbedded = false,
     this.repository = const GateRepository(),
     this.initialVehicle,
+    this.currentGuard,
+    this.automaticMovement = false,
+    this.onMovementPendingChanged,
   });
 
   @override
   State<QrScannerScreen> createState() => _QrScannerScreenState();
 }
 
-class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingObserver {
+class _QrScannerScreenState extends State<QrScannerScreen>
+    with WidgetsBindingObserver {
   MobileScannerController? _cameraController;
   bool _cameraHasError = false;
   bool _isTorchOn = false;
@@ -68,6 +78,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   final ScanFeedbackGate _feedback = ScanFeedbackGate();
   ScanRejectionDetails? _rejectionDetails;
 
+  Map<String, dynamic>? _movementPreview;
+  Map<String, dynamic>? _movementSubmission;
+  String? _movementError;
+  bool _movementRetryPending = false;
+  bool _movementInvalidated = false;
+
   VehicleRecord? _scannedVehicle;
   // Set when the scanned plate / pass code belongs to a visitor day pass that already exists on the server
   ScannedVisitorPass? _visitorPass;
@@ -79,6 +95,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   @override
   void initState() {
     super.initState();
+    ApiService.liveRevision.addListener(_onExternalChange);
     WidgetsBinding.instance.addObserver(this);
     if (widget.initialVehicle != null) {
       final v = widget.initialVehicle!;
@@ -87,10 +104,13 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         final first = v.authorizedDrivers.first;
         _selectedDriverName = first.fullName;
         _selectedRelationship = first.relationship;
-        final isOwner = first.fullName.trim().toLowerCase() == v.ownerName.trim().toLowerCase() ||
+        final isOwner =
+            first.fullName.trim().toLowerCase() ==
+                v.ownerName.trim().toLowerCase() ||
             first.relationship.toLowerCase().contains('self') ||
             first.relationship.toLowerCase().contains('owner');
-        _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
+        _currentPhotoUrl =
+            (first.photoUrl != null && first.photoUrl!.isNotEmpty)
             ? first.photoUrl!
             : (isOwner ? (v.ownerPhotoUrl ?? '') : (v.ownerPhotoUrl ?? ''));
       } else {
@@ -116,19 +136,61 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     }
   }
 
+  String? _liveQr;
+  Future<void> _onExternalChange() async {
+    final previous = _movementPreview;
+    if (!mounted ||
+        _isSubmitting ||
+        _movementRetryPending ||
+        previous == null ||
+        _liveQr == null) {
+      return;
+    }
+    try {
+      final next = await ApiService.movementRequest({
+        'action': 'prepare',
+        'qr_code': _liveQr,
+        'lookup_method': _manualLookup ? 'manual' : 'qr',
+      });
+      if (!mounted || _isSubmitting || !identical(previous, _movementPreview)) {
+        return;
+      }
+      final changed =
+          next['accepted'] != true ||
+          jsonEncode(next['vehicle'] ?? next['visitor']) !=
+              jsonEncode(previous['vehicle'] ?? previous['visitor']) ||
+          (next['movement'] as Map?)?['currentStatus'] !=
+              (previous['movement'] as Map?)?['currentStatus'];
+      if (changed) {
+        setState(() {
+          _movementInvalidated = true;
+          _movementError =
+              'This vehicle or pass changed. Scan again before confirming.';
+        });
+      }
+    } catch (_) {
+      // Keep the preview; its confirmation is still revalidated by the server.
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
+    ApiService.liveRevision.removeListener(_onExternalChange);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
       _cameraController?.stopSafely();
     } else if (state == AppLifecycleState.resumed) {
-      if (_scannedVehicle == null) {
+      if (_scannedVehicle == null &&
+          _movementPreview == null &&
+          !_isValidating &&
+          !_isSubmitting) {
         _cameraController?.startSafely();
       }
     }
@@ -145,12 +207,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         final first = vehicle.authorizedDrivers.first;
         _selectedDriverName = first.fullName;
         _selectedRelationship = first.relationship;
-        final isOwner = first.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+        final isOwner =
+            first.fullName.trim().toLowerCase() ==
+                vehicle.ownerName.trim().toLowerCase() ||
             first.relationship.toLowerCase().contains('self') ||
             first.relationship.toLowerCase().contains('owner');
-        _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
+        _currentPhotoUrl =
+            (first.photoUrl != null && first.photoUrl!.isNotEmpty)
             ? first.photoUrl!
-            : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : (vehicle.ownerPhotoUrl ?? ''));
+            : (isOwner
+                  ? (vehicle.ownerPhotoUrl ?? '')
+                  : (vehicle.ownerPhotoUrl ?? ''));
       } else {
         _selectedDriverName = vehicle.ownerName;
         _selectedRelationship = 'Registered Owner';
@@ -160,7 +227,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   void _resetScanner() {
+    if (_isSubmitting || _movementRetryPending) return;
     setState(() {
+      _movementPreview = null;
+      _movementSubmission = null;
+      _movementError = null;
+      _movementInvalidated = false;
       _scannedVehicle = null;
       _visitorPass = null;
       _checkedVisitorItems.clear();
@@ -182,13 +254,21 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   void _processRawQrCode(String raw) async {
+    if (_movementPreview != null) return;
     final now = DateTime.now();
-    if (_lastScanTime != null && now.difference(_lastScanTime!).inMilliseconds < 1500) {
+    if (_lastScanTime != null &&
+        now.difference(_lastScanTime!).inMilliseconds < 1500) {
       return;
     }
     _lastScanTime = now;
 
-    if (_isValidating || _isSubmitting || _scannedVehicle != null || _visitorPass != null || _rejectionDetails != null) return;
+    if (_isValidating ||
+        _isSubmitting ||
+        _scannedVehicle != null ||
+        _visitorPass != null ||
+        _rejectionDetails != null) {
+      return;
+    }
     final clean = raw.trim();
     if (clean.isEmpty) return;
 
@@ -199,15 +279,181 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _isPatrolInspection = false;
     });
 
-    await _syncVehicleWithDb(null, clean);
+    if (widget.automaticMovement) {
+      await _prepareMovement(clean);
+    } else {
+      await _syncVehicleWithDb(null, clean);
+    }
   }
 
-  Future<void> _syncVehicleWithDb(VehicleRecord? initialVeh, [String? raw]) async {
+  Future<void> _prepareMovement(String qr) async {
+    _liveQr = qr;
+    try {
+      final preview = await ApiService.movementRequest({
+        'action': 'prepare',
+        'qr_code': qr,
+        'lookup_method': _manualLookup ? 'manual' : 'qr',
+      });
+      if (!mounted) return;
+      _scanNotices = ScanNotice.fromVerify(preview);
+      if (preview['accepted'] != true || preview['movement'] is! Map) {
+        setState(() {
+          _isValidating = false;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.blocked,
+            title: 'Pass not approved',
+            vehicle: preview['vehicle'] is Map
+                ? VehicleRecord.fromQrJson(
+                    Map<String, dynamic>.from(preview['vehicle'] as Map),
+                    isSyncedWithDb: true,
+                  )
+                : null,
+            visitor: ScannedVisitorPass.fromVerify(preview),
+            notices: _scanNotices,
+            message:
+                (preview['reason'] ??
+                        preview['message'] ??
+                        'Scan a registered vehicle or an active visitor pass.')
+                    .toString(),
+          );
+        });
+        return;
+      }
+      setState(() {
+        _isValidating = false;
+        _movementPreview = preview;
+        _movementSubmission = null;
+        _movementError = null;
+        _movementRetryPending = false;
+        _movementInvalidated = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isValidating = false;
+        _rejectionDetails = ScanRejectionDetails(
+          type: ScanRejectionType.networkError,
+          title: 'Could not check the pass',
+          message: e.toString(),
+        );
+      });
+    }
+  }
+
+  Future<void> _confirmMovement(int? driverId, bool itemsVerified) async {
+    if (_isSubmitting || _movementPreview == null || _movementInvalidated) {
+      return;
+    }
+    final preview = _movementPreview!;
+    final movement = preview['movement'] as Map;
+    _movementSubmission ??= {
+      'action': 'confirm',
+      'ticket': movement['ticket'],
+      'driver_id': ?driverId,
+      'items_verified': itemsVerified,
+    };
+    setState(() {
+      _isSubmitting = true;
+      _movementError = null;
+    });
+    widget.onMovementPendingChanged?.call(true);
+    try {
+      final saved = await ApiService.movementRequest(_movementSubmission!);
+      final record = Map<String, dynamic>.from(
+        (preview['vehicle'] ?? preview['visitor']) as Map,
+      );
+      final outgoing = saved['action'] == 'OUT';
+      // Send owner emails and attach optional evidence only after the authoritative save.
+      ApiService.flushOwnerNotices();
+      final photo = _evidence;
+      if (photo != null) {
+        final problem = await EvidenceService.upload(
+          photo,
+          kind: outgoing ? 'exit' : 'entry',
+          plate: saved['plateNumber'].toString(),
+          gateLogId: int.parse(saved['id'].toString()),
+        );
+        if (mounted && problem != null) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Movement saved. $problem')));
+        }
+      }
+      await LocalCacheService.updateVehicleCampusStatus(
+        saved['plateNumber'].toString(),
+        saved['currentStatus'] == 'OUTSIDE' ? 'Outside' : 'Inside Campus',
+      );
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      widget.onMovementPendingChanged?.call(false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.green,
+          content: Text(
+            '${outgoing ? 'Exit' : 'Entry'} saved: ${saved['plateNumber']} is now ${saved['currentStatus']}.',
+          ),
+        ),
+      );
+      widget.onDecision(
+        AuditLogEntry(
+          id: saved['id'].toString(),
+          plateNumber: saved['plateNumber'].toString(),
+          vehicleType: (record['vehicleType'] ?? 'Visitor Vehicle').toString(),
+          ownerName: (record['ownerName'] ?? record['visitorName'] ?? '')
+              .toString(),
+          driverName:
+              (record['authorizedDrivers'] as List? ?? [])
+                  .whereType<Map>()
+                  .where((d) => '${d['id']}' == '$driverId')
+                  .map((d) => '${d['fullName']}')
+                  .firstOrNull ??
+              (record['ownerName'] ?? record['visitorName'] ?? '').toString(),
+          driverRelationship: record['isVip'] == true
+              ? 'VIP (driver not checked)'
+              : 'Authorized driver',
+          timeIn:
+              DateTime.tryParse(saved['loggedAt'].toString()) ?? DateTime.now(),
+          action: outgoing ? 'Exit Approved' : 'Entry Recorded',
+          status: outgoing ? GateStatus.exited : GateStatus.inside,
+        ),
+      );
+      if (!widget.isEmbedded && mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+    } on MovementApiException catch (e) {
+      if (!mounted) return;
+      widget.onMovementPendingChanged?.call(e.retryable);
+      setState(() {
+        _isSubmitting = false;
+        _movementRetryPending = e.retryable;
+        _movementInvalidated =
+            !e.retryable &&
+            e.code != 'DRIVER_CONFIRMATION_REQUIRED' &&
+            e.code != 'ITEMS_CHECK_REQUIRED';
+        _movementError = e.retryable
+            ? '${e.message} Keep this screen open and tap Retry confirmation. No new movement will be created by retrying.'
+            : e.message;
+        if (!e.retryable) _movementSubmission = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+        _movementRetryPending = true;
+        _movementError = 'The result is uncertain. Retry this confirmation to check whether it was saved.';
+      });
+    }
+  }
+
+  Future<void> _syncVehicleWithDb(
+    VehicleRecord? initialVeh, [
+    String? raw,
+  ]) async {
     final queryCode = (raw != null && raw.trim().isNotEmpty)
         ? raw.trim()
         : (initialVeh?.qrPassCode.isNotEmpty == true
-            ? initialVeh!.qrPassCode
-            : (initialVeh?.plateNumber ?? ''));
+              ? initialVeh!.qrPassCode
+              : (initialVeh?.plateNumber ?? ''));
 
     if (queryCode.isEmpty) {
       if (mounted) setState(() => _isValidating = false);
@@ -226,25 +472,31 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       } catch (_) {}
     }
 
-    final isVisitorPayload = decodedJson != null && (
-      decodedJson['type'] == 'NCST_VISITOR_PASS' ||
-      decodedJson['type'] == 'visitor_temp' ||
-      (decodedJson['pid']?.toString().startsWith('VP-') ?? false) ||
-      (decodedJson['passId']?.toString().startsWith('VP-') ?? false) ||
-      (decodedJson['pass_code']?.toString().startsWith('VP-') ?? false) ||
-      decodedJson.containsKey('visitorName') ||
-      decodedJson.containsKey('visitor_name')
-    );
+    final isVisitorPayload =
+        decodedJson != null &&
+        (decodedJson['type'] == 'NCST_VISITOR_PASS' ||
+            decodedJson['type'] == 'visitor_temp' ||
+            (decodedJson['pid']?.toString().startsWith('VP-') ?? false) ||
+            (decodedJson['passId']?.toString().startsWith('VP-') ?? false) ||
+            (decodedJson['pass_code']?.toString().startsWith('VP-') ?? false) ||
+            decodedJson.containsKey('visitorName') ||
+            decodedJson.containsKey('visitor_name'));
     final isVisitorCode = queryCode.startsWith('VP-') || isVisitorPayload;
 
-    final extractedPlate = (decodedJson?['plateNumber'] ??
-        decodedJson?['plate_number'] ??
-        decodedJson?['plate'] ??
-        '').toString().trim();
-    final extractedPassCode = (decodedJson?['pid'] ??
-        decodedJson?['passId'] ??
-        decodedJson?['pass_code'] ??
-        (queryCode.startsWith('VP-') ? queryCode : '')).toString().trim();
+    final extractedPlate =
+        (decodedJson?['plateNumber'] ??
+                decodedJson?['plate_number'] ??
+                decodedJson?['plate'] ??
+                '')
+            .toString()
+            .trim();
+    final extractedPassCode =
+        (decodedJson?['pid'] ??
+                decodedJson?['passId'] ??
+                decodedJson?['pass_code'] ??
+                (queryCode.startsWith('VP-') ? queryCode : ''))
+            .toString()
+            .trim();
 
     try {
       final verifyPlate = extractedPlate.isNotEmpty
@@ -259,8 +511,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       final verifyResult = await verifyFuture;
 
       // Check network / API failure
-      final isNetworkError = ApiService.lastVerifyError != null ||
-          (verifyResult != null && (verifyResult['error_type'] == 'network_error' || verifyResult['status'] == 'offline'));
+      final isNetworkError =
+          ApiService.lastVerifyError != null ||
+          (verifyResult != null &&
+              (verifyResult['error_type'] == 'network_error' ||
+                  verifyResult['status'] == 'offline'));
       if (isNetworkError) {
         if (!mounted) return;
         setState(() {
@@ -276,14 +531,20 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         return;
       }
 
-      final serverVisitor = (verifyResult != null && verifyResult['visitor'] is Map)
+      final serverVisitor =
+          (verifyResult != null && verifyResult['visitor'] is Map)
           ? (verifyResult['visitor'] as Map<String, dynamic>)
           : null;
 
       // 1. Visitor Pass check: prioritize visitor pass identification so visitor registrations from Guard 1
       // are never mistakenly treated as generic registered vehicles
-      if (serverVisitor != null || isVisitorCode || (verifyResult != null && verifyResult['passType'] == 'visitor_temp')) {
-        ScannedVisitorPass? visitor = ScannedVisitorPass.fromVerify(verifyResult);
+      if (serverVisitor != null ||
+          isVisitorCode ||
+          (verifyResult != null &&
+              verifyResult['passType'] == 'visitor_temp')) {
+        ScannedVisitorPass? visitor = ScannedVisitorPass.fromVerify(
+          verifyResult,
+        );
 
         if (visitor == null) {
           final query = extractedPassCode.isNotEmpty
@@ -291,15 +552,30 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
               : (extractedPlate.isNotEmpty ? extractedPlate : queryCode);
           final livePass = await ApiService.lookupVisitorPass(query);
           if (livePass != null) {
-            final isBlocked = livePass.isBlocked ||
-                (verifyResult != null && (verifyResult['result'] == 'REVOKED' || verifyResult['result'] == 'BANNED'));
+            final isBlocked =
+                livePass.isBlocked ||
+                (verifyResult != null &&
+                    (verifyResult['result'] == 'REVOKED' ||
+                        verifyResult['result'] == 'BANNED'));
             visitor = ScannedVisitorPass.fromVisitorPass(
               livePass,
-              result: isBlocked ? 'REVOKED' : (verifyResult?['result']?.toString() ?? 'VALID'),
-              accepted: verifyResult != null ? verifyResult['accepted'] == true : livePass.isActive,
-              reason: (verifyResult?['reason'] ?? (isBlocked ? 'Blocked pass' : '')).toString(),
-              warnings: (verifyResult?['warnings'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-              currentlyInside: verifyResult?['currentlyInside'] == true || livePass.status == VisitorPassStatus.active,
+              result: isBlocked
+                  ? 'REVOKED'
+                  : (verifyResult?['result']?.toString() ?? 'VALID'),
+              accepted: verifyResult != null
+                  ? verifyResult['accepted'] == true
+                  : livePass.isActive,
+              reason:
+                  (verifyResult?['reason'] ?? (isBlocked ? 'Blocked pass' : ''))
+                      .toString(),
+              warnings:
+                  (verifyResult?['warnings'] as List?)
+                      ?.map((e) => e.toString())
+                      .toList() ??
+                  const [],
+              currentlyInside:
+                  verifyResult?['currentlyInside'] == true ||
+                  livePass.status == VisitorPassStatus.active,
             );
           }
         }
@@ -317,11 +593,29 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           }
         }
 
-        if (visitor == null && MockData.isTestEnvironment && decodedJson != null && (decodedJson['visitorName'] != null || decodedJson['visitor_name'] != null)) {
-          final vName = (decodedJson['visitorName'] ?? decodedJson['visitor_name'] ?? 'Visitor').toString();
-          final vPlate = (decodedJson['plateNumber'] ?? decodedJson['plate_number'] ?? 'UNKNOWN').toString();
-          final pId = (decodedJson['passId'] ?? decodedJson['pass_code'] ?? 'VP-LOCAL').toString();
-          final vModel = (decodedJson['vehicleModel'] ?? decodedJson['vehicle_model'] ?? '').toString();
+        if (visitor == null &&
+            MockData.isTestEnvironment &&
+            decodedJson != null &&
+            (decodedJson['visitorName'] != null ||
+                decodedJson['visitor_name'] != null)) {
+          final vName =
+              (decodedJson['visitorName'] ??
+                      decodedJson['visitor_name'] ??
+                      'Visitor')
+                  .toString();
+          final vPlate =
+              (decodedJson['plateNumber'] ??
+                      decodedJson['plate_number'] ??
+                      'UNKNOWN')
+                  .toString();
+          final pId =
+              (decodedJson['passId'] ?? decodedJson['pass_code'] ?? 'VP-LOCAL')
+                  .toString();
+          final vModel =
+              (decodedJson['vehicleModel'] ??
+                      decodedJson['vehicle_model'] ??
+                      '')
+                  .toString();
           visitor = ScannedVisitorPass(
             id: int.tryParse(pId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1,
             passCode: pId,
@@ -340,7 +634,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           if (!mounted) return;
 
           // Strict Blocked Check
-          if (visitor.isBlocked || (!visitor.accepted && visitor.reason.toLowerCase().contains('block'))) {
+          if (visitor.isBlocked ||
+              (!visitor.accepted &&
+                  visitor.reason.toLowerCase().contains('block'))) {
             setState(() {
               _isValidating = false;
               _scannedVehicle = null;
@@ -351,14 +647,19 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 plateNumber: visitor!.plateNumber,
                 ownerName: visitor.visitorName,
                 statusBadge: 'BLOCKED',
-                reason: visitor.reason.isNotEmpty ? visitor.reason : 'Security Hold on visitor pass.',
+                reason: visitor.reason.isNotEmpty
+                    ? visitor.reason
+                    : 'Security Hold on visitor pass.',
               );
             });
             return;
           }
 
           // Strict Duplicate Entry Attempt Check (Anti-passback: already recorded inside)
-          if (visitor.currentlyInside || (!visitor.accepted && (visitor.reason.contains('already inside') || visitor.reason.contains('already entered')))) {
+          if (visitor.currentlyInside ||
+              (!visitor.accepted &&
+                  (visitor.reason.contains('already inside') ||
+                      visitor.reason.contains('already entered')))) {
             setState(() {
               _isValidating = false;
               _scannedVehicle = null;
@@ -369,7 +670,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 plateNumber: visitor!.plateNumber,
                 ownerName: visitor.visitorName,
                 statusBadge: 'INSIDE CAMPUS',
-                reason: visitor.reason.isNotEmpty ? visitor.reason : 'Anti-passback: Vehicle must exit before entering again.',
+                reason: visitor.reason.isNotEmpty
+                    ? visitor.reason
+                    : 'Anti-passback: Vehicle must exit before entering again.',
                 visitor: visitor,
               );
             });
@@ -378,7 +681,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
           // The server did not accept this visitor pass (not yet valid, expired, already used...): no approval from here
           if (!visitor.accepted) {
-            final refusal = visitor.reason.isNotEmpty ? visitor.reason : 'The server did not accept this visitor pass (${visitor.result}).';
+            final refusal = visitor.reason.isNotEmpty
+                ? visitor.reason
+                : 'The server did not accept this visitor pass (${visitor.result}).';
             setState(() {
               _isValidating = false;
               _scannedVehicle = null;
@@ -388,7 +693,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 message: refusal,
                 plateNumber: visitor!.plateNumber,
                 ownerName: visitor.visitorName,
-                statusBadge: visitor.result.isEmpty ? 'REFUSED' : visitor.result,
+                statusBadge: visitor.result.isEmpty
+                    ? 'REFUSED'
+                    : visitor.result,
                 reason: refusal,
               );
             });
@@ -410,12 +717,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         remoteVehicle = await ApiService.lookupVehicle(queryCode);
       } catch (_) {}
 
-      if (remoteVehicle == null && initialVeh != null && initialVeh.plateNumber.isNotEmpty) {
-        remoteVehicle = await ApiService.lookupVehicleByPlate(initialVeh.plateNumber);
+      if (remoteVehicle == null &&
+          initialVeh != null &&
+          initialVeh.plateNumber.isNotEmpty) {
+        remoteVehicle = await ApiService.lookupVehicleByPlate(
+          initialVeh.plateNumber,
+        );
       }
 
       if (remoteVehicle == null && verifyResult != null) {
-        final serverVeh = verifyResult['vehicle'] ?? verifyResult['data']?['vehicle'];
+        final serverVeh =
+            verifyResult['vehicle'] ?? verifyResult['data']?['vehicle'];
         if (serverVeh is Map<String, dynamic>) {
           try {
             remoteVehicle = VehicleRecord.fromQrJson(
@@ -429,12 +741,22 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         }
       }
 
-      if (remoteVehicle == null || (!remoteVehicle.isParsedFromQr && (remoteVehicle.ownerIdNumber == 'UNKNOWN' || remoteVehicle.ownerIdNumber.startsWith('VISITOR-')))) {
-        if (initialVeh != null && (initialVeh.isParsedFromQr || (initialVeh.ownerIdNumber != 'UNKNOWN' && !initialVeh.ownerIdNumber.startsWith('VISITOR-')))) {
+      if (remoteVehicle == null ||
+          (!remoteVehicle.isParsedFromQr &&
+              (remoteVehicle.ownerIdNumber == 'UNKNOWN' ||
+                  remoteVehicle.ownerIdNumber.startsWith('VISITOR-')))) {
+        if (initialVeh != null &&
+            (initialVeh.isParsedFromQr ||
+                (initialVeh.ownerIdNumber != 'UNKNOWN' &&
+                    !initialVeh.ownerIdNumber.startsWith('VISITOR-')))) {
           remoteVehicle = initialVeh;
         } else {
           final local = widget.repository.resolveVehicle(queryCode);
-          if (local.isParsedFromQr && local.ownerIdNumber != 'UNKNOWN' && !local.ownerIdNumber.startsWith('VISITOR-') && !local.ownerRole.contains('Guest') && !local.ownerRole.contains('Visitor')) {
+          if (local.isParsedFromQr &&
+              local.ownerIdNumber != 'UNKNOWN' &&
+              !local.ownerIdNumber.startsWith('VISITOR-') &&
+              !local.ownerRole.contains('Guest') &&
+              !local.ownerRole.contains('Visitor')) {
             remoteVehicle = local;
           } else {
             remoteVehicle = null;
@@ -442,7 +764,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         }
       }
 
-      final vData = (verifyResult != null && verifyResult['data'] is Map<String, dynamic>)
+      final vData =
+          (verifyResult != null && verifyResult['data'] is Map<String, dynamic>)
           ? (verifyResult['data'] as Map<String, dynamic>)
           : verifyResult;
 
@@ -454,7 +777,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           _rejectionDetails = ScanRejectionDetails(
             type: ScanRejectionType.notFound,
             title: 'Invalid / Unrecognized QR Code',
-            message: 'Pass code "$queryCode" is not a recognized vehicle or visitor pass in the campus registry.',
+            message:
+                'Pass code "$queryCode" is not a recognized vehicle or visitor pass in the campus registry.',
             statusBadge: 'NOT FOUND',
           );
         });
@@ -465,21 +789,31 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       if (vData != null && vData['vehicle'] is Map<String, dynamic>) {
         final vMap = vData['vehicle'] as Map<String, dynamic>;
         remoteVehicle = remoteVehicle.copyWith(
-          campusStatus: (vMap['status'] ?? remoteVehicle.campusStatus)?.toString(),
-          registrationStatus: (vMap['registration_status'] ?? remoteVehicle.registrationStatus)?.toString(),
-          isBanned: vMap['is_banned'] != null ? (vMap['is_banned'] == 1 || vMap['is_banned'] == true || vMap['is_banned'] == '1') : remoteVehicle.isBanned,
+          campusStatus: (vMap['status'] ?? remoteVehicle.campusStatus)
+              ?.toString(),
+          registrationStatus:
+              (vMap['registration_status'] ?? remoteVehicle.registrationStatus)
+                  ?.toString(),
+          isBanned: vMap['is_banned'] != null
+              ? (vMap['is_banned'] == 1 ||
+                    vMap['is_banned'] == true ||
+                    vMap['is_banned'] == '1')
+              : remoteVehicle.isBanned,
           isSyncedWithDb: true,
         );
       }
 
       _scanNotices = ScanNotice.fromVerify(vData);
 
-      final isServerBanned = vData != null &&
+      final isServerBanned =
+          vData != null &&
           (vData['result'] == 'BANNED' ||
-           vData['result'] == 'SUSPENDED' ||
-           vData['result'] == 'FORGED' ||
-           vData['result'] == 'REVOKED' ||
-           (vData['accepted'] == false && (vData['message']?.toString().toUpperCase().contains('BAN') == true)));
+              vData['result'] == 'SUSPENDED' ||
+              vData['result'] == 'FORGED' ||
+              vData['result'] == 'REVOKED' ||
+              (vData['accepted'] == false &&
+                  (vData['message']?.toString().toUpperCase().contains('BAN') ==
+                      true)));
 
       if (isServerBanned) {
         remoteVehicle = remoteVehicle.copyWith(isBanned: true);
@@ -489,9 +823,16 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       if (vData != null && vData['currentlyInside'] != null) {
         final currentlyInside = vData['currentlyInside'] == true;
         if (currentlyInside && remoteVehicle.campusStatus != 'Inside Campus') {
-          remoteVehicle = remoteVehicle.copyWith(campusStatus: 'Inside Campus', isAntiPassback: true);
-        } else if (!currentlyInside && remoteVehicle.campusStatus == 'Inside Campus') {
-          remoteVehicle = remoteVehicle.copyWith(campusStatus: 'Outside', isAntiPassback: false);
+          remoteVehicle = remoteVehicle.copyWith(
+            campusStatus: 'Inside Campus',
+            isAntiPassback: true,
+          );
+        } else if (!currentlyInside &&
+            remoteVehicle.campusStatus == 'Inside Campus') {
+          remoteVehicle = remoteVehicle.copyWith(
+            campusStatus: 'Outside',
+            isAntiPassback: false,
+          );
         }
       }
 
@@ -509,9 +850,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
             statusBadge: remoteVehicle.campusStatus ?? 'BLOCKED',
             reason: remoteVehicle.isBanned
                 ? 'Vehicle is marked as BANNED in the system database.'
-                : (remoteVehicle.registrationStatus?.toLowerCase() == 'suspended'
-                    ? 'Registration is SUSPENDED.'
-                    : (remoteVehicle.flagReason ?? 'Administrative hold on vehicle.')),
+                : (remoteVehicle.registrationStatus?.toLowerCase() ==
+                          'suspended'
+                      ? 'Registration is SUSPENDED.'
+                      : (remoteVehicle.flagReason ??
+                            'Administrative hold on vehicle.')),
             notices: _scanNotices,
           );
         });
@@ -521,14 +864,23 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       // 1b. Obey the server's decision. Anything it did not accept (registration fee unpaid, pass expired, not
       // registered...) stops here: the guard cannot approve it from this screen. (A vehicle already inside is the
       // anti-passback case handled just below.)
-      if (vData != null && vData['accepted'] == false && !isServerBanned && vData['currentlyInside'] != true) {
+      if (vData != null &&
+          vData['accepted'] == false &&
+          !isServerBanned &&
+          vData['currentlyInside'] != true) {
         final serverResult = (vData['result'] ?? '').toString();
-        final serverReason = (vData['reason'] ?? vData['message'] ?? 'The server did not accept this pass.').toString();
+        final serverReason =
+            (vData['reason'] ??
+                    vData['message'] ??
+                    'The server did not accept this pass.')
+                .toString();
         setState(() {
           _isValidating = false;
           _scannedVehicle = null;
           _rejectionDetails = ScanRejectionDetails(
-            type: serverResult == 'NOT_FOUND' ? ScanRejectionType.notFound : ScanRejectionType.blocked,
+            type: serverResult == 'NOT_FOUND'
+                ? ScanRejectionType.notFound
+                : ScanRejectionType.blocked,
             title: _serverRefusalTitle(serverResult),
             message: serverReason,
             plateNumber: remoteVehicle!.plateNumber,
@@ -587,17 +939,23 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   /// Adds the server's "where is it and who to call" block (verify.php `onCampus`) to a vehicle that is already inside.
-  VehicleRecord _withOnCampusDetails(VehicleRecord vehicle, Map<String, dynamic>? data) {
+  VehicleRecord _withOnCampusDetails(
+    VehicleRecord vehicle,
+    Map<String, dynamic>? data,
+  ) {
     final oc = data?['onCampus'];
     if (oc is! Map) return vehicle;
     String? text(dynamic v) {
       final t = (v ?? '').toString().trim();
       return t.isEmpty || t == 'null' ? null : t;
     }
+
     final entry = text(oc['entryTime']);
     return vehicle.copyWith(
       ownerPhone: text(oc['ownerPhone']),
-      onCampusSince: entry != null ? DateTime.tryParse(entry.replaceFirst(' ', 'T')) : null,
+      onCampusSince: entry != null
+          ? DateTime.tryParse(entry.replaceFirst(' ', 'T'))
+          : null,
       hoursInside: double.tryParse((oc['hoursInside'] ?? '').toString()),
       entryGate: text(oc['gatePoint']),
       enteredBy: text(oc['enteredBy']),
@@ -607,7 +965,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
   /// "Issue violation" from the already-inside screen: the vehicle is put on hold and the owner is notified.
   void _showIssueViolationDialog() {
-    final vehicle = _rejectionDetails?.vehicle;
+    final vehicle =
+        _rejectionDetails?.vehicle ??
+        (_movementPreview?['vehicle'] is Map
+            ? VehicleRecord.fromQrJson(
+                Map<String, dynamic>.from(_movementPreview!['vehicle'] as Map),
+                isSyncedWithDb: true,
+              )
+            : null);
     if (vehicle == null) return;
     PendingEvidence? violationPhoto;
     IssueViolationDialog.show(
@@ -616,39 +981,59 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       onEvidence: (photo) => violationPhoto = photo,
       onSubmit: (type, notes) async {
         final messenger = ScaffoldMessenger.of(context);
-        final error = await ApiService.issueViolation(plateNumber: vehicle.plateNumber, type: type, notes: notes);
+        final error = await ApiService.issueViolation(
+          plateNumber: vehicle.plateNumber,
+          type: type,
+          notes: notes,
+        );
         final violationId = ApiService.lastViolationId;
         if (error == null && violationPhoto != null && violationId != null) {
-          EvidenceService.upload(violationPhoto!, kind: 'violation', plate: vehicle.plateNumber, violationId: violationId);
+          EvidenceService.upload(
+            violationPhoto!,
+            kind: 'violation',
+            plate: vehicle.plateNumber,
+            violationId: violationId,
+          );
         }
         if (!mounted) return;
         if (error != null) {
-          messenger.showSnackBar(SnackBar(
-            backgroundColor: NcstColors.crimson,
-            duration: const Duration(seconds: 6),
-            content: Text('NOT RECORDED: $error', style: const TextStyle(fontWeight: FontWeight.w700)),
-          ));
+          messenger.showSnackBar(
+            SnackBar(
+              backgroundColor: NcstColors.crimson,
+              duration: const Duration(seconds: 6),
+              content: Text(
+                'NOT RECORDED: $error',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          );
           return;
         }
-        widget.onDecision(AuditLogEntry(
-          id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-          plateNumber: vehicle.plateNumber,
-          vehicleType: vehicle.vehicleType,
-          ownerName: vehicle.ownerName,
-          driverName: vehicle.enteredBy ?? vehicle.ownerName,
-          timeIn: DateTime.now(),
-          status: GateStatus.blocked,
-          blockReason: 'Violation: $type',
-        ));
+        widget.onDecision(
+          AuditLogEntry(
+            id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+            plateNumber: vehicle.plateNumber,
+            vehicleType: vehicle.vehicleType,
+            ownerName: vehicle.ownerName,
+            driverName: vehicle.enteredBy ?? vehicle.ownerName,
+            timeIn: DateTime.now(),
+            status: GateStatus.blocked,
+            blockReason: 'Violation: $type',
+          ),
+        );
         final held = vehicle.copyWith(isBanned: true);
         MockData.upsertVehicle(held);
         LocalCacheService.upsertVehicle(held);
-        messenger.showSnackBar(SnackBar(
-          backgroundColor: NcstColors.green,
-          duration: const Duration(seconds: 4),
-          content: Text('Violation recorded. ${vehicle.plateNumber} is on hold and the owner was notified.',
-              style: const TextStyle(fontWeight: FontWeight.w700)),
-        ));
+        messenger.showSnackBar(
+          SnackBar(
+            backgroundColor: NcstColors.green,
+            duration: const Duration(seconds: 4),
+            content: Text(
+              'Violation recorded. ${vehicle.plateNumber} is on hold and the owner was notified.',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        );
         _resetScanner();
       },
     );
@@ -682,32 +1067,39 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _selectedDriverName = pass.visitorName;
       _selectedRelationship = 'Visitor (Day Pass)';
       _currentPhotoUrl = '';
-      _scannedVehicle = (_scannedVehicle ?? VehicleRecord(
-        plateNumber: pass.plateNumber,
-        vehicleType: 'Visitor Vehicle',
-        makeModelColor: pass.vehicleModel.isNotEmpty ? pass.vehicleModel : 'Visitor Vehicle',
-        ownerName: pass.visitorName,
-        ownerRole: 'Visitor (Day Pass)',
-        ownerIdNumber: pass.passCode,
-        category: CampusUserCategory.visitor,
-        qrPassCode: pass.passCode,
-        authorizedDrivers: [
-          AuthorizedDriver(
-            id: 'drv-visitor',
-            fullName: pass.visitorName,
-            relationship: 'Visitor (Day Pass)',
-            licenseNo: 'N/A',
-          ),
-        ],
-      )).copyWith(
-        plateNumber: pass.plateNumber,
-        makeModelColor: pass.vehicleModel.isNotEmpty ? pass.vehicleModel : null,
-        ownerName: pass.visitorName,
-        ownerRole: 'Visitor (Day Pass)',
-        ownerIdNumber: pass.passCode,
-        category: CampusUserCategory.visitor,
-        isAntiPassback: pass.currentlyInside,
-      );
+      _scannedVehicle =
+          (_scannedVehicle ??
+                  VehicleRecord(
+                    plateNumber: pass.plateNumber,
+                    vehicleType: 'Visitor Vehicle',
+                    makeModelColor: pass.vehicleModel.isNotEmpty
+                        ? pass.vehicleModel
+                        : 'Visitor Vehicle',
+                    ownerName: pass.visitorName,
+                    ownerRole: 'Visitor (Day Pass)',
+                    ownerIdNumber: pass.passCode,
+                    category: CampusUserCategory.visitor,
+                    qrPassCode: pass.passCode,
+                    authorizedDrivers: [
+                      AuthorizedDriver(
+                        id: 'drv-visitor',
+                        fullName: pass.visitorName,
+                        relationship: 'Visitor (Day Pass)',
+                        licenseNo: 'N/A',
+                      ),
+                    ],
+                  ))
+              .copyWith(
+                plateNumber: pass.plateNumber,
+                makeModelColor: pass.vehicleModel.isNotEmpty
+                    ? pass.vehicleModel
+                    : null,
+                ownerName: pass.visitorName,
+                ownerRole: 'Visitor (Day Pass)',
+                ownerIdNumber: pass.passCode,
+                category: CampusUserCategory.visitor,
+                isAntiPassback: pass.currentlyInside,
+              );
     });
   }
 
@@ -719,7 +1111,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
 
   bool get _visitorItemsAllChecked {
     final pass = _visitorPass;
-    return pass == null || !pass.hasItems || _checkedVisitorItems.length >= pass.items.length;
+    return pass == null ||
+        !pass.hasItems ||
+        _checkedVisitorItems.length >= pass.items.length;
   }
 
   /// Records the entry of a visitor whose day pass already exists on the server.
@@ -735,7 +1129,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           behavior: SnackBarBehavior.floating,
           content: Text(
             'ENTRY NOT ALLOWED: ${pass.reason.isNotEmpty ? pass.reason : pass.verdictTitle}',
-            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              color: NcstColors.white,
+            ),
           ),
         ),
       );
@@ -748,7 +1145,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           behavior: SnackBarBehavior.floating,
           content: Text(
             'Check every declared item first (${_checkedVisitorItems.length}/${pass.items.length} ticked).',
-            style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              color: NcstColors.white,
+            ),
           ),
         ),
       );
@@ -793,7 +1193,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         duration: const Duration(seconds: 2),
         content: Text(
           'ENTRY CLEARED: ${pass.plateNumber} (${pass.visitorName}, visitor pass ${pass.passCode})',
-          style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: NcstColors.white,
+          ),
         ),
       ),
     );
@@ -817,7 +1220,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         content: Text(
           'NOT RECORDED: $plate was refused by the server (${ApiService.lastWriteError ?? 'no reason given'}). '
           'Do not admit this vehicle; contact the security office.',
-          style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: NcstColors.white,
+          ),
         ),
       ),
     );
@@ -838,7 +1244,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           backgroundColor: NcstColors.crimson,
           content: Text(
             'ENTRY DENIED: This vehicle is currently blocked. Clearance cannot be granted.',
-            style: TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: NcstColors.white,
+            ),
           ),
           behavior: SnackBarBehavior.floating,
         ),
@@ -853,7 +1262,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           backgroundColor: NcstColors.crimson,
           content: Text(
             'ENTRY DENIED: Vehicle is already inside campus. Duplicate entry rejected.',
-            style: TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: NcstColors.white,
+            ),
           ),
           behavior: SnackBarBehavior.floating,
         ),
@@ -893,13 +1305,22 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       final shouldProceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           title: Row(
             children: const [
-              Icon(Icons.warning_amber_rounded, color: NcstColors.goldDark, size: 28),
+              Icon(
+                Icons.warning_amber_rounded,
+                color: NcstColors.goldDark,
+                size: 28,
+              ),
               SizedBox(width: 8),
               Expanded(
-                child: Text('Flagged Vehicle Notice', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+                child: Text(
+                  'Flagged Vehicle Notice',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+                ),
               ),
             ],
           ),
@@ -926,7 +1347,13 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('CANCEL', style: TextStyle(color: NcstColors.slate600, fontWeight: FontWeight.w700)),
+              child: const Text(
+                'CANCEL',
+                style: TextStyle(
+                  color: NcstColors.slate600,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
             ElevatedButton(
               onPressed: () => Navigator.of(ctx).pop(true),
@@ -934,7 +1361,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 backgroundColor: NcstColors.goldDark,
                 foregroundColor: NcstColors.white,
               ),
-              child: const Text('PERMIT ENTRY', style: TextStyle(fontWeight: FontWeight.w800)),
+              child: const Text(
+                'PERMIT ENTRY',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
             ),
           ],
         ),
@@ -959,7 +1389,8 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     );
 
     final messenger = ScaffoldMessenger.of(context);
-    final entryDesc = 'ENTRY CLEARED: ${_scannedVehicle!.plateNumber} ($_selectedDriverName)';
+    final entryDesc =
+        'ENTRY CLEARED: ${_scannedVehicle!.plateNumber} ($_selectedDriverName)';
 
     widget.onDecision(newEntry);
 
@@ -986,17 +1417,32 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       // Evidence is stored with the gate log, so it can only go once the server has given us that log's id
       final logId = ApiService.lastGateLogId;
       if (photo != null && logId != null) {
-        EvidenceService.upload(photo, kind: 'entry', plate: plateForLog, gateLogId: logId).then((problem) {
+        EvidenceService.upload(
+          photo,
+          kind: 'entry',
+          plate: plateForLog,
+          gateLogId: logId,
+        ).then((problem) {
           if (problem != null) {
-            messenger.showSnackBar(SnackBar(backgroundColor: NcstColors.goldDark, content: Text(problem), behavior: SnackBarBehavior.floating));
+            messenger.showSnackBar(
+              SnackBar(
+                backgroundColor: NcstColors.goldDark,
+                content: Text(problem),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
           }
         });
       } else if (photo != null) {
-        messenger.showSnackBar(const SnackBar(
-          backgroundColor: NcstColors.goldDark,
-          behavior: SnackBarBehavior.floating,
-          content: Text('Entry saved offline: the photo could not be attached.'),
-        ));
+        messenger.showSnackBar(
+          const SnackBar(
+            backgroundColor: NcstColors.goldDark,
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'Entry saved offline: the photo could not be attached.',
+            ),
+          ),
+        );
       }
     });
 
@@ -1005,7 +1451,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         backgroundColor: NcstColors.green,
         content: Text(
           entryDesc,
-          style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: NcstColors.white,
+          ),
         ),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
@@ -1038,12 +1487,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           final first = vehicle.authorizedDrivers.first;
           _selectedDriverName = first.fullName;
           _selectedRelationship = first.relationship;
-          final isOwner = first.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
+          final isOwner =
+              first.fullName.trim().toLowerCase() ==
+                  vehicle.ownerName.trim().toLowerCase() ||
               first.relationship.toLowerCase().contains('self') ||
               first.relationship.toLowerCase().contains('owner');
-          _currentPhotoUrl = (first.photoUrl != null && first.photoUrl!.isNotEmpty)
+          _currentPhotoUrl =
+              (first.photoUrl != null && first.photoUrl!.isNotEmpty)
               ? first.photoUrl!
-              : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : (vehicle.ownerPhotoUrl ?? ''));
+              : (isOwner
+                    ? (vehicle.ownerPhotoUrl ?? '')
+                    : (vehicle.ownerPhotoUrl ?? ''));
         } else {
           _selectedDriverName = vehicle.ownerName;
           _selectedRelationship = 'Registered Owner';
@@ -1058,8 +1512,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     BlockReasonDialog.show(
       context,
       _executeBlock,
-      title: _isPatrolInspection ? 'Report In-Campus Incident' : 'Block Vehicle Entry',
-      subtitle: _isPatrolInspection ? 'Select reason for security hold / incident:' : 'Select reason for entry denial:',
+      title: _isPatrolInspection
+          ? 'Report In-Campus Incident'
+          : 'Block Vehicle Entry',
+      subtitle: _isPatrolInspection
+          ? 'Select reason for security hold / incident:'
+          : 'Select reason for entry denial:',
     );
   }
 
@@ -1067,8 +1525,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     if (_scannedVehicle == null && _visitorPass == null) return;
 
     final plate = _scannedVehicle?.plateNumber ?? _visitorPass!.plateNumber;
-    final driver = _scannedVehicle != null ? _selectedDriverName : _visitorPass!.visitorName;
-    final rel = _scannedVehicle != null ? _selectedRelationship : 'Visitor (Day Pass)';
+    final driver = _scannedVehicle != null
+        ? _selectedDriverName
+        : _visitorPass!.visitorName;
+    final rel = _scannedVehicle != null
+        ? _selectedRelationship
+        : 'Visitor (Day Pass)';
     final owner = _scannedVehicle?.ownerName ?? _visitorPass!.visitorName;
     final type = _scannedVehicle?.vehicleType ?? _visitorPass!.vehicleModel;
 
@@ -1097,7 +1559,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         notes: 'In-campus inspection hold: $reason',
       );
       if (_scannedVehicle != null) {
-        final updated = _scannedVehicle!.copyWith(campusStatus: 'Blocked / Alert');
+        final updated = _scannedVehicle!.copyWith(
+          campusStatus: 'Blocked / Alert',
+        );
         MockData.upsertVehicle(updated);
         LocalCacheService.upsertVehicle(updated);
       }
@@ -1140,7 +1604,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           _isPatrolInspection
               ? 'HOLD ISSUED: $plate ($reason)'
               : 'ENTRY BLOCKED: $plate ($reason)',
-          style: const TextStyle(fontWeight: FontWeight.w700, color: NcstColors.white),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: NcstColors.white,
+          ),
         ),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
@@ -1184,13 +1651,52 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           ],
         ),
       );
+    } else if (_movementPreview != null) {
+      content = MovementConfirmationCard(
+        preview: _movementPreview!,
+        guardName: widget.currentGuard?.fullName ?? 'Signed-in guard',
+        saving: _isSubmitting,
+        retryPending: _movementRetryPending,
+        invalidated: _movementInvalidated,
+        error: _movementError,
+        onConfirm: _confirmMovement,
+        onCancel: _resetScanner,
+        onEvidenceChanged: (photo) => _evidence = photo,
+        onInspect: () {
+          final preview = _movementPreview!;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.unknown,
+            title: 'Vehicle details',
+            message: '',
+            vehicle: preview['vehicle'] is Map
+                ? VehicleRecord.fromQrJson(
+                    Map<String, dynamic>.from(preview['vehicle'] as Map),
+                    isSyncedWithDb: true,
+                  )
+                : null,
+            visitor: ScannedVisitorPass.fromVerify(preview),
+          );
+          _movementPreview = null;
+          _startPatrolInspection();
+        },
+        onIssueViolation:
+            _movementPreview!['vehicle'] is Map &&
+                (_movementPreview!['movement'] as Map)['suggestedAction'] ==
+                    'OUT'
+            ? _showIssueViolationDialog
+            : null,
+      );
     } else if (_rejectionDetails != null) {
-      final alreadyInside = _rejectionDetails!.type == ScanRejectionType.duplicateEntry && _rejectionDetails!.vehicle != null;
+      final alreadyInside =
+          _rejectionDetails!.type == ScanRejectionType.duplicateEntry &&
+          _rejectionDetails!.vehicle != null;
       content = ScanRejectionView(
         details: _rejectionDetails!,
         onScanAnother: _resetScanner,
         buttonLabel: 'SCAN ANOTHER VEHICLE',
-        onInspect: (_rejectionDetails!.vehicle != null || _rejectionDetails!.visitor != null)
+        onInspect:
+            (_rejectionDetails!.vehicle != null ||
+                _rejectionDetails!.visitor != null)
             ? _startPatrolInspection
             : null,
         inspectButtonLabel: 'INSPECT ON-CAMPUS VEHICLE / REPORT INCIDENT',
@@ -1207,20 +1713,33 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           ? IconButton(
               icon: const Icon(Icons.arrow_back),
               tooltip: 'Back to Dashboard',
-              onPressed: widget.onReturnToDashboard,
+              onPressed: _isSubmitting || _movementRetryPending
+                  ? null
+                  : widget.onReturnToDashboard,
             )
           : null,
-      title: Text(_rejectionDetails != null
-          ? 'Scan Rejected'
-          : (_isPatrolInspection
-              ? 'On-Campus Vehicle Inspection'
-              : (_scannedVehicle == null && _visitorPass == null ? 'Scan Driver QR Pass' : 'Scanned Verification'))),
-      backgroundColor: _rejectionDetails != null && _rejectionDetails!.type == ScanRejectionType.blocked
+      title: Text(
+        _movementPreview != null
+            ? 'Confirm movement'
+            : _rejectionDetails != null
+            ? 'Scan Rejected'
+            : (_isPatrolInspection
+                  ? 'On-Campus Vehicle Inspection'
+                  : (_scannedVehicle == null && _visitorPass == null
+                        ? 'Scan Driver QR Pass'
+                        : 'Scanned Verification')),
+      ),
+      backgroundColor:
+          _rejectionDetails != null &&
+              _rejectionDetails!.type == ScanRejectionType.blocked
           ? NcstColors.crimson
           : NcstColors.navy,
       foregroundColor: NcstColors.white,
       actions: [
-        if (_scannedVehicle == null && _rejectionDetails == null) ...[
+        if (_scannedVehicle == null &&
+            _rejectionDetails == null &&
+            _movementPreview == null &&
+            !_isValidating) ...[
           IconButton(
             tooltip: 'Enter QR Manually',
             icon: const Icon(Icons.keyboard_outlined, color: NcstColors.white),
@@ -1243,11 +1762,20 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           ),
         ] else
           TextButton.icon(
-            onPressed: _resetScanner,
-            icon: const Icon(Icons.qr_code_scanner, color: NcstColors.gold, size: 18),
+            onPressed: _isSubmitting || _movementRetryPending
+                ? null
+                : _resetScanner,
+            icon: const Icon(
+              Icons.qr_code_scanner,
+              color: NcstColors.gold,
+              size: 18,
+            ),
             label: const Text(
               'Re-Scan QR',
-              style: TextStyle(color: NcstColors.gold, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: NcstColors.gold,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
       ],
@@ -1268,9 +1796,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     return Scaffold(
       backgroundColor: NcstColors.slate50,
       appBar: appBar,
-      body: SafeArea(
-        child: content,
-      ),
+      body: SafeArea(child: content),
     );
   }
 
@@ -1297,9 +1823,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: const BoxDecoration(
         color: NcstColors.navy,
-        border: Border(
-          bottom: BorderSide(color: NcstColors.gold, width: 2),
-        ),
+        border: Border(bottom: BorderSide(color: NcstColors.gold, width: 2)),
       ),
       child: Row(
         children: [
@@ -1350,7 +1874,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
               flex: 5,
               child: OutlinedButton.icon(
                 onPressed: _resetScanner,
-                icon: const Icon(Icons.check_circle_outline_rounded, color: NcstColors.slate700, size: 18),
+                icon: const Icon(
+                  Icons.check_circle_outline_rounded,
+                  color: NcstColors.slate700,
+                  size: 18,
+                ),
                 label: const FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
@@ -1363,9 +1891,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-                  side: const BorderSide(color: NcstColors.slate300, width: 1.5),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 14,
+                    horizontal: 8,
+                  ),
+                  side: const BorderSide(
+                    color: NcstColors.slate300,
+                    width: 1.5,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
               ),
             ),
@@ -1374,7 +1910,11 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
               flex: 6,
               child: ElevatedButton.icon(
                 onPressed: _showBlockDialog,
-                icon: const Icon(Icons.report_problem_rounded, color: NcstColors.white, size: 18),
+                icon: const Icon(
+                  Icons.report_problem_rounded,
+                  color: NcstColors.white,
+                  size: 18,
+                ),
                 label: const FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
@@ -1389,8 +1929,13 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                 style: ElevatedButton.styleFrom(
                   backgroundColor: NcstColors.crimson,
                   foregroundColor: NcstColors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 14,
+                    horizontal: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   elevation: 0,
                 ),
               ),
@@ -1448,7 +1993,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
         if (_isPatrolInspection)
           _buildInspectionNoticeHeader(vehicle.plateNumber, vehicle.ownerName),
         if (_scanNotices.isNotEmpty)
-          Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: ScanNoticeStrip(notices: _scanNotices)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: ScanNoticeStrip(notices: _scanNotices),
+          ),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -1478,19 +2026,32 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                                 setState(() {
                                   _selectedDriverName = vehicle.ownerName;
                                   _selectedRelationship = 'Registered Owner';
-                                  _currentPhotoUrl = vehicle.ownerPhotoUrl ?? '';
+                                  _currentPhotoUrl =
+                                      vehicle.ownerPhotoUrl ?? '';
                                 });
                               },
                               onSelectDriver: (driver) {
                                 setState(() {
                                   _selectedDriverName = driver.fullName;
                                   _selectedRelationship = driver.relationship;
-                                  final isOwner = driver.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
-                                      driver.relationship.toLowerCase().contains('self') ||
-                                      driver.relationship.toLowerCase().contains('owner');
-                                  _currentPhotoUrl = (driver.photoUrl != null && driver.photoUrl!.isNotEmpty)
+                                  final isOwner =
+                                      driver.fullName.trim().toLowerCase() ==
+                                          vehicle.ownerName
+                                              .trim()
+                                              .toLowerCase() ||
+                                      driver.relationship
+                                          .toLowerCase()
+                                          .contains('self') ||
+                                      driver.relationship
+                                          .toLowerCase()
+                                          .contains('owner');
+                                  _currentPhotoUrl =
+                                      (driver.photoUrl != null &&
+                                          driver.photoUrl!.isNotEmpty)
                                       ? driver.photoUrl!
-                                      : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : '');
+                                      : (isOwner
+                                            ? (vehicle.ownerPhotoUrl ?? '')
+                                            : '');
                                 });
                               },
                             ),
@@ -1520,12 +2081,24 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
                               setState(() {
                                 _selectedDriverName = driver.fullName;
                                 _selectedRelationship = driver.relationship;
-                                final isOwner = driver.fullName.trim().toLowerCase() == vehicle.ownerName.trim().toLowerCase() ||
-                                    driver.relationship.toLowerCase().contains('self') ||
-                                    driver.relationship.toLowerCase().contains('owner');
-                                _currentPhotoUrl = (driver.photoUrl != null && driver.photoUrl!.isNotEmpty)
+                                final isOwner =
+                                    driver.fullName.trim().toLowerCase() ==
+                                        vehicle.ownerName
+                                            .trim()
+                                            .toLowerCase() ||
+                                    driver.relationship.toLowerCase().contains(
+                                      'self',
+                                    ) ||
+                                    driver.relationship.toLowerCase().contains(
+                                      'owner',
+                                    );
+                                _currentPhotoUrl =
+                                    (driver.photoUrl != null &&
+                                        driver.photoUrl!.isNotEmpty)
                                     ? driver.photoUrl!
-                                    : (isOwner ? (vehicle.ownerPhotoUrl ?? '') : '');
+                                    : (isOwner
+                                          ? (vehicle.ownerPhotoUrl ?? '')
+                                          : '');
                               });
                             },
                           ),
@@ -1550,14 +2123,16 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           BottomDecisionBar(
             onBlock: _showBlockDialog,
             onCleared: _handleCleared,
-            isClearedEnabled: (vehicle.isEligibleForEntry || vehicle.isUnregistered) && !_isSubmitting,
+            isClearedEnabled:
+                (vehicle.isEligibleForEntry || vehicle.isUnregistered) &&
+                !_isSubmitting,
             clearedLabel: vehicle.isBlocked
                 ? 'ACCESS DENIED (BLOCKED)'
                 : (vehicle.isInsideCampus
-                    ? 'ALREADY INSIDE'
-                    : (vehicle.isUnregistered
-                        ? 'REGISTER VISITOR'
-                        : 'CLEARED (TO GO)')),
+                      ? 'ALREADY INSIDE'
+                      : (vehicle.isUnregistered
+                            ? 'REGISTER VISITOR'
+                            : 'CLEARED (TO GO)')),
             disabledLabel: vehicle.isBlocked
                 ? 'VEHICLE BLOCKED'
                 : (vehicle.isInsideCampus ? 'ALREADY INSIDE CAMPUS' : null),

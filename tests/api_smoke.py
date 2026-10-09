@@ -234,6 +234,16 @@ def open_incidents_for(admin, plate):
     return [i for i in res.get('data', []) if i['plateNumber'] == plate]
 
 
+def clear_fixture_holds(admin, plate):
+    """Independent pass tests must not inherit a held incident raised by a prior tampering test."""
+    import re
+    _, response = call('GET', 'incidents.php?status=Held', token=admin)
+    normalize = lambda value: re.sub(r'[^A-Z0-9]', '', value.upper())
+    for incident in [i for i in response.get('data', []) if normalize(i['plateNumber']) == normalize(plate)]:
+        code, response = call('PUT', 'incidents.php', {'id': incident['id'], 'notes': 'Isolated test case cleared before the next independent scenario'}, admin)
+        assert code == 200, response
+
+
 def test_signed_passes(admin):
     section('Signed QR passes & verification')
     code, res = call('POST', 'vehicles.php', {
@@ -269,10 +279,11 @@ def test_signed_passes(admin):
     code, v = verify({'qr_code': json.dumps(extended), 'gate_type': 'Ingress'}, guard)
     check('repeat forged scan does not duplicate incident', len(open_incidents_for(admin, 'NDK 4821')) == 1, open_incidents_for(admin, 'NDK 4821'))
 
+    clear_fixture_holds(admin, 'NDK 4821')
     code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Ingress'}, guard, now='2027-01-05 08:00:00')
     check('expired pass on entry -> EXPIRED, denied', v.get('result') == 'EXPIRED' and not v['accepted'], v)
     code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Egress'}, guard, now='2027-01-05 08:00:00')
-    check('expired pass on exit -> allowed with hold alert', v.get('accepted') is True and any('HOLD' in w for w in v['warnings']), v)
+    check('expired signed pass without an inside record is refused', v.get('result') == 'EXPIRED' and v.get('accepted') is False, v)
 
     code, res = call('POST', 'passes.php', {'vehicle_id': veh['id'], 'action': 'reissue'}, guard)
     check('guard cannot reissue passes -> 403', code == 403, code)
@@ -281,6 +292,7 @@ def test_signed_passes(admin):
     new_payload = res['data']['qrPayload']
     code, v = verify({'qr_code': veh['qrPayload'], 'gate_type': 'Ingress'}, guard)
     check('old pass after reissue -> REVOKED', v.get('result') == 'REVOKED' and not v['accepted'], v)
+    clear_fixture_holds(admin, 'NDK 4821')
     code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'}, guard)
     check('new pass after reissue -> VALID', v.get('result') == 'VALID', v)
 
@@ -296,6 +308,8 @@ def test_signed_passes(admin):
     code, res = call('PUT', 'vehicles.php', {'id': veh['id'], 'passValidUntil': '2026-02-30'}, admin)
     check('invalid validity date rejected -> 400', code == 400, res)
 
+    clear_fixture_holds(admin, 'NDK 4821')
+    clear_fixture_holds(admin, 'NDK 4822')
     code, v = verify({'plate': 'ndk4821', 'gate_type': 'Ingress'}, guard)
     check('manual plate lookup -> MANUAL with identity warning', v.get('result') == 'MANUAL' and v['accepted'] and v['warnings'], v)
     code, v = verify({'plate': 'ZZZ 999', 'gate_type': 'Ingress'}, guard)
@@ -305,7 +319,7 @@ def test_signed_passes(admin):
     code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'}, guard)
     check('suspended vehicle entry -> SUSPENDED, denied', v.get('result') == 'SUSPENDED' and not v['accepted'], v)
     code, v = verify({'qr_code': new_payload, 'gate_type': 'Egress'}, guard)
-    check('suspended vehicle exit -> allowed with hold alert', v.get('accepted') is True, v)
+    check('suspended vehicle exit remains denied until cleared', v.get('result') == 'SUSPENDED' and v.get('accepted') is False, v)
     call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
 
     code, v = verify({'qr_code': new_payload, 'gate_type': 'Ingress'})
@@ -338,6 +352,7 @@ def test_legacy_passes(admin):
     check('hand-made legacy JSON (plate only) -> REVOKED', v.get('result') == 'REVOKED' and not v['accepted'], v)
     code, v = verify({'qr_code': json.dumps({'plateNumber': 'LEG 1001', 'ownerStudentId': 'NCST-2023-0100'}), 'gate_type': 'Ingress'}, admin, now='2026-10-01 08:00:00')
     check("legacy JSON with another owner's ID -> REVOKED", v.get('result') == 'REVOKED' and not v['accepted'], v)
+    clear_fixture_holds(admin, 'LEG 1001')
     code, v = verify({'qr_code': json.dumps({'plateNumber': 'LEG 1001', 'ownerStudentId': ' ncst-2023-0099 '}), 'gate_type': 'Ingress'}, admin, now='2026-10-01 08:00:00')
     check('owner ID compared without case or spacing -> LEGACY', v.get('result') == 'LEGACY', v)
     code, v = verify({'qr_code': legacy_json, 'gate_type': 'Ingress'}, admin, now='2027-01-02 08:00:00')
@@ -394,7 +409,7 @@ def test_gate_flow(admin):
     code, res = call('POST', 'logs.php', {'plateNumber': 'NDK 4821', 'driverName': 'Juan Dela Cruz', 'action': 'Entry Recorded'}, headers=SCANNER)
     check('mobile entry for suspended vehicle also refused', code == 403, res)
     code, res = call('POST', 'logs.php', {'plate': 'NDK 4821', 'action': 'Exit Approved', 'gate_type': 'Egress', 'driver_id': drivers['Juan Dela Cruz']}, guard)
-    check('exit for suspended vehicle still allowed', code == 201, res)
+    check('exit for suspended vehicle is refused at save too', code == 403 and res['data']['code'] == 'ACCESS_DENIED', res)
     call('PUT', 'vehicles.php', {'id': veh['id'], 'action': 'toggle_status'}, admin)
 
 
@@ -607,6 +622,7 @@ def test_visitor_passes(admin):
     code, v = verify({'qr_code': json.dumps(forged), 'gate_type': 'Ingress'}, guard, now=tomorrow)
     check('visitor pass with altered date -> FORGED', v.get('result') == 'FORGED', v)
 
+    clear_fixture_holds(admin, 'VIS9001')
     code, res = call('POST', 'logs.php', {'plate': 'VIS 9001', 'action': 'Entry Recorded', 'gate_type': 'Ingress', 'visitor_pass_id': vp['id']}, guard)
     check('visitor entry recorded -> 201, driver = visitor', code == 201 and res['data']['verifiedDriverName'] == 'Vicente Visitor', res)
     code, v = verify({'plate': 'VIS9001', 'gate_type': 'Egress'}, guard)
@@ -657,7 +673,7 @@ def test_student_portal(admin):
     check('registering a vehicle creates the owner portal login', code == 201 and acct['created'] and acct['tempPassword'], acct)
     temp = acct['tempPassword']
     code, res = call('POST', 'vehicles.php', {'plateNumber': 'STU 7002', 'ownerName': 'Sam Student', 'ownerIdNumber': owner_id}, admin)
-    check('second vehicle for the same ID is refused (one vehicle per ID)', code == 409 and res['data']['code'] == 'OWNER_HAS_VEHICLE'
+    check('second vehicle of the same class is refused for the owner', code == 409 and res['data']['code'] == 'OWNER_CLASS_LIMIT'
           and res['data']['plateNumber'] == 'STU 7001', res)
     # An owner who already had two vehicles before that rule existed (legacy data) must keep working: insert it directly
     import sqlite3
@@ -890,8 +906,8 @@ def test_scheduled_and_revoked_passes(admin):
     code, v = verify({'qr_code': today_pass['qrPayload'], 'gate_type': 'Ingress'}, guard)
     check('revoked pass is refused at the entrance', v.get('result') == 'REVOKED' and v.get('accepted') is False, v)
     code, v = verify({'qr_code': today_pass['qrPayload'], 'gate_type': 'Egress'}, guard)
-    check('revoked visitor inside may still leave, with a hold alert',
-          v.get('accepted') is True and v.get('result') == 'REVOKED' and any('HOLD ALERT' in w for w in v.get('warnings', [])), v)
+    check('revoked visitor inside is refused by the scanner while held',
+          v.get('accepted') is False and v.get('result') == 'REVOKED' and v.get('incident'), v)
     code, res = call('POST', 'logs.php', {'plate': 'SCH 5001', 'action': 'Exit Approved', 'gate_type': 'Egress',
                                           'visitor_pass_id': today_pass['id']}, guard)
     check('exit is logged', code == 201 and res['data']['status'] == 'Exited', res)
@@ -962,6 +978,7 @@ def test_vip_passes(admin):
     code, v = verify({'qr_code': vip['qrPayload'], 'gate_type': 'Egress'}, guard)
     check('the old VIP pass is REVOKED after a reissue', v.get('result') == 'REVOKED' and not v['accepted'], v)
     new_payload = res['data']['qrPayload']
+    clear_fixture_holds(admin, 'VIP 0001')
     code, v = verify({'qr_code': new_payload, 'gate_type': 'Egress'}, guard)
     check('the reissued VIP pass works', v.get('result') == 'VALID', v)
 
