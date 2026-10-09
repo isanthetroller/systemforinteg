@@ -237,6 +237,11 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
 
     $incident = null;
     $pdo->beginTransaction();
+    // Coordinate historical offline writes with live automatic confirmations.
+    if ($vehicle && $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+        $lockVehicle = $pdo->prepare("SELECT `id` FROM `vehicles` WHERE `id` = ? FOR UPDATE");
+        $lockVehicle->execute([$vehicle['id']]);
+    }
     $logId = recordGateLog($pdo, $actor, [
         'plate' => $storedPlate,
         'vehicleType' => $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : ($p['vehicleType'] ?? null)),

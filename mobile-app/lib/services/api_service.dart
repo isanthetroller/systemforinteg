@@ -10,6 +10,15 @@ import '../data/mock_data.dart';
 import 'local_cache_service.dart';
 import 'sync_queue_service.dart';
 
+class MovementApiException implements Exception {
+  final String message;
+  final String code;
+  final bool retryable;
+  const MovementApiException(this.message, this.code, {this.retryable = false});
+  @override
+  String toString() => message;
+}
+
 /// What happened to a live write (a POST the guard is waiting on).
 enum WriteOutcome {
   /// The server recorded it.
@@ -766,6 +775,47 @@ class ApiService {
   }
 
   /// Verify pass against backend /api/verify.php
+  /// Automatic movements require a named staff session and are never sent to the offline queue.
+  static Future<Map<String, dynamic>> movementRequest(
+    Map<String, dynamic> payload,
+  ) async {
+    http.Response response;
+    try {
+      response = await _post(
+        Uri.parse('${ApiConstants.baseUrl}/movements.php'),
+        jsonEncode(payload),
+      );
+    } catch (_) {
+      throw const MovementApiException(
+        'The connection was lost. Retry this confirmation to check whether it was saved.',
+        'CONNECTION_ERROR',
+        retryable: true,
+      );
+    }
+    Map<String, dynamic> body;
+    try {
+      body = Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+    } catch (_) {
+      throw const MovementApiException(
+        'The server response was interrupted. Retry this confirmation to check its result.',
+        'INVALID_RESPONSE',
+        retryable: true,
+      );
+    }
+    if (response.statusCode >= 200 &&
+        response.statusCode < 300 &&
+        body['data'] is Map) {
+      return Map<String, dynamic>.from(body['data'] as Map);
+    }
+    throw MovementApiException(
+      body['message']?.toString() ??
+          'Could not reach the server. Retry this confirmation.',
+      (body['data'] is Map ? body['data']['code'] : null)?.toString() ??
+          'SERVER_ERROR',
+      retryable: response.statusCode >= 500 || response.statusCode == 429,
+    );
+  }
+
   static Future<Map<String, dynamic>?> verifyPassWithServer({
     String? qrCode,
     String? plate,

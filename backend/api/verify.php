@@ -37,6 +37,7 @@ $data = getJsonInput();
 $qrCode = isset($data['qr_code']) ? trim((string)$data['qr_code']) : '';
 $plateInput = isset($data['plate']) ? trim((string)$data['plate']) : '';
 $gateType = (isset($data['gate_type']) && $data['gate_type'] === 'Egress') ? 'Egress' : 'Ingress';
+$movementPrepare = !empty($spMovementPreparation);
 
 if ($qrCode === '' && $plateInput === '') {
     sendResponse(400, null, 'Provide a scanned qr_code or a plate to look up.');
@@ -179,6 +180,11 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
 /* --------------------------------------------------------------------------
    2. Visitor pass rules & security incident holds
    -------------------------------------------------------------------------- */
+if ($movementPrepare) {
+    $insideForMovement = $vehicle ? $vehicle['status'] === 'Inside Campus'
+        : ($visitor && !empty($visitor['entry_time']) && empty($visitor['exit_time']));
+    $gateType = $insideForMovement ? 'Egress' : 'Ingress';
+}
 $revokedInside = $visitor && $visitor['status'] === 'Revoked'
     && !empty($visitor['entry_time']) && empty($visitor['exit_time']);
 
@@ -322,7 +328,7 @@ if ($vehicle) {
    5. Side effects: log every rejection; open incidents for forged / revoked passes
    -------------------------------------------------------------------------- */
 $autoLogged = false;
-if (!$accepted && $result !== 'NOT_FOUND') {
+if (!$movementPrepare && !$accepted && $result !== 'NOT_FOUND') {
     $plateForLog = $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $claimedPlate);
     $ownerName = $vehicle['owner_name'] ?? ($visitor['visitor_name'] ?? null);
     $vehicleType = $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : null);
@@ -386,6 +392,8 @@ sendResponse(200, [
     'autoLogged' => $autoLogged,
     'incident' => $incident,
     'currentlyInside' => $currentlyInside,
+    'movement' => $movementPrepare && $accepted && ($vehicle || $visitor)
+        ? issueMovementTicket($pdo, $actor, $vehicle ?: $visitor, $vehicle ? 'vehicle' : 'visitor') : null,
     'vehicle' => $vehicle ? vehicleForOutput($pdo, $vehicle, false) : null,
     'visitor' => $visitor ? formatVisitorForGate($pdo, $visitor) : null,
     'checkedAt' => date('Y-m-d H:i:s'),

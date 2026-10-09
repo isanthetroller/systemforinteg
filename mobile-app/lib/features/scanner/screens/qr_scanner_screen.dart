@@ -21,6 +21,7 @@ import '../widgets/camera_viewfinder.dart';
 import '../widgets/scan_rejection_view.dart';
 import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
+import '../widgets/movement_confirmation_card.dart';
 
 class QrScannerScreen extends StatefulWidget {
   final Function(AuditLogEntry) onDecision;
@@ -29,6 +30,9 @@ class QrScannerScreen extends StatefulWidget {
   final bool isEmbedded;
   final GateRepository repository;
   final VehicleRecord? initialVehicle;
+  final GuardUser? currentGuard;
+  final bool automaticMovement;
+  final ValueChanged<bool>? onMovementPendingChanged;
 
   const QrScannerScreen({
     super.key,
@@ -38,6 +42,9 @@ class QrScannerScreen extends StatefulWidget {
     this.isEmbedded = false,
     this.repository = const GateRepository(),
     this.initialVehicle,
+    this.currentGuard,
+    this.automaticMovement = false,
+    this.onMovementPendingChanged,
   });
 
   @override
@@ -54,6 +61,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   bool _isPatrolInspection = false;
   DateTime? _lastScanTime;
   ScanRejectionDetails? _rejectionDetails;
+
+  Map<String, dynamic>? _movementPreview;
+  Map<String, dynamic>? _movementSubmission;
+  String? _movementError;
+  bool _movementRetryPending = false;
+  bool _movementInvalidated = false;
 
   VehicleRecord? _scannedVehicle;
   // Set when the scanned plate / pass code belongs to a visitor day pass that already exists on the server
@@ -115,7 +128,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _cameraController?.stopSafely();
     } else if (state == AppLifecycleState.resumed) {
-      if (_scannedVehicle == null) {
+      if (_scannedVehicle == null && _movementPreview == null && !_isValidating && !_isSubmitting) {
         _cameraController?.startSafely();
       }
     }
@@ -147,7 +160,12 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   void _resetScanner() {
+    if (_isSubmitting || _movementRetryPending) return;
     setState(() {
+      _movementPreview = null;
+      _movementSubmission = null;
+      _movementError = null;
+      _movementInvalidated = false;
       _scannedVehicle = null;
       _visitorPass = null;
       _checkedVisitorItems.clear();
@@ -167,6 +185,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
   }
 
   void _processRawQrCode(String raw) async {
+    if (_movementPreview != null) return;
     final now = DateTime.now();
     if (_lastScanTime != null && now.difference(_lastScanTime!).inMilliseconds < 1500) {
       return;
@@ -184,7 +203,143 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
       _isPatrolInspection = false;
     });
 
-    await _syncVehicleWithDb(null, clean);
+    if (widget.automaticMovement) {
+      await _prepareMovement(clean);
+    } else {
+      await _syncVehicleWithDb(null, clean);
+    }
+  }
+
+  Future<void> _prepareMovement(String qr) async {
+    try {
+      final preview = await ApiService.movementRequest({
+        'action': 'prepare',
+        'qr_code': qr,
+      });
+      if (!mounted) return;
+      if (preview['accepted'] != true || preview['movement'] is! Map) {
+        setState(() {
+          _isValidating = false;
+          _rejectionDetails = ScanRejectionDetails(
+            type: ScanRejectionType.blocked,
+            title: 'Pass not approved',
+            message:
+                (preview['reason'] ??
+                        preview['message'] ??
+                        'Scan a registered vehicle or an active visitor pass.')
+                    .toString(),
+          );
+        });
+        return;
+      }
+      setState(() {
+        _isValidating = false;
+        _movementPreview = preview;
+        _movementSubmission = null;
+        _movementError = null;
+        _movementRetryPending = false;
+        _movementInvalidated = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isValidating = false;
+        _rejectionDetails = ScanRejectionDetails(
+          type: ScanRejectionType.networkError,
+          title: 'Could not check the pass',
+          message: e.toString(),
+        );
+      });
+    }
+  }
+
+  Future<void> _confirmMovement(int? driverId, bool itemsVerified) async {
+    if (_isSubmitting || _movementPreview == null || _movementInvalidated) {
+      return;
+    }
+    final preview = _movementPreview!;
+    final movement = preview['movement'] as Map;
+    _movementSubmission ??= {
+      'action': 'confirm',
+      'ticket': movement['ticket'],
+      'driver_id': ?driverId,
+      'items_verified': itemsVerified,
+    };
+    setState(() {
+      _isSubmitting = true;
+      _movementError = null;
+    });
+    widget.onMovementPendingChanged?.call(true);
+    try {
+      final saved = await ApiService.movementRequest(_movementSubmission!);
+      final record = Map<String, dynamic>.from(
+        (preview['vehicle'] ?? preview['visitor']) as Map,
+      );
+      final outgoing = saved['action'] == 'OUT';
+      await LocalCacheService.updateVehicleCampusStatus(
+        saved['plateNumber'].toString(),
+        saved['currentStatus'] == 'OUTSIDE' ? 'Outside' : 'Inside Campus',
+      );
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      widget.onMovementPendingChanged?.call(false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: NcstColors.green,
+          content: Text(
+            '${outgoing ? 'Exit' : 'Entry'} saved: ${saved['plateNumber']} is now ${saved['currentStatus']}.',
+          ),
+        ),
+      );
+      widget.onDecision(
+        AuditLogEntry(
+          id: saved['id'].toString(),
+          plateNumber: saved['plateNumber'].toString(),
+          vehicleType: (record['vehicleType'] ?? 'Visitor Vehicle').toString(),
+          ownerName: (record['ownerName'] ?? record['visitorName'] ?? '')
+              .toString(),
+          driverName:
+              (record['authorizedDrivers'] as List? ?? [])
+                  .whereType<Map>()
+                  .where((d) => '${d['id']}' == '$driverId')
+                  .map((d) => '${d['fullName']}')
+                  .firstOrNull ??
+              (record['ownerName'] ?? record['visitorName'] ?? '').toString(),
+          driverRelationship: record['isVip'] == true
+              ? 'VIP (driver not checked)'
+              : 'Authorized driver',
+          timeIn:
+              DateTime.tryParse(saved['loggedAt'].toString()) ?? DateTime.now(),
+          action: outgoing ? 'Exit Approved' : 'Entry Recorded',
+          status: outgoing ? GateStatus.exited : GateStatus.inside,
+        ),
+      );
+      if (!widget.isEmbedded && mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+    } on MovementApiException catch (e) {
+      if (!mounted) return;
+      widget.onMovementPendingChanged?.call(e.retryable);
+      setState(() {
+        _isSubmitting = false;
+        _movementRetryPending = e.retryable;
+        _movementInvalidated =
+            !e.retryable &&
+            e.code != 'DRIVER_CONFIRMATION_REQUIRED' &&
+            e.code != 'ITEMS_CHECK_REQUIRED';
+        _movementError = e.retryable
+            ? '${e.message} Keep this screen open and tap Retry confirmation. No new movement will be created by retrying.'
+            : e.message;
+        if (!e.retryable) _movementSubmission = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+        _movementRetryPending = true;
+        _movementError = 'The result is uncertain. Retry this confirmation to check whether it was saved.';
+      });
+    }
   }
 
   Future<void> _syncVehicleWithDb(VehicleRecord? initialVeh, [String? raw]) async {
@@ -1006,6 +1161,17 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           ],
         ),
       );
+    } else if (_movementPreview != null) {
+      content = MovementConfirmationCard(
+        preview: _movementPreview!,
+        guardName: widget.currentGuard?.fullName ?? 'Signed-in guard',
+        saving: _isSubmitting,
+        retryPending: _movementRetryPending,
+        invalidated: _movementInvalidated,
+        error: _movementError,
+        onConfirm: _confirmMovement,
+        onCancel: _resetScanner,
+      );
     } else if (_rejectionDetails != null) {
       content = ScanRejectionView(
         details: _rejectionDetails!,
@@ -1027,10 +1193,10 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           ? IconButton(
               icon: const Icon(Icons.arrow_back),
               tooltip: 'Back to Dashboard',
-              onPressed: widget.onReturnToDashboard,
+              onPressed: _isSubmitting || _movementRetryPending ? null : widget.onReturnToDashboard,
             )
           : null,
-      title: Text(_rejectionDetails != null
+      title: Text(_movementPreview != null ? 'Confirm movement' : _rejectionDetails != null
           ? 'Scan Rejected'
           : (_isPatrolInspection
               ? 'On-Campus Vehicle Inspection'
@@ -1040,7 +1206,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           : NcstColors.navy,
       foregroundColor: NcstColors.white,
       actions: [
-        if (_scannedVehicle == null && _rejectionDetails == null) ...[
+        if (_scannedVehicle == null && _rejectionDetails == null && _movementPreview == null && !_isValidating) ...[
           IconButton(
             tooltip: 'Enter QR Manually',
             icon: const Icon(Icons.keyboard_outlined, color: NcstColors.white),
@@ -1063,7 +1229,7 @@ class _QrScannerScreenState extends State<QrScannerScreen> with WidgetsBindingOb
           ),
         ] else
           TextButton.icon(
-            onPressed: _resetScanner,
+            onPressed: _isSubmitting || _movementRetryPending ? null : _resetScanner,
             icon: const Icon(Icons.qr_code_scanner, color: NcstColors.gold, size: 18),
             label: const Text(
               'Re-Scan QR',

@@ -44,9 +44,9 @@ class ScanRejectionDetails {
             (type == ScanRejectionType.blocked
                 ? 'The vehicle owner must resolve all issues with administration before the vehicle can proceed.'
                 : (type == ScanRejectionType.duplicateEntry
-                    ? 'Vehicle is already recorded as inside campus. It must exit through Guard 2 before another entry can be recorded.'
+                    ? 'Vehicle is already recorded as inside campus. Scan it again to confirm an exit at this checkpoint.'
                     : (type == ScanRejectionType.duplicateExit
-                        ? 'Vehicle has already exited or has no active campus entry record. Vehicle must enter through Guard 1.'
+                        ? 'Vehicle has already exited or has no active campus entry record. Scan it again to confirm an entry at this checkpoint.'
                         : (type == ScanRejectionType.networkError
                             ? 'Check the device internet connection or contact system administrator.'
                             : 'Ensure a valid campus pass or registered vehicle QR is scanned.'))));

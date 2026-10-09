@@ -9,6 +9,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/movements.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -117,6 +118,7 @@ function handleCreateLog($pdo, $actor) {
     $isApproval = in_array($action, ['Entry Recorded', 'Exit Approved'], true);
 
     $vehicle = findVehicleByPlate($pdo, $plateNumber);
+    $observedRevision = $vehicle ? movementRevision($pdo, $vehicle['plate_number']) : null;
     $isVip = isVipVehicle($vehicle);
     $visitor = null;
     if (!empty($data['visitor_pass_id'])) {
@@ -249,8 +251,17 @@ function handleCreateLog($pdo, $actor) {
         $notes = trim($notes . ' [Mobile operator: ' . $data['guardName'] . ']');
     }
 
-    $pdo->beginTransaction();
+    movementBegin($pdo);
     try {
+        if ($isApproval && $vehicle) {
+            $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
+            $fresh = $pdo->prepare("SELECT `status` FROM `vehicles` WHERE `id` = ?" . $lock);
+            $fresh->execute([$vehicle['id']]);
+            if ($fresh->fetchColumn() !== $vehicle['status'] || movementRevision($pdo, $vehicle['plate_number']) !== $observedRevision) {
+                movementEnd($pdo, false);
+                sendResponse(409, ['code' => 'STALE_SCAN'], 'Another transaction changed this vehicle. Scan it again before confirming.');
+            }
+        }
         $logId = recordGateLog($pdo, $actor, [
             'plate' => $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $plateNumber),
             'vehicleType' => $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : ($data['vehicleType'] ?? null)),
@@ -284,9 +295,9 @@ function handleCreateLog($pdo, $actor) {
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             }
         }
-        $pdo->commit();
+        movementEnd($pdo, true);
     } catch (Exception $e) {
-        $pdo->rollBack();
+        movementEnd($pdo, false);
         sendResponse(500, null, 'Failed to record gate log.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
     }
 

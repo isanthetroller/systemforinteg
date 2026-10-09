@@ -57,6 +57,34 @@ visitors get **single-day passes**.
 
 All times are **Asia/Manila (PHT, UTC+8)**.
 
+### Mobile: shared IN / OUT scanner
+
+Both guards now use **Scan IN / OUT**. The server reads the vehicle's shared campus status:
+Outside suggests Entry; Inside Campus suggests Exit. The guard sees the vehicle, current status,
+suggested movement, and authenticated checkpoint, then confirms or cancels. No gate log or status
+change is created by scan preparation. The same checkpoint can handle both movements.
+
+`POST api/movements.php` accepts `action: prepare` with `qr_code`, then `action: confirm` with
+the returned `ticket`, `driver_id` for ordinary vehicles, and `items_verified` for visitors with
+declared items. These operations require a named staff session, not just a scanner device key.
+Confirmation rechecks current state and security standing under a database lock. A changed record
+requires a fresh scan. Retrying the same ticket returns the original saved transaction without
+creating a reverse movement. Tickets expire after five minutes; an already-saved ticket still
+returns its saved result on retry. The automatic workflow follows the existing verification
+restrictions for security holds, bans, and suspension at both directions.
+
+This confirmed workflow needs an online connection. An interrupted confirmation keeps the same
+ticket on screen for retry and is not put into the historical offline-event queue. Existing offline
+visitor issuance and historical synchronization remain available.
+
+No new tables or columns are needed. Production must already have migration
+`006_offline_sync.sql` (`gate_logs.client_ref` and its unique index). Apply this existing migration
+only if it has not already been applied. Existing registrations and QR formats remain unchanged.
+
+Tests: `python tests/movement_integration.py` uses two real PHP workers and a disposable SQLite
+database. `--smoke` also runs the existing API suite in a separate disposable database;
+`--baseline-smoke` checks the same suite against the original PHP endpoints from Git HEAD.
+
 ---
 
 ## Folder layout
