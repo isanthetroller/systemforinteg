@@ -234,6 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const editPlateNumber = document.getElementById('editPlateNumber');
   const editMakeModel = document.getElementById('editMakeModel');
   const editStickerYear = document.getElementById('editStickerYear');
+  const editPassValidUntil = document.getElementById('editPassValidUntil');
   const editPassClassVip = document.getElementById('editPassClassVip');
   const editRegStatus = document.getElementById('editRegStatus');
   const editCampusStatus = document.getElementById('editCampusStatus');
@@ -280,6 +281,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewHooks = {};
 
   function switchView(targetViewId) {
+    // Violations and Flagged & Blocked were merged into one Cases screen
+    if (targetViewId === 'flaggedView' || targetViewId === 'violationsView') targetViewId = 'casesView';
     if (!views[targetViewId]) return;
     // Views hidden for the current role cannot be opened
     if (views[targetViewId].classList.contains('admin-only') && window.SPAuth && !SPAuth.hasRole('admin')) return;
@@ -835,8 +838,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (veh.isBanned) {
         return {
           type: 'banned',
-          badge: 'BANNED',
-          reason: 'Vehicle banned from campus (3+ strikes)',
+          badge: 'VIOLATION HOLD',
+          reason: 'Unresolved violation: the vehicle cannot enter or leave',
           id: veh.id
         };
       }
@@ -1504,8 +1507,7 @@ document.addEventListener('DOMContentLoaded', () => {
         matchesStatus = !!v.isVip;
       } else if (state.vehicleFilter.status === 'Banned') {
         matchesStatus = !!v.isBanned;
-      } else if (state.vehicleFilter.status === 'Strikes') {
-        matchesStatus = (Number(v.warningCount) || 0) > 0;
+
       } else if (state.vehicleFilter.status !== 'All') {
         matchesStatus = v.registrationStatus === state.vehicleFilter.status;
       }
@@ -1682,7 +1684,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <td class="py-2.5 px-3.5 align-middle">
           <div class="flex items-baseline gap-1.5 flex-wrap">
             <span class="font-mono font-bold text-slate-900 text-sm tracking-wide">${escapeHtml(vehicle.plateNumber)}</span>
-            ${strikeChip(vehicle)}
+            ${holdChip(vehicle)}
           </div>
           <div class="inline-flex items-center gap-1.5 text-[11px] text-slate-500 font-mono mt-0.5">
             <span class="px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200/80 text-slate-500 text-[10px] font-semibold">PASS</span>
@@ -1841,7 +1843,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (dropdown) dropdown.classList.add('hidden');
           if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
           const qrData = passPayloadFor(vehicle);
-          if (!qrData) return showToast(PASS_UNAVAILABLE_MSG);
+          if (!qrData) return showToast(passUnavailableMsg(vehicle));
           openZoomQrModal({
             payload: qrData,
             plate: vehicle.plateNumber,
@@ -1888,11 +1890,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vehicle.isBanned) {
       if (window.SPAlert) {
         SPAlert.warning({
-          title: 'Vehicle Banned',
-          text: `${vehicle.plateNumber} is banned by an active violation. Resolve it in Violations & Penalties to lift the suspension.`
+          title: 'Vehicle on Violation Hold',
+          text: `${vehicle.plateNumber} has an unresolved violation. Resolve it in Violations to let it enter and leave again.`
         });
       } else {
-        showToast(`${vehicle.plateNumber} is banned by a violation. Resolve it in Violations & Penalties to lift the suspension.`, 'warning');
+        showToast(`${vehicle.plateNumber} has an unresolved violation. Resolve it in Violations first.`, 'warning');
       }
       return;
     }
@@ -2617,7 +2619,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const qrData = passPayloadFor(v);
     if (!qrData) {
-      showToast(PASS_UNAVAILABLE_MSG);
+      showToast(passUnavailableMsg(v));
       return;
     }
 
@@ -2747,14 +2749,17 @@ document.addEventListener('DOMContentLoaded', () => {
       qrPassCode: qrCode,
       qr_pass_code: qrCode,
       qrPayload: v.qrPayload || null,
+      paymentStatus: v.paymentStatus || 'Paid',
+      feeAmount: Number(v.feeAmount || 0),
       passId: v.passId || null,
       passValidUntil: v.passValidUntil || null,
       passClass: v.passClass || (v.isVip ? 'VIP' : 'Standard'),
       isVip: !!(v.isVip || v.passClass === 'VIP'),
       vipGrantedBy: v.vipGrantedBy || null,
       vipGrantedAt: v.vipGrantedAt || null,
-      warningCount: v.warningCount || 0,
       isBanned: !!v.isBanned,
+      isRetired: !!v.isRetired,
+      retiredReason: v.retiredReason || null,
       entryTime: entryTime,
       gatePoint: gatePoint,
       authorizedDrivers: drivers
@@ -2941,8 +2946,8 @@ document.addEventListener('DOMContentLoaded', () => {
           </svg>
           <span>Print Pass</span>
         </button>
-<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Record a warning (strike) or a violation for this vehicle">
-          Flag Violation / Warning
+<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Issue a violation: the vehicle cannot enter or leave until it is resolved">
+          Issue Violation
         </button>
         <button id="drawerStudentLoginBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="Create or reset the owner's student portal login">
           Student Login
@@ -2950,6 +2955,8 @@ document.addEventListener('DOMContentLoaded', () => {
         <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
           Replace Pass
         </button>
+        ${v.isBanned && v.status === 'Inside Campus' ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
+        ${v.isRetired ? '' : `<button id="drawerRetireBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="The owner sold or no longer uses this vehicle. History is kept.">Retire</button>`}
         <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
           <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -2965,12 +2972,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     openDrawer(`Vehicle Details — ${v.plateNumber}`, v.plateNumber, html, footerHtml);
 
+    // Every case this vehicle has had, open or closed
+    if (window.ApiClient && v.plateNumber) {
+      drawerContent.insertAdjacentHTML('beforeend', '<div id="drawerCaseHistory" class="mt-4"></div>');
+      ApiClient.getCases({ plate: v.plateNumber, status: 'all', limit: 50 }).then(res => {
+        const box = drawerContent.querySelector('#drawerCaseHistory');
+        if (!box || !res) return;
+        const rows = (res.cases || []).map(c => `<button type="button" data-case="${escapeHtml(c.key)}" class="w-full text-left px-3 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer">
+            <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-slate-800">${escapeHtml(c.title)}</span><span class="text-[11px] text-slate-500">${escapeHtml(c.step)}</span></div>
+            <div class="text-[11px] text-slate-500">${escapeHtml(c.type)} · ${escapeHtml(String(c.openedAt || '').slice(0, 10))}${c.closedAt ? ' → ' + escapeHtml(String(c.closedAt).slice(0, 10)) : ''}</div></button>`).join('');
+        box.innerHTML = `<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Case history (${res.total})</div>`
+          + (rows ? `<div class="space-y-1.5">${rows}</div>` : '<div class="text-xs text-slate-400">No cases on record for this vehicle.</div>');
+        box.querySelectorAll('[data-case]').forEach(b => b.addEventListener('click', () => { if (window.SPCases) SPCases.open(b.dataset.case); }));
+      }).catch(() => {});
+    }
+
     // Render Scaled-Up 200px Drawer QR Code
     const drawerQrContainer = drawerContent.querySelector('#drawerQrContainer');
     if (drawerQrContainer && typeof QRCode !== 'undefined') {
       const qrData = passPayloadFor(v);
       if (!qrData) {
-        drawerQrContainer.innerHTML = `<div class="w-[200px] h-[200px] flex items-center justify-center text-center text-[11px] text-slate-500 border border-dashed border-slate-300 rounded p-3">${PASS_UNAVAILABLE_MSG}</div>`;
+        drawerQrContainer.innerHTML = `<div class="w-[200px] h-[200px] flex items-center justify-center text-center text-[11px] text-slate-500 border border-dashed border-slate-300 rounded p-3">${escapeHtml(passUnavailableMsg(v))}</div>`;
       } else try {
         drawerQrContainer.innerHTML = '';
         new QRCode(drawerQrContainer, {
@@ -3040,6 +3062,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const reissueBtn = drawerFooter.querySelector('#drawerReissueBtn');
     if (reissueBtn) reissueBtn.addEventListener('click', () => reissueVehiclePass(v));
+    const releaseBtn = drawerFooter.querySelector('#drawerReleaseBtn');
+    if (releaseBtn) releaseBtn.addEventListener('click', async () => {
+      if (window.SPOps && await SPOps.releaseExit(v)) closeDrawer();
+    });
+    const retireBtn = drawerFooter.querySelector('#drawerRetireBtn');
+    if (retireBtn) retireBtn.addEventListener('click', async () => {
+      if (window.SPOps && await SPOps.retire(v)) closeDrawer();
+    });
     const editBtn = drawerFooter.querySelector('#drawerEditBtn');
     if (editBtn) {
       editBtn.addEventListener('click', () => {
@@ -3145,118 +3175,167 @@ document.addEventListener('DOMContentLoaded', () => {
     return `<div class="mt-1">${SPClip.button({ logId: log.id, plate: log.plateNumber, action: log.action, loggedAt: log.loggedAt, gatePoint: log.gatePoint })}</div>`;
   }
 
+  /* ---- Gate record details: who, what, where, how, with photos and the context around it ---- */
+  function parseManila(value) {
+    if (!value) return null;
+    const d = new Date(String(value).replace(' ', 'T') + '+08:00');
+    return isNaN(d) ? null : d;
+  }
+
+  function humanDuration(ms) {
+    const mins = Math.max(0, Math.round(ms / 60000));
+    if (mins < 60) return `${mins} min`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (h < 48) return `${h} h${m ? ` ${m} min` : ''}`;
+    return `${Math.floor(h / 24)} days ${h % 24} h`;
+  }
+
   function openAuditDrawer(log) {
+    const esc = escapeHtml;
+    const plateKey = (p) => String(p || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
     const showClip = Boolean(window.SPClip) && /entry|exit/i.test(log.action || '') && !/denied/i.test(log.action || '');
     const cleanGate = formatGatePoint(log.gatePoint, log.gateType);
     const cleanOfficer = formatOfficerName(log.guardName);
     const officerReference = [...String(log.guardName || '').matchAll(/\(([^)]+)\)/g)].map(match => match[1]).join(' · ');
+    const isAdminUser = window.SPAuth && SPAuth.hasRole('admin');
 
     const actLower = (log.action || '').toLowerCase();
     const statLower = (log.status || '').toLowerCase();
     const isDenied = actLower.includes('denied') || actLower.includes('blocked') || statLower.includes('blocked');
     const isHold = actLower.includes('hold') || actLower.includes('flag') || actLower.includes('alert');
+    const isExit = /exit|egress/i.test(log.action || '') || log.gateType === 'Egress';
 
     let resultBadgeClass = 'bg-emerald-50 text-emerald-800 border-emerald-200';
     let resultDot = 'bg-emerald-500';
     let resultLabel = 'Approved';
-    if (isDenied) {
-      resultBadgeClass = 'bg-rose-50 text-rose-800 border-rose-200';
-      resultDot = 'bg-rose-600';
-      resultLabel = 'Denied';
-    } else if (isHold) {
-      resultBadgeClass = 'bg-amber-50 text-amber-900 border-amber-200';
-      resultDot = 'bg-amber-600';
-      resultLabel = 'On hold';
-    } else if (statLower === 'exited') {
-      resultBadgeClass = 'bg-slate-100 text-slate-800 border-slate-200';
-      resultDot = 'bg-slate-500';
-      resultLabel = 'Exited Campus';
-    }
+    if (isDenied) { resultBadgeClass = 'bg-rose-50 text-rose-800 border-rose-200'; resultDot = 'bg-rose-600'; resultLabel = 'Denied'; }
+    else if (isHold) { resultBadgeClass = 'bg-amber-50 text-amber-900 border-amber-200'; resultDot = 'bg-amber-600'; resultLabel = 'On hold'; }
+    else if (statLower === 'exited') { resultBadgeClass = 'bg-slate-100 text-slate-800 border-slate-200'; resultDot = 'bg-slate-500'; resultLabel = 'Exited Campus'; }
+
+    // ---- what we already know locally
+    const veh = state.vehicles.find(x => plateKey(x.plateNumber) === plateKey(log.plateNumber));
+    const passCode = (String(log.notes || '').match(/(VP-[A-Z0-9-]+)/i) || [])[1] || '';
+    const isVisitor = /visitor/i.test(log.driverRelationship || '') || /visitor/i.test(log.vehicleType || '') || Boolean(passCode);
+    const kindLabel = veh ? (veh.isVip ? 'Registered vehicle · VIP' : 'Registered vehicle') : (isVisitor ? 'Visitor vehicle' : 'Not registered');
+    const vehiclePhoto = veh ? resolveImgSrc(veh.vehiclePhoto || veh.vehiclePicture || '') : '';
+
+    const driverName = log.verifiedDriverName || log.driverName || '';
+    const drivers = (veh && veh.authorizedDrivers) || [];
+    const driverRec = drivers.find(d => String(d.fullName || '').trim().toLowerCase() === String(driverName).trim().toLowerCase());
+    const ownerIsDriver = veh && String(veh.ownerName || '').trim().toLowerCase() === String(driverName).trim().toLowerCase();
+    const driverPhoto = resolveImgSrc((driverRec && (driverRec.photoUrl || driverRec.photo_url)) || (ownerIsDriver ? (veh.ownerPhoto || '') : ''));
+
+    // ---- context: the entry behind an exit, and the vehicle's recent movements
+    const sameVehicle = state.auditLogs.filter(l => plateKey(l.plateNumber) === plateKey(log.plateNumber));
+    const loggedAt = parseManila(log.loggedAt);
+    const priorEntry = isExit && !isDenied
+      ? sameVehicle.filter(l => /entry recorded/i.test(l.action || '') && Number(l.id) < Number(log.id)).sort((a, b) => Number(b.id) - Number(a.id))[0]
+      : null;
+    const entryAt = priorEntry ? parseManila(priorEntry.loggedAt) : null;
+    const recent = sameVehicle.filter(l => l.id !== log.id).sort((a, b) => Number(b.id) - Number(a.id)).slice(0, 5);
+
+    // ---- small builders
+    const row = (label, value, mono) => (value === undefined || value === null || value === '') ? '' :
+      `<div class="flex items-start justify-between gap-4 py-1.5 border-b border-slate-100 last:border-0"><span class="sp-record-label flex-none">${esc(label)}</span><span class="font-semibold text-slate-800 text-right break-words min-w-0 ${mono ? 'font-mono' : ''}">${value}</span></div>`;
+    const chip = (text, tone) => `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${tone || 'bg-slate-100 text-slate-700 border-slate-200'}">${esc(text)}</span>`;
+    const carIcon = '<svg class="w-9 h-9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 17h14M6 17l1.5-6h9L18 17M7 17v2m10-2v2M8 13h8"/></svg>';
+    const personIcon = '<svg class="w-9 h-9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>';
+    const photo = (src, label, icon, height) => src
+      ? `<figure class="m-0"><button type="button" data-zoom="${esc(src)}" class="block w-full cursor-zoom-in" aria-label="Enlarge ${esc(label)}"><img src="${esc(src)}" alt="${esc(label)}" loading="lazy" class="w-full ${height} object-cover rounded-lg border border-slate-200 bg-slate-100" onerror="this.closest('figure').outerHTML='${'<div class=&quot;w-full ' + height + ' rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-slate-300&quot;></div>'}'"></button><figcaption class="text-[11px] text-slate-500 mt-1">${esc(label)} · tap to enlarge</figcaption></figure>`
+      : `<div class="w-full ${height} rounded-lg border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-1 text-slate-400">${icon}<span class="text-[11px]">No ${esc(label.toLowerCase())} on file</span></div>`;
+    const card = (title, body, extra) => `<section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-2 ${extra || ''}"><div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">${esc(title)}</div>${body}</section>`;
+
+    const lookup = log.lookupMethod === 'manual' ? chip('Looked up by hand', 'bg-amber-50 text-amber-800 border-amber-200')
+      : log.lookupMethod === 'qr' ? chip('QR scanned') : '';
+    const offline = log.syncedAt && offlineChip(log) ? chip('Recorded offline', 'bg-blue-50 text-blue-700 border-blue-200') : '';
 
     const html = `
-      <div class="sp-record-details space-y-4 text-xs">
-        
-        <!-- Audit Event Primary Banner -->
-        <div class="sp-record-summary p-3.5 rounded-lg border border-slate-200 bg-slate-50/80 flex items-center justify-between gap-3">
-          <div>
-            <div class="sp-record-label">Gate event</div>
-            <div class="text-base font-bold text-slate-900 mt-0.5">${escapeHtml(log.action || 'Gate Passage')}</div>
+      <div class="sp-record-details space-y-4 text-xs" id="auditAsyncGuard" data-id="${esc(String(log.id))}">
+
+        <!-- Summary -->
+        <div class="sp-record-summary rounded-lg border border-slate-200 bg-white">
+          <div class="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div class="sp-record-label">Gate event</div>
+              <div class="text-xl font-bold text-slate-900 mt-0.5">${esc(log.action || 'Gate Passage')}</div>
+              <div class="text-[12px] text-slate-500 mt-0.5">${esc(log.timestamp || '')}</div>
+            </div>
+            <div class="text-right flex flex-col items-end gap-1">
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${resultBadgeClass}"><span class="w-1.5 h-1.5 rounded-full ${resultDot}"></span>${resultLabel}</span>
+              <span class="sp-record-reference">Record #${esc(String(log.id || '—'))}</span>
+            </div>
           </div>
-          <div class="text-right flex flex-col items-end gap-1">
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${resultBadgeClass}">
-              <span class="w-1.5 h-1.5 rounded-full ${resultDot}"></span>
-              ${resultLabel}
-            </span>
-            <span class="sp-record-reference">Record #${escapeHtml(String(log.id || '—'))}</span>
+          <div class="flex flex-wrap items-center gap-1.5 mt-3">
+            ${chip(cleanGate, 'bg-slate-50 text-slate-700 border-slate-200')}
+            ${chip(kindLabel, veh ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : (isVisitor ? 'bg-sky-50 text-sky-800 border-sky-200' : 'bg-slate-100 text-slate-600 border-slate-200'))}
+            ${lookup}${offline}
           </div>
         </div>
 
-        <!-- 2-Column Details Ledger -->
-        <div class="sp-record-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
-          
-          <!-- Vehicle Card -->
-          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-2">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1 flex items-center justify-between">
-              <span>Vehicle</span>
-            </div>
-            <div class="flex items-center gap-2 pt-0.5">
-              <span class="font-mono font-bold text-sm bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
-                ${escapeHtml(log.plateNumber)}
-              </span>
-              <span class="text-xs text-slate-600">${escapeHtml(log.vehicleType || '')}</span>
-            </div>
-            <div class="text-[11px] text-slate-500 pt-1">
-              <span class="sp-record-label">Campus status</span> <strong class="text-slate-700">${escapeHtml(log.status || 'Recorded')}</strong>
-            </div>
-          </section>
+        <!-- Photos -->
+        <div class="grid grid-cols-1 ${driverPhoto || veh ? 'sm:grid-cols-2' : ''} gap-3" id="auditPhotos">
+          <div>${photo(vehiclePhoto, 'Vehicle photo', carIcon, 'h-44')}</div>
+          ${driverPhoto || veh ? `<div>${photo(driverPhoto, 'Driver photo', personIcon, 'h-44')}</div>` : ''}
+        </div>
 
-          <!-- Person Card -->
-          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-2">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">
-              Driver &amp; owner
+        <!-- Vehicle + people -->
+        <div class="sp-record-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+          ${card('Vehicle', `
+            <div class="flex items-center gap-2">
+              <span class="font-mono font-bold text-sm bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">${esc(log.plateNumber)}</span>
+              <span class="text-xs text-slate-600">${esc(log.vehicleType || (veh && veh.vehicleType) || '')}</span>
             </div>
             <div>
-              <div class="sp-record-label">Driver</div>
-              <div class="font-semibold text-slate-900">${escapeHtml(log.driverName || 'Not recorded')}</div>
-              ${log.driverRelationship && !/^unverified$/i.test(log.driverRelationship) ? `<div class="sp-record-secondary">${escapeHtml(log.driverRelationship)}</div>` : ''}
-            </div>
-            <div class="pt-1 border-t border-slate-50">
-              <div class="sp-record-label">Owner</div>
-              <div class="font-semibold text-slate-800">${escapeHtml(log.ownerName || '—')}</div>
-            </div>
-          </section>
-
-          <!-- Gate Location Card -->
-          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-1.5">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">
-              Gate
-            </div>
-            <div class="font-bold text-slate-900 text-xs">${escapeHtml(cleanGate)}</div>
-          </section>
-
-          <!-- Officer Card -->
-          <section class="sp-record-card p-3 rounded-lg border border-slate-200 bg-white space-y-1.5">
-            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1">
-              Checked by
-            </div>
-            <div class="font-bold text-slate-900 text-xs">${escapeHtml(cleanOfficer)}</div>
-            ${officerReference ? `<div class="sp-record-secondary">${escapeHtml(officerReference)}</div>` : ''}
-          </section>
-
+              ${row('Make / model', veh ? esc(veh.makeModelColor || '') : '')}
+              ${row('Sticker year', veh ? esc(veh.stickerYear || '') : '')}
+              ${row('Pass valid until', veh && veh.passValidUntil ? esc(veh.passValidUntil) : '')}
+              ${row('Registration', veh ? esc(veh.registrationStatus || '') : '')}
+              ${row('Campus status', esc(log.status || 'Recorded'))}
+            </div>`)}
+          ${card('Driver & owner', `
+            <div>
+              ${row('Driver', `${esc(log.driverName || 'Not recorded')}${log.driverRelationship && !/^unverified$/i.test(log.driverRelationship) ? `<div class="sp-record-secondary font-normal">${esc(log.driverRelationship)}</div>` : ''}`)}
+              ${row('Identity check', log.verifiedDriverName ? chip('Verified against the driver list', 'bg-emerald-50 text-emerald-800 border-emerald-200') : (isVisitor ? chip('Visitor pass', 'bg-sky-50 text-sky-800 border-sky-200') : chip('Not verified', 'bg-amber-50 text-amber-800 border-amber-200')))}
+              ${row('Owner', esc(log.ownerName || (veh && veh.ownerName) || '—'))}
+              ${veh ? row('ID number', esc(veh.ownerIdNumber || ''), true) : ''}
+              ${veh ? row('Role', esc([veh.ownerRole, veh.department].filter(Boolean).join(' · '))) : ''}
+              ${veh && veh.ownerPhone ? row('Phone', `<a class="text-ncst-navy hover:underline" href="tel:${esc(veh.ownerPhone)}">${esc(veh.ownerPhone)}</a>`) : ''}
+              ${veh && veh.ownerEmail ? row('E-mail', `<a class="text-ncst-navy hover:underline" href="mailto:${esc(veh.ownerEmail)}">${esc(veh.ownerEmail)}</a>`) : ''}
+            </div>`)}
         </div>
 
-        <!-- Verification Notes -->
+        <!-- Visit details (filled in for visitors) -->
+        <div id="auditVisitorBox">${isVisitor ? '<div class="text-[11px] text-slate-400">Loading visit details…</div>' : ''}</div>
+
+        <!-- Handling -->
+        <div class="sp-record-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+          ${card('Where and who', `<div>
+              ${row('Gate', esc(cleanGate))}
+              ${row('Checked by', esc(cleanOfficer))}
+              ${officerReference ? row('Badge', esc(officerReference), true) : ''}
+              ${log.lookupMethod ? row('Identified by', log.lookupMethod === 'manual' ? 'Plate typed by the guard' : 'QR code scan') : ''}
+            </div>`)}
+          ${card(isExit && priorEntry ? 'Time on campus' : 'Recent movements', isExit && priorEntry ? `<div>
+              ${row('Entered', esc(priorEntry.timestamp || ''))}
+              ${row('Left', esc(log.timestamp || ''))}
+              ${loggedAt && entryAt ? row('Stayed', `<strong>${esc(humanDuration(loggedAt - entryAt))}</strong>`) : ''}
+              ${row('Entry gate', esc(formatGatePoint(priorEntry.gatePoint, priorEntry.gateType)))}
+              ${row('Admitted by', esc(formatOfficerName(priorEntry.guardName)))}
+            </div>` : (recent.length ? `<ul class="divide-y divide-slate-100">${recent.slice(0, 4).map(l => `<li class="py-1.5 flex items-center justify-between gap-3"><span class="font-semibold text-slate-800">${esc(l.action)}</span><span class="text-[11px] text-slate-500">${esc(l.timestamp || '')}</span></li>`).join('')}</ul>` : '<div class="text-slate-400">No other movements on record.</div>'))}
+        </div>
+
+        <!-- Notes -->
         <section class="sp-record-card sp-record-notes p-3 rounded-lg border border-slate-200 bg-white space-y-1">
           <div class="sp-record-label">Gate check notes</div>
-          <p class="text-xs text-slate-700 leading-relaxed">${escapeHtml(log.notes || 'Gate check completed.')}</p>
-          ${log.syncedAt && offlineChip(log) ? `
-            <div class="pt-1 text-[10.5px] text-blue-700 font-semibold font-mono">
-              Recorded offline at gate &middot; synced to server at ${escapeHtml(log.syncedAt)}
-            </div>
-          ` : ''}
+          <p class="text-xs text-slate-700 leading-relaxed">${esc(log.notes || 'Gate check completed.')}</p>
+          ${log.syncedAt && offlineChip(log) ? `<div class="pt-1 text-[10.5px] text-blue-700 font-semibold font-mono">Recorded offline at gate &middot; synced to server at ${esc(log.syncedAt)}</div>` : ''}
         </section>
 
-        <!-- CCTV Clip Section -->
+        <!-- Guard photos and related cases (filled in) -->
+        <div id="auditEvidenceBox"></div>
+        <div id="auditCasesBox"></div>
+
+        <!-- CCTV -->
         ${showClip ? `
           <div class="p-3 rounded-lg border border-slate-200 bg-white space-y-2">
             <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
@@ -3264,32 +3343,83 @@ document.addEventListener('DOMContentLoaded', () => {
               <span class="font-mono text-blue-700 font-semibold">5s Gate Recording</span>
             </div>
             <div id="auditClipHost"></div>
-          </div>
-        ` : ''}
+          </div>` : ''}
+      </div>`;
 
-      </div>
-    `;
-
-    const auditVehicle = state.vehicles.find(x => (x.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() === (log.plateNumber || '').replace(/[^A-Z0-9]/gi, '').toUpperCase());
+    const auditVehicle = veh;
     const auditFooter = `
       <div class="flex items-center justify-between gap-2 w-full">
-        <div>
-          ${auditVehicle ? `
-            <button id="auditFlagBtn" class="px-3 py-1.5 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-rose-700 shadow-2xs transition-colors cursor-pointer" title="Record a warning or violation">
-              Record issue
-            </button>
-          ` : ''}
+        <div class="flex items-center gap-2">
+          ${auditVehicle ? `<button id="auditOpenVehicleBtn" class="px-3 py-1.5 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">Open vehicle</button>` : ''}
+          ${auditVehicle ? `<button id="auditFlagBtn" class="px-3 py-1.5 rounded-md bg-white border border-rose-300 hover:bg-rose-50 text-xs font-semibold text-rose-700 shadow-2xs transition-colors cursor-pointer" title="Record an issue with this vehicle">Record issue</button>` : ''}
         </div>
-        <button id="drawerCancelBtnInner" class="px-3.5 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">
-          Close
-        </button>
-      </div>
-    `;
+        <button id="drawerCancelBtnInner" class="px-3.5 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer">Close</button>
+      </div>`;
 
     openDrawer(`Gate record — ${log.plateNumber}`, log.timestamp, html, auditFooter);
     if (showClip) SPClip.mount(document.getElementById('auditClipHost'), { logId: log.id, plate: log.plateNumber, action: log.action, loggedAt: log.loggedAt, gatePoint: log.gatePoint });
     const auditFlagBtn = document.getElementById('auditFlagBtn');
     if (auditFlagBtn) auditFlagBtn.addEventListener('click', () => window.SPViolations && SPViolations.openFlagModal(auditVehicle, { context: `Gate log: ${log.action} at ${log.gatePoint}, ${log.timestamp}` }));
+    const openVehicleBtn = document.getElementById('auditOpenVehicleBtn');
+    if (openVehicleBtn) openVehicleBtn.addEventListener('click', () => { closeDrawer(); openVehicleDrawer(auditVehicle); });
+
+    // Tap a photo to enlarge it (also works for the photos that arrive later)
+    drawerContent.onclick = (e) => {
+      const z = e.target.closest && e.target.closest('[data-zoom]');
+      if (z && typeof Swal !== 'undefined') Swal.fire({ imageUrl: z.dataset.zoom, imageAlt: 'Photo', showConfirmButton: false, showCloseButton: true, width: 'auto', padding: '1em' });
+      const c = e.target.closest && e.target.closest('[data-case]');
+      if (c && window.SPCases) { closeDrawer(); SPCases.open(c.dataset.case); }
+    };
+
+    // ---- the parts that need the server
+    const stillOpen = () => { const g = document.getElementById('auditAsyncGuard'); return g && g.dataset.id === String(log.id); };
+    if (!window.ApiClient) return;
+
+    if (isVisitor) {
+      ApiClient.getVisitorPasses({ q: passCode || log.plateNumber }).then(pass => {
+        const box = document.getElementById('auditVisitorBox');
+        if (!stillOpen() || !box || !pass || !pass.passCode) { if (box && stillOpen()) box.innerHTML = ''; return; }
+        const items = (pass.items || []).map(i => `${esc(i.quantity)}× ${esc(i.name)}${i.description ? ` (${esc(i.description)})` : ''}`).join(', ');
+        box.innerHTML = card('Visit details', `<div>
+            ${row('Visitor', esc(pass.visitorName))}
+            ${row('Contact', pass.contactNumber ? `<a class="text-ncst-navy hover:underline" href="tel:${esc(pass.contactNumber)}">${esc(pass.contactNumber)}</a>` : '')}
+            ${row('Purpose', esc(pass.purposeOfVisit))}
+            ${row('Visiting', esc(pass.personToVisit))}
+            ${row('Pass', esc(pass.passCode), true)}
+            ${row('Valid on', esc(pass.validDate))}
+            ${row('Pass status', esc(pass.status))}
+            ${row('Items declared', items)}
+          </div>`);
+        // The photo the guard took of the visitor's vehicle at entry
+        if (pass.vehiclePhoto && !vehiclePhoto) {
+          const slot = document.getElementById('auditPhotos').firstElementChild;
+          if (slot) slot.innerHTML = photo(pass.vehiclePhoto, 'Vehicle photo taken at entry', carIcon, 'h-44');
+        }
+      }).catch(() => {});
+    }
+
+    if (isAdminUser) {
+      ApiClient.getEvidence({ gateLogId: log.id }).then(async (list) => {
+        const box = document.getElementById('auditEvidenceBox');
+        if (!stillOpen() || !box || !list || !list.length) return;
+        const photos = await Promise.all(list.filter(e => !e.purged).map(e => ApiClient.getEvidencePhoto(e.id).catch(() => null)));
+        if (!stillOpen()) return;
+        const cells = photos.filter(p => p && p.image).map(p => `<figure class="m-0">
+            <button type="button" data-zoom="${esc(p.image)}" class="block w-full cursor-zoom-in"><img src="${esc(p.image)}" alt="Guard photo" class="w-full h-28 object-cover rounded-lg border border-slate-200"></button>
+            <figcaption class="mt-1 text-[11px]">${p.plateMatches === true ? chip('Plate matches the pass', 'bg-emerald-50 text-emerald-800 border-emerald-200') : (p.plateMatches === false ? chip('Plate does not match: ' + (p.plateRead || ''), 'bg-rose-50 text-rose-800 border-rose-200') : chip('Plate not checked'))}
+            <div class="text-slate-500 mt-0.5">${esc(p.takenBy || '')}</div></figcaption></figure>`).join('');
+        if (cells) box.innerHTML = card('Guard photos', `<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">${cells}</div>`);
+      }).catch(() => {});
+    }
+
+    ApiClient.getCases({ plate: log.plateNumber, status: 'all', limit: 4 }).then(res => {
+      const box = document.getElementById('auditCasesBox');
+      if (!stillOpen() || !box || !res || !res.cases || !res.cases.length) return;
+      box.innerHTML = card('Cases on this vehicle', `<ul class="divide-y divide-slate-100">${res.cases.map(c => `
+        <li><button type="button" data-case="${esc(c.key)}" class="w-full text-left py-2 flex items-center justify-between gap-3 hover:bg-slate-50 rounded cursor-pointer">
+          <span class="min-w-0"><span class="font-semibold text-slate-800 block truncate">${esc(c.title)}</span><span class="text-[11px] text-slate-500">${esc(c.type)} · opened ${esc(String(c.openedAt || '').slice(0, 10))}</span></span>
+          ${chip(c.step, c.status === 'Closed' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200')}</button></li>`).join('')}</ul>`);
+    }).catch(() => {});
   }
 
   /* ==========================================================================
@@ -3409,6 +3539,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (editPlateNumber) editPlateNumber.value = v.plateNumber || '';
     if (editMakeModel) editMakeModel.value = v.makeModelColor || '';
     if (editStickerYear) editStickerYear.value = v.stickerYear || '2026';
+    if (editPassValidUntil) editPassValidUntil.value = v.passValidUntil || '';
     if (editPassClassVip) editPassClassVip.checked = !!v.isVip;
     if (editRegStatus) editRegStatus.value = v.registrationStatus || 'Active';
     if (editCampusStatus) {
@@ -3580,6 +3711,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const plateNumber = editPlateNumber ? editPlateNumber.value.trim().toUpperCase() : (v.plateNumber || '');
       const makeModelColor = editMakeModel ? editMakeModel.value.trim() : (v.makeModelColor || '');
       const stickerYear = editStickerYear ? editStickerYear.value.trim() : (v.stickerYear || '2026');
+      // Sent only when the administrator actually changed it (the server then asks for a reason)
+      const newPassDate = editPassValidUntil ? editPassValidUntil.value : '';
+      const passDateChanged = Boolean(newPassDate) && newPassDate !== (v.passValidUntil || '');
       const registrationStatus = editRegStatus ? editRegStatus.value : (v.registrationStatus || 'Active');
 
       // Read Authorized Drivers
@@ -3669,17 +3803,25 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhone: v.ownerPhone,
           ownerEmail: v.ownerEmail,
           stickerYear: v.stickerYear,
+          ...(passDateChanged ? { passValidUntil: newPassDate } : {}),
           passClass: requestedVip ? 'VIP' : 'Standard',
           registrationStatus: v.registrationStatus,
           ownerPhoto: v.ownerPhoto,
           vehiclePhoto: v.vehiclePhoto,
           authorizedDrivers: v.authorizedDrivers
         }).then((saved) => {
+          const wasUnpaid = v.paymentStatus === 'Unpaid';
           if (saved) applyServerPass(v, saved);
           renderVehiclesTable();
           updateCounts();
           renderDashboard();
-          showToast(`Changes saved for ${v.plateNumber}.`);
+          if (!wasUnpaid && v.paymentStatus === 'Unpaid') {
+            // The edit moved the vehicle into a higher fee class: the difference is due before it can enter again
+            showToast(`Changes saved. ${v.plateNumber} now owes ₱${Number(v.feeAmount).toLocaleString('en-PH')} (fee difference) and cannot enter until it is paid at the Cashier or online.`, 'warning');
+            document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
+          } else {
+            showToast(`Changes saved for ${v.plateNumber}.`);
+          }
           console.log('[App] Vehicle updated on server:', v.plateNumber);
         }).catch(err => {
           console.warn('[App] Update API sync notice:', err.message);
@@ -4082,6 +4224,15 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      // One vehicle per ID number (the server enforces this too)
+      const enteredOwnerId = document.getElementById('ownerIdNumber').value.trim().toUpperCase();
+      const ownerTaken = enteredOwnerId && state.vehicles.find(v => String(v.ownerIdNumber || v.owner_id_number || '').trim().toUpperCase() === enteredOwnerId);
+      if (ownerTaken) {
+        showToast(`ID ${enteredOwnerId} already has a registered vehicle (${ownerTaken.plateNumber}). Only one vehicle can be registered per ID number.`, 'warning');
+        document.getElementById('ownerIdNumber').focus();
+        return;
+      }
+
       const ownerFullName = document.getElementById('ownerFullName').value.trim();
       const ownerRole = document.getElementById('ownerRole').value;
       const department = document.getElementById('department').value.trim();
@@ -4184,7 +4335,14 @@ document.addEventListener('DOMContentLoaded', () => {
           if (res && res.id) newVehicle.id = res.id;
           if (res) applyServerPass(newVehicle, res);
           console.log('[App] Vehicle enrolled on backend:', res);
-          showToast(`Signed pass issued for ${plateNumber}.`);
+          if (res && res.paymentStatus === 'Unpaid') {
+            newVehicle.paymentStatus = 'Unpaid';
+            newVehicle.feeAmount = res.feeAmount;
+            showToast(`${plateNumber}: fee of \u20b1${Number(res.feeAmount).toLocaleString('en-PH')} to pay. The QR pass is issued after payment (Cashier or online).`);
+          } else {
+            showToast(`Signed pass issued for ${plateNumber}.`);
+          }
+          document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
           switchView('vehiclesView');
           openVehicleDrawer(newVehicle);
           const acct = res && res.studentAccount;
@@ -4192,8 +4350,17 @@ document.addEventListener('DOMContentLoaded', () => {
             SPTempPassword(`Student portal login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
           }
         }).catch(err => {
-          console.warn('[App] Local cache saved, API sync notice:', err.message);
-          showToast(`Notice: Saved locally, server sync error: ${err.message}`);
+          console.warn('[App] Registration was not saved:', err.message);
+          if (err.status >= 400 && err.status < 500) {
+            // The server refused it (e.g. the ID already has a vehicle): drop the optimistic local row
+            state.vehicles = state.vehicles.filter(x => x !== newVehicle);
+            updateCounts();
+            renderDashboard();
+            renderVehiclesTable();
+            showToast(`${plateNumber} was not registered: ${err.message}`, 'warning');
+          } else {
+            showToast(`Notice: Saved locally, server sync error: ${err.message}`);
+          }
         });
       }
 
@@ -4790,6 +4957,14 @@ document.addEventListener('DOMContentLoaded', () => {
      9.2 Signed Pass Helpers (payloads are signed by the server, never here)
      ========================================================================== */
   const PASS_UNAVAILABLE_MSG = 'Signed pass not available yet. Save the vehicle online, then reload.';
+  function passUnavailableMsg(v) {
+    if (v && v.isRetired) return 'This vehicle was retired (replaced or sold). It has no pass.';
+    if (v && v.paymentStatus === 'Unpaid') {
+      const fee = Number(v.feeAmount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 });
+      return `Registration fee of \u20b1${fee} is unpaid. The QR pass is issued once it is paid at the Cashier or online.`;
+    }
+    return PASS_UNAVAILABLE_MSG;
+  }
 
   // A gate log the mobile app recorded offline and sent later shows when it reached the server
   function offlineChip(log) {
@@ -4801,15 +4976,18 @@ document.addEventListener('DOMContentLoaded', () => {
     return `<div class="mt-0.5"><span class="inline-block px-1.5 py-0.5 rounded bg-ncst-navy/10 text-ncst-navy border border-ncst-navy/20 text-[9px] font-bold tracking-wide" title="Recorded offline at the gate; reached the server at ${escapeHtml(log.syncedAt)}">OFFLINE &middot; synced ${escapeHtml(at)}</span></div>`;
   }
 
-  function strikeChip(v) {
+  function holdChip(v) {
+    if (v.isRetired) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-300 text-[10px] font-semibold tracking-wide" title="' + escapeHtml(v.retiredReason || 'Retired') + '">RETIRED</span>';
+    if (v.paymentStatus === 'Unpaid') return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold tracking-wide">UNPAID \u20b1' + Number(v.feeAmount || 0).toLocaleString('en-PH') + '</span>';
     if (v.isVip) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/80 text-[10px] font-semibold tracking-wide">VIP</span>';
-    if (v.isBanned) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold tracking-wide">BANNED</span>';
-    const n = Number(v.warningCount || 0);
-    return n > 0 ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">STRIKE ${n}/3</span>` : '';
+    if (v.isBanned) return '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold tracking-wide">VIOLATION HOLD</span>';
+    return '';
   }
 
   function passPayloadFor(v) {
     if (!v) return null;
+    if (v.isRetired) return null; // a retired vehicle has no pass
+    if (v.paymentStatus === 'Unpaid') return null; // no pass exists until the fee is paid
     if (typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{')) {
       return v.qrPayload;
     }
@@ -4842,6 +5020,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function applyServerPass(target, serverVehicle) {
     target.qrPayload = serverVehicle.qrPayload || target.qrPayload || null;
     target.passId = serverVehicle.passId || target.passId || null;
+    target.paymentStatus = serverVehicle.paymentStatus || target.paymentStatus || 'Paid';
+    if (serverVehicle.feeAmount != null) target.feeAmount = Number(serverVehicle.feeAmount);
     target.passValidUntil = serverVehicle.passValidUntil || target.passValidUntil || null;
     if (serverVehicle.plateNumber) target.plateNumber = serverVehicle.plateNumber;
     if (typeof serverVehicle.isVip === 'boolean') {
@@ -5017,6 +5197,11 @@ document.addEventListener('DOMContentLoaded', () => {
     closeDrawer,
     alert: window.SPAlert,
     reload: loadInitialDataFromApi,
+    openIncident(id) {
+      const inc = (state.incidents || []).find(x => x.id === id);
+      if (inc) openIncidentDrawer(inc);
+      return !!inc;
+    },
     openVehicle(id) {
       const v = state.vehicles.find(x => x.id === id);
       if (v) openVehicleDrawer(v);

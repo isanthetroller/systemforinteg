@@ -6,8 +6,8 @@
 require_once __DIR__ . '/qr.php';
 
 /**
- * VIP vehicles (permanent passes for e.g. the school president) are exempt from strikes, bans by the
- * strike engine, overnight / overtime flags and the gate's driver-confirmation step.
+ * VIP vehicles (permanent passes for e.g. the school president) are exempt from violations,
+ * overnight / overtime flags and the gate's driver-confirmation step.
  * Signature, revocation and the gate log still apply to them.
  */
 function isVipVehicle($v) {
@@ -58,12 +58,18 @@ function formatVehicleRow($v) {
         'gatePoint' => $v['last_gate_point'] ?? '—',
         'passId' => $v['pass_id'] ?? null,
         'passValidUntil' => $v['pass_valid_until'] ?? null,
-        'warningCount' => (int)($v['warning_count'] ?? 0),
         'isBanned' => (int)($v['is_banned'] ?? 0) === 1,
         'passClass' => isVipVehicle($v) ? 'VIP' : 'Standard',
         'isVip' => isVipVehicle($v),
         'vipGrantedBy' => isVipVehicle($v) ? ($v['pass_class_by'] ?? null) : null,
         'vipGrantedAt' => isVipVehicle($v) ? ($v['pass_class_at'] ?? null) : null,
+        'isRetired' => (int)($v['is_retired'] ?? 0) === 1,
+        'retiredAt' => $v['retired_at'] ?? null,
+        'retiredReason' => $v['retired_reason'] ?? null,
+        'replacedByVehicleId' => isset($v['replaced_by_vehicle_id']) ? (int)$v['replaced_by_vehicle_id'] : null,
+        'paymentStatus' => $v['payment_status'] ?? 'Paid',
+        'feeAmount' => (float)($v['fee_amount'] ?? 0),
+        'paidAt' => $v['paid_at'] ?? null,
         'authorizedDrivers' => $drivers
     ];
 }
@@ -103,6 +109,46 @@ function findVehicleByPlate($pdo, $plate) {
         $veh = $stmt->fetch();
     }
     return $veh ?: null;
+}
+
+/**
+ * One vehicle per ID number: the vehicle already registered to this student / employee ID (ignoring case and
+ * surrounding spaces), optionally excluding one vehicle id (the one being edited). Null when the ID is free.
+ */
+function findVehicleByOwnerId($pdo, $ownerIdNumber, $exceptVehicleId = 0) {
+    $needle = strtoupper(trim((string)$ownerIdNumber));
+    if ($needle === '') return null;
+    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE UPPER(TRIM(`owner_id_number`)) = ? AND `id` <> ? ORDER BY `id` ASC LIMIT 1");
+    $stmt->execute([$needle, (int)$exceptVehicleId]);
+    return $stmt->fetch() ?: null;
+}
+
+function ownerHasVehicleResponse($existing) {
+    sendResponse(409, ['code' => 'OWNER_HAS_VEHICLE', 'plateNumber' => $existing['plate_number']],
+        "ID {$existing['owner_id_number']} already has a registered vehicle ({$existing['plate_number']}). Only one vehicle can be registered per ID number.");
+}
+
+/**
+ * True when the vehicle's stored pass validity date is in the past (a missing date never expires).
+ */
+function vehiclePassExpired($row, $today = null) {
+    $until = $row['pass_valid_until'] ?? null;
+    return is_string($until) && $until !== '' && $until < ($today ?? date('Y-m-d'));
+}
+
+/**
+ * Finds the authorized driver of a vehicle by name (case, extra spaces and punctuation ignored).
+ */
+function findAuthorizedDriverByName($pdo, $vehicleId, $name) {
+    $norm = fn($s) => preg_replace('/[^a-z0-9]+/', ' ', strtolower(trim((string)$s)));
+    $wanted = trim($norm($name));
+    if ($wanted === '') return null;
+    $stmt = $pdo->prepare("SELECT * FROM `authorized_drivers` WHERE `vehicle_id` = ?");
+    $stmt->execute([(int)$vehicleId]);
+    foreach ($stmt->fetchAll() as $drv) {
+        if (trim($norm($drv['full_name'])) === $wanted) return $drv;
+    }
+    return null;
 }
 
 function findVehicleById($pdo, $id) {
@@ -148,8 +194,9 @@ function vehicleForOutput($pdo, $row, $includeQr = false) {
     $row = ensurePassIdentity($pdo, $row);
     $row['authorizedDrivers'] = getDriversForVehicle($pdo, $row['id']);
     $out = formatVehicleRow($row);
+    // No QR exists for a vehicle whose registration fee is unpaid; payment issues a fresh pass id
     if ($includeQr) {
-        $out['qrPayload'] = vehicleQrPayload($row);
+        $out['qrPayload'] = (($row['payment_status'] ?? 'Paid') !== 'Unpaid' && (int)($row['is_retired'] ?? 0) === 0) ? vehicleQrPayload($row) : null;
     }
     return $out;
 }

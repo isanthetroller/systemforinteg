@@ -2,7 +2,7 @@
 
 Campus vehicle gate system for the National College of Science and Technology (NCST).
 Vehicles carry a **signed QR pass**; guards verify the pass and the driver at the gate,
-every entry and exit is logged, repeat offenders are banned by a **3-strike policy**, and
+every entry and exit is logged, a vehicle with an unresolved **violation** can neither enter nor leave, and
 visitors get **single-day passes**.
 
 | Part | Folder | Users |
@@ -22,18 +22,18 @@ visitors get **single-day passes**.
   mandatory driver confirmation, approve / deny (denials open a security case).
 - **Signed QR passes** (HMAC-SHA256, server-side only). Reissuing a pass revokes every older QR.
   Forged / tampered / revoked passes are rejected and flagged automatically.
-- **Violations & 3-strike policy**: every warning is a strike; the 3rd strike (or a manual violation)
-  bans the vehicle until an admin resolves it with written notes.
+- **Violations**: guards and admins issue violations (there are no warnings or strikes). A vehicle with a pending
+  violation can neither enter nor leave campus until an admin resolves it with written notes.
 - **On Campus Now**: every vehicle currently inside (registered and visitors) with entry time, hours inside,
-  who drove in, who admitted it, contact and strike standing; flag a warning / violation or report a visitor
+  who drove in, who admitted it, contact and violation hold; issue a violation or report a visitor
   incident straight from the list.
-- **Overtime & overnight detection** after the 22:00 curfew, with an attention panel (call owner, flag strike).
+- **Overtime & overnight detection** after the 22:00 curfew, with an attention panel (call the owner first; staff issue a violation only if needed, otherwise the vehicle is reported to the police).
 - **Visitor day passes**: valid all day on one date. Guards issue passes for today; an admin can pick a later day
   (up to 60 days ahead) and the QR is refused as "not yet valid" before it. Screenshot-ready card / PNG. Passes can list the
   **items the visitor brings in** (e.g. 40 event chairs); guards must tick them off on entry and exit and the
   item list is written to the gate log.
 - **VIP passes** (permanent vehicles, e.g. the school president): an administrator ticks "VIP pass" when registering or
-  editing a vehicle. VIP vehicles are exempt from strikes and bans, overnight / overtime checks and the gate's
+  editing a vehicle. VIP vehicles are exempt from violations, overnight / overtime checks and the gate's
   driver-confirmation step, and show a gold VIP banner. The pass is still signed and can be revoked, and every passage
   is logged as a VIP passage. The class is stored in the database (not in the QR), with who granted it and when.
 - **Offline sync**: when the gate has no connection the mobile app keeps each event with the time it happened and sends it
@@ -83,7 +83,7 @@ only if it has not already been applied. Existing registrations and QR formats r
 
 Tests: `python tests/movement_integration.py` uses two real PHP workers and a disposable SQLite
 database. `--smoke` also runs the existing API suite in a separate disposable database;
-`--baseline-smoke` checks the same suite against the original PHP endpoints from Git HEAD.
+`--baseline-smoke` checks the same suite against the fetched GitHub main backend and original regression tests.
 
 ---
 
@@ -92,7 +92,7 @@ database. `--smoke` also runs the existing API suite in a separate disposable da
 ```
 backend/                  <- the ONLY place PHP is edited
   api/                    endpoints (see API reference below)
-  lib/                    auth, qr, vehicles, records, strikes, students
+  lib/                    auth, qr, vehicles, records, violations, cases, payments, students
   config/                 db.php, secret.example.php, secret.php (git-ignored)
   database/               schema.sql (fresh install), migrations/ 001 to 006 (existing DB)
 web-app-admin/            admin & guard portal (+ generated copy of backend/api, lib, config, database)
@@ -164,7 +164,7 @@ Nothing is deployed automatically. Steps, in order:
 1. **Back up** the live database (phpMyAdmin → Export).
 2. **Migrate the existing database** — phpMyAdmin → SQL → run, in order and **once each**,
    `backend/database/migrations/001_v2.sql`, `002_visitor_items.sql`, `003_system_settings.sql`, then
-   `004_vehicle_status_outside.sql`, `005_vip_pass_class.sql`, then `006_offline_sync.sql`. All are non-destructive
+   `004_vehicle_status_outside.sql`, `005_vip_pass_class.sql`, then `006_offline_sync.sql` through `011_visitor_vehicle_photo.sql` in order. These migrations are non-destructive
    (keep vehicles, drivers, logs, incidents).
    Do **not** run `schema.sql` on the live database: it drops every table (fresh installs only).
 3. Create **`backend/config/secret.production.php`** (git-ignored) from `secret.example.php` with
@@ -204,22 +204,22 @@ Staff and students authenticate with `Authorization: Bearer <token>` (fallback h
 | `violations.php` | GET / POST (guards: warnings only) · PUT resolve / dismiss / reset: admin | staff |
 | `overnight_check.php` | GET report · POST run / `{ vehicle_id }` flag | staff |
 | `oncampus.php` | GET registered vehicles + visitors currently inside | staff |
-| `visitors.php` | GET (`?date=` / `?upcoming=1` / `?id=`) / POST `{ ..., items: [{ name, quantity, description }], valid_date? }`: staff (only an admin may set `valid_date` to a later day) · PUT revoke: admin (a visitor still inside gets a Held incident and may still leave) | staff |
+| `visitors.php` | GET (`?date=` / `?upcoming=1` / `?id=`) / POST `{ ..., items: [{ name, quantity, description }], valid_date? }`: staff (only an admin may set `valid_date` to a later day) · PUT revoke: admin (a visitor still inside gets a Held incident and is refused by verification until cleared) | staff |
 | `students.php` | GET / POST issue login | admin |
 | `student.php?action=me|vehicles|violations|activity` | GET | student (own data only) |
 | `stats.php`, `status.php` | GET | staff / public health check |
 
 Verification results: `VALID`, `LEGACY`, `MANUAL`, `FORGED`, `REVOKED`, `EXPIRED`, `EXPIRED_TEMP`, `NOT_YET_VALID`,
-`BANNED`, `SUSPENDED`, `NOT_FOUND`. Entries are refused for banned / suspended / expired passes; exits
-are always allowed (with a hold alert) so vehicles are never trapped on campus.
+`BANNED`, `SUSPENDED`, `NOT_FOUND`. Entries are refused for holds, suspension, unpaid registration, retirement and expired passes.
+Held vehicles need an administrator to clear the case or grant a single-use exit release.
 
 ---
 
 ## Known limitations & follow-ups
 
-- **Mobile app**: it sends the device key and calls `verify.php` for every scan, and it syncs offline
-  events (see Offline sync). It does not know about VIP vehicles or about passes scheduled for a later day yet.
-  It cannot be built or tested without the Flutter SDK (run `flutter analyze` and `flutter test` in `mobile-app/`).
+- **Mobile app**: uses staff login and `movements.php` for confirmed automatic IN/OUT scans. It supports VIP,
+  visitor dates, evidence, capacity/case notices and guard shifts. Historical offline events still use `sync.php`.
+  Physical camera/OCR behavior needs a real-device check.
 - **Rejected offline events**: an event the server refuses for good (for example older than 24 hours) is kept
   in the phone's local "rejected" list; there is no screen to review it yet.
 - **No cron on InfinityFree**: the overnight check runs whenever a staff member has the portal open
@@ -227,3 +227,42 @@ are always allowed (with a hold alert) so vehicles are never trapped on campus.
 - **Password resets** are done by an admin (Staff Accounts / "Student Login" in the vehicle dossier);
   there is no email-based reset.
 - **Existing printed passes** keep working until `SP_LEGACY_QR_CUTOFF`; reissue them from the vehicle dossier.
+
+
+## Integrated web and mobile workflow (October 9, 2026)
+
+Both guard accounts use **Scan IN / OUT**. A scan reads shared server state and shows a suggested entry or exit;
+only **Confirm Entry / Confirm Exit** saves it. Staff authentication is required, the checkpoint comes from the
+signed-in account, and retries reuse the signed confirmation ticket. Automatic movements require a connection
+and are not added to the historical offline queue. Old queued events continue to use the existing sync endpoint.
+
+`POST /api/movements.php`: `{action: "prepare", qr_code | plate, lookup_method?: "qr" | "manual"}`,
+then `{action: "confirm", ticket, driver_id?, items_verified?}`. Confirmation checks current state, hold/release,
+registration, payment, retirement, driver, visitor items and pass identity inside a transaction. New movements
+appear in the existing web logs, on-campus list and owner notices. Duplicate tickets return the original result.
+
+The GitHub cases, payments/renewals, evidence/OCR, guard shifts, owner notices and updated web portals are preserved.
+A one-time admin exit release also works with automatic scanning; using it does not clear the vehicle's hold.
+
+### Use the same server
+
+The admin portal uses `./api`; the local owner portal uses `../web-app-admin/api`. Configure the mobile sign-in
+server to that **same** `web-app-admin/api` URL. For an Android emulator and the local server on port 8001:
+`http://10.0.2.2:8001/web-app-admin/api`. On a phone, use the computer's reachable LAN IP instead of localhost.
+The default cloud host is preserved, but local integration does not deploy the new endpoint to that host.
+
+`backend/` is canonical source; `web-app-admin/{api,lib,config,database}` is its deployed mirror.
+Serve the mirror for local web/mobile checks. Do not independently serve both PHP copies against separate SQLite files.
+Keep existing secrets and data. Apply missing MySQL migrations **001 through 011 in order**, skipping already-applied
+ones; never run the destructive fresh-install schema on an existing database. SQLite adds the missing columns/tables
+on connection. No additional movement table or separate mobile database is required.
+
+### Local verification
+
+- `python tests/movement_integration.py`: real PHP workers, disposable shared SQLite database and concurrent guards.
+- `python tests/movement_integration.py --smoke`: also runs the full backend regression suite in another disposable database.
+- `python tests/movement_integration.py --baseline-smoke`: checks the complete backend and original tests from fetched `origin/main`.
+- `python sync_backend.py --check`: verifies the source/deployment mirror.
+- From `mobile-app/`: `flutter analyze`, `flutter test`, `flutter build apk --debug`.
+
+All integration work and recovery commits remain local until explicitly authorized for publication.

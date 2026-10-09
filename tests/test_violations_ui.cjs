@@ -13,7 +13,7 @@ const elements = new Map();
 const get = id => { if(!elements.has(id)) elements.set(id,new Element()); return elements.get(id); };
 const events = {};
 let show, calls=0;
-let records = Array.from({length:23}, (_,i)=>({id:i+1,plateNumber:`TEST-${i+1}`,ownerName:'Fixture',violationType:'Other',severity:'Warning',status:'Pending',description:'Fixture notes',createdAt:'2026-10-07 12:00:00'}));
+let records = Array.from({length:23}, (_,i)=>({id:i+1,plateNumber:`TEST-${i+1}`,ownerName:'Fixture',violationType:'Other',status:'Pending',description:'Fixture notes',createdAt:'2026-10-07 12:00:00'}));
 const context = {
   document:{getElementById:get,createElement:()=>new Element(),querySelectorAll:()=>[],addEventListener:(name,fn)=>{events[name]=fn;}},
   console,

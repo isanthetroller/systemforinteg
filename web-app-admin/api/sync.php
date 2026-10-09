@@ -29,6 +29,7 @@
 
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/photos.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 
@@ -202,6 +203,11 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
         if ($vehicle) {
             if ((int)$vehicle['is_banned'] === 1) $flags[] = 'BANNED';
             elseif ($vehicle['registration_status'] === 'Suspended') $flags[] = 'SUSPENDED';
+            if ((int)($vehicle['is_retired'] ?? 0) === 1) $flags[] = 'RETIRED';
+            if (($vehicle['payment_status'] ?? 'Paid') === 'Unpaid') $flags[] = 'UNPAID';
+            if (vehiclePassExpired($vehicle, $eventDay)) $flags[] = 'EXPIRED_PASS';
+            $syncDriver = trim((string)($p['driverName'] ?? $p['driver_name'] ?? ''));
+            if (!$isVip && !findAuthorizedDriverByName($pdo, $vehicle['id'], $syncDriver)) $flags[] = 'DRIVER_NOT_LISTED';
         } elseif ($visitor) {
             $insideNow = !empty($visitor['entry_time']) && empty($visitor['exit_time']);
             if ($visitor['status'] === 'Revoked' && empty($visitor['exit_time'])) $flags[] = 'REVOKED';
@@ -300,6 +306,14 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
     }
     $pdo->commit();
 
+    if ($isApproval && $vehicle) {
+        try {
+            noticeVehiclePassage($pdo, $vehicle, $gateType, $gatePoint, $driverName, $driverRelationship, $occurred, gateActorLabel($actor), $logId);
+        } catch (Throwable $e) {
+            error_log('[Notices] passage notice failed: ' . $e->getMessage());
+        }
+    }
+
     return syncResult($ref, 'accepted', null, null, [
         'id' => $logId,
         'flags' => $flags,
@@ -334,6 +348,7 @@ function syncIncident($pdo, $actor, $ref, $ts, array $p, $offlineNote) {
         'notes' => $notes,
         'reportedAt' => date('Y-m-d H:i:s', $ts),
         'clientRef' => $ref,
+        'notifyOwner' => true,
     ]);
     if ($vehicle && $vehicle['status'] === 'Inside Campus') {
         $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `id` = ?")->execute([$vehicle['id']]);
@@ -461,6 +476,11 @@ function syncVisitorPass($pdo, $actor, $ref, $ts, array $p, $now) {
     if (columnExists($pdo, 'visitor_passes', 'synced_at')) {
         $columns[] = 'synced_at';
         $values[] = date('Y-m-d H:i:s', $now);
+    }
+    $photo = validImageDataUrl($p['vehiclePhoto'] ?? $p['vehicle_photo'] ?? $p['vehiclePhotoUrl'] ?? null);
+    if ($photo !== null && columnExists($pdo, 'visitor_passes', 'vehicle_photo')) {
+        $columns[] = 'vehicle_photo';
+        $values[] = $photo;
     }
     $pdo->beginTransaction();
     $marks = implode(', ', array_fill(0, count($columns), '?'));

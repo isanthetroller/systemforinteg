@@ -70,6 +70,15 @@ class VehicleRecord {
   final String? campusStatus;
   final bool isAntiPassback;
 
+  // Contact and on-campus details (shown to the guard when a vehicle that is already inside is scanned again)
+  final String? ownerPhone;
+  final String? department;
+  final DateTime? onCampusSince;
+  final String? entryGate;
+  final String? enteredBy;
+  final String? admittedBy;
+  final double? hoursInside;
+
   const VehicleRecord({
     required this.plateNumber,
     required this.vehicleType,
@@ -93,6 +102,13 @@ class VehicleRecord {
     this.registrationStatus = 'Active',
     this.campusStatus,
     this.isAntiPassback = false,
+    this.ownerPhone,
+    this.department,
+    this.onCampusSince,
+    this.entryGate,
+    this.enteredBy,
+    this.admittedBy,
+    this.hoursInside,
   });
 
   /// The server's numeric id of the authorized driver with this name, or null when it is not known (offline
@@ -265,6 +281,12 @@ class VehicleRecord {
     final isAntiPassback = json['currentlyInside'] == true ||
         statusStr.contains('inside');
 
+    String? textOrNull(dynamic v) {
+      final t = (v ?? '').toString().trim();
+      return t.isEmpty || t == 'null' ? null : t;
+    }
+    final lastEntryRaw = textOrNull(json['lastEntryTime'] ?? json['last_entry_time']);
+
     return VehicleRecord(
       plateNumber: plate,
       vehicleType: vehicleType,
@@ -288,6 +310,10 @@ class VehicleRecord {
       registrationStatus: (json['registration_status'] ?? json['registrationStatus'])?.toString() ?? 'Active',
       campusStatus: campusStatus,
       isAntiPassback: isAntiPassback,
+      ownerPhone: textOrNull(json['ownerPhone'] ?? json['owner_phone'] ?? json['ownerContact']),
+      department: textOrNull(json['department']),
+      onCampusSince: lastEntryRaw != null ? DateTime.tryParse(lastEntryRaw.replaceFirst(' ', 'T')) : null,
+      entryGate: textOrNull(json['lastGatePoint'] ?? json['last_gate_point']),
     );
   }
 
@@ -314,6 +340,13 @@ class VehicleRecord {
     String? registrationStatus,
     String? campusStatus,
     bool? isAntiPassback,
+    String? ownerPhone,
+    String? department,
+    DateTime? onCampusSince,
+    String? entryGate,
+    String? enteredBy,
+    String? admittedBy,
+    double? hoursInside,
   }) {
     return VehicleRecord(
       plateNumber: plateNumber ?? this.plateNumber,
@@ -338,6 +371,13 @@ class VehicleRecord {
       registrationStatus: registrationStatus ?? this.registrationStatus,
       campusStatus: campusStatus ?? this.campusStatus,
       isAntiPassback: isAntiPassback ?? this.isAntiPassback,
+      ownerPhone: ownerPhone ?? this.ownerPhone,
+      department: department ?? this.department,
+      onCampusSince: onCampusSince ?? this.onCampusSince,
+      entryGate: entryGate ?? this.entryGate,
+      enteredBy: enteredBy ?? this.enteredBy,
+      admittedBy: admittedBy ?? this.admittedBy,
+      hoursInside: hoursInside ?? this.hoursInside,
     );
   }
 
@@ -363,6 +403,10 @@ class VehicleRecord {
     'isBanned': isBanned,
     if (campusStatus != null) 'campusStatus': campusStatus,
     'isAntiPassback': isAntiPassback,
+    if (ownerPhone != null) 'ownerPhone': ownerPhone,
+    if (department != null) 'department': department,
+    if (onCampusSince != null) 'lastEntryTime': onCampusSince!.toIso8601String(),
+    if (entryGate != null) 'lastGatePoint': entryGate,
   };
 }
 

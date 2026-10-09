@@ -6,7 +6,7 @@
  *
  * Registered vehicles with status "Inside Campus" and visitors who entered on a day pass
  * but have not exited, with how long they have been inside, who drove in, owner contact,
- * strike standing and any items the visitor brought in.
+ * violation hold and any items the visitor brought in.
  *
  * Both lists come back in arrival order: the vehicle that entered first is first, so the
  * guard can monitor them in the order they came in. `entryLogId` is the gate log of that entry
@@ -26,6 +26,27 @@ requireStaff($pdo);
 $now = spNow();
 $nightStart = currentNightStart($now);
 $today = date('Y-m-d', $now);
+
+/**
+ * Timestamp (seconds) of the most recent time a case on this plate was closed (a security incident resolved or a
+ * violation resolved / dismissed), or null. A refused exit that happened BEFORE that moment is settled history: it no
+ * longer keeps the vehicle or visitor flagged as blocked.
+ */
+function lastCaseClosedTs($pdo, $plate) {
+    $norm = normalizePlate($plate);
+    $best = null;
+    $queries = [
+        "SELECT MAX(`resolved_at`) FROM `security_incidents` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `status` <> 'Held'",
+        "SELECT MAX(`resolved_at`) FROM `vehicle_violations` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `status` <> 'Pending'",
+    ];
+    foreach ($queries as $sql) {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$norm]);
+        $ts = strtotime((string)$stmt->fetchColumn());
+        if ($ts && ($best === null || $ts > $best)) $best = $ts;
+    }
+    return $best;
+}
 
 /* ---------- Registered vehicles ---------- */
 $vehicles = [];
@@ -47,10 +68,11 @@ foreach ($candidateVehicles as $v) {
             SELECT `logged_at` FROM `gate_logs` 
             WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
               AND `action` = 'Exit Approved'
-              AND `logged_at` >= ?
+              AND (`logged_at` > ? OR (`logged_at` = ? AND `id` > ?))
             LIMIT 1
         ");
-        $exitStmt->execute([normalizePlate($v['plate_number']), date('Y-m-d H:i:s', $entry['time'])]);
+        $entryAt = date('Y-m-d H:i:s', $entry['time']);
+        $exitStmt->execute([normalizePlate($v['plate_number']), $entryAt, $entryAt, $entry['logId'] ?? 0]);
         if ($exitStmt->fetch()) {
             continue;
         }
@@ -79,7 +101,9 @@ foreach ($candidateVehicles as $v) {
     $lastExitDenied = $deniedStmt->fetch() ?: null;
     $hasExitDenied = false;
     if ($lastExitDenied && $entry) {
-        $hasExitDenied = strtotime($lastExitDenied['logged_at']) >= $entry['time'];
+        $deniedAt = strtotime($lastExitDenied['logged_at']);
+        $closedAt = lastCaseClosedTs($pdo, $v['plate_number']);
+        $hasExitDenied = $deniedAt >= $entry['time'] && ($closedAt === null || $deniedAt > $closedAt);
     }
 
     $hours = $entry ? round(max(0, $now - $entry['time']) / 3600, 1) : null;
@@ -101,7 +125,6 @@ foreach ($candidateVehicles as $v) {
         'hoursInside' => $hours,
         'isVip' => isVipVehicle($v),
         'timeFlag' => isVipVehicle($v) ? null : ($overnight ? 'overnight' : ($hours !== null && $hours >= SP_OVERTIME_HOURS ? 'overtime' : null)),
-        'warningCount' => (int)$v['warning_count'],
         'isBanned' => (int)$v['is_banned'] === 1,
         'registrationStatus' => $v['registration_status'],
         'status' => $v['status'],
@@ -147,7 +170,9 @@ foreach ($stmt->fetchAll() as $p) {
     $lastExitDenied = $deniedStmt->fetch() ?: null;
     $hasExitDenied = false;
     if ($lastExitDenied && $p['entry_time']) {
-        $hasExitDenied = strtotime($lastExitDenied['logged_at']) >= strtotime($p['entry_time']);
+        $deniedAt = strtotime($lastExitDenied['logged_at']);
+        $closedAt = lastCaseClosedTs($pdo, $p['plate_number']);
+        $hasExitDenied = $deniedAt >= strtotime($p['entry_time']) && ($closedAt === null || $deniedAt > $closedAt);
     }
 
     $entryTs = strtotime($p['entry_time']);
@@ -184,7 +209,7 @@ sendResponse(200, [
         'registered' => count($vehicles),
         'visitors' => count($visitors),
         'flagged' => count(array_filter($vehicles, fn($v) => $v['timeFlag'] !== null || !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => $v['overstayed'] || $v['revoked'] || !empty($v['activeHold']) || $v['exitDenied'])),
-        'withStrikes' => count(array_filter($vehicles, fn($v) => $v['warningCount'] > 0 || $v['isBanned'])),
+        'onHold' => count(array_filter($vehicles, fn($v) => $v['isBanned'])),
         'blocked' => count(array_filter($vehicles, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])) + count(array_filter($visitors, fn($v) => !empty($v['activeHold']) || $v['exitDenied'])),
     ],
     'vehicles' => $vehicles,

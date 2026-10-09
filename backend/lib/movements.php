@@ -2,6 +2,8 @@
 /** Confirmation tickets bind a scan to a staff member and an exact shared-state snapshot. */
 require_once __DIR__ . '/records.php';
 require_once __DIR__ . '/vehicles.php';
+require_once __DIR__ . '/releases.php';
+require_once __DIR__ . '/campus.php';
 
 function movementRevision($pdo, $plate) {
     $s = $pdo->prepare("SELECT COALESCE(MAX(`id`), 0) FROM `gate_logs` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `action` IN ('Entry Recorded', 'Exit Approved')");
@@ -13,18 +15,20 @@ function movementCheckpoint($actor) {
     return trim((string)($actor['gate_assigned'] ?? '')) ?: 'Security checkpoint';
 }
 
-function movementInside($row, $type) {
+function movementInside($row, $type, $pdo = null) {
+    if ($type === 'vehicle' && $pdo) return vehicleRecordedInside($pdo, $row);
     return $type === 'vehicle' ? $row['status'] === 'Inside Campus'
         : !empty($row['entry_time']) && empty($row['exit_time']);
 }
 
-function issueMovementTicket($pdo, $actor, $row, $type) {
-    $inside = movementInside($row, $type);
+function issueMovementTicket($pdo, $actor, $row, $type, $lookupMethod = 'qr') {
+    $inside = movementInside($row, $type, $pdo);
     $snapshot = [
         'v' => 1, 'actor' => (int)$actor['id'], 'type' => $type, 'id' => (int)$row['id'],
         'plate' => $row['plate_number'], 'inside' => $inside,
         'revision' => movementRevision($pdo, $row['plate_number']),
         'pass' => $type === 'vehicle' ? ($row['pass_id'] ?? '') : $row['pass_code'],
+        'lookup' => $lookupMethod === 'manual' ? 'manual' : 'qr',
         'checkpoint' => movementCheckpoint($actor), 'expires' => time() + 300,
         'ref' => 'mv-' . bin2hex(random_bytes(20)),
     ];
@@ -92,28 +96,36 @@ function confirmMovement($pdo, $actor, array $data) {
         $dup->execute([$s['ref']]);
         if ($log = $dup->fetch()) {
             movementEnd($pdo, true);
-            return movementResult($log, true, $row, $s['type']);
+            return movementResult($log, true, $row, $s['type'], $pdo);
         }
         if ($s['expires'] < time()) throw new MovementFailure(409, 'SCAN_EXPIRED', 'This scan has expired. Scan the pass again.');
         if (!$row) throw new MovementFailure(404, 'NOT_FOUND', 'This record is no longer available.');
-        $inside = movementInside($row, $s['type']);
+        $inside = movementInside($row, $s['type'], $pdo);
         if ($inside !== $s['inside'] || movementRevision($pdo, $row['plate_number']) !== $s['revision'] || normalizePlate($row['plate_number']) !== normalizePlate($s['plate'])) {
             throw new MovementFailure(409, 'STALE_SCAN', 'Another transaction changed this vehicle. Scan the pass again to see its current status.');
         }
         $currentPass = $s['type'] === 'vehicle' ? ($row['pass_id'] ?? '') : $row['pass_code'];
         if ($currentPass !== $s['pass']) throw new MovementFailure(409, 'PASS_CHANGED', 'This pass was replaced. Scan the current pass.');
-        $hold = $pdo->prepare("SELECT `id` FROM `security_incidents` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `status` = 'Held' LIMIT 1");
-        $hold->execute([normalizePlate($row['plate_number'])]);
-        if ($hold->fetchColumn()) throw new MovementFailure(403, 'SECURITY_HOLD', 'This vehicle is on a security hold. Contact an administrator.');
+        $release = null;
+        if ($s['type'] === 'vehicle' && $inside && vehicleIsOnHold($pdo, $row)) {
+            $release = activeExitRelease($pdo, $row['id']);
+        }
+        $hold = $pdo->prepare("SELECT `id` FROM `security_incidents` WHERE (REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? OR `reason` LIKE ? OR `notes` LIKE ?) AND `status` = 'Held' LIMIT 1");
+        $passMatch = $s['type'] === 'visitor' ? '%' . $row['pass_code'] . '%' : 'movement-no-visitor-pass';
+        $hold->execute([normalizePlate($row['plate_number']), $passMatch, $passMatch]);
+        if ($hold->fetchColumn() && !$release) throw new MovementFailure(403, 'SECURITY_HOLD', 'This vehicle is on a security hold. Contact an administrator.');
         $today = date('Y-m-d');
         $driverName = '';
         $relationship = '';
         $notes = 'Guard confirmed automatic ' . ($inside ? 'OUT' : 'IN') . ' movement';
         if ($s['type'] === 'vehicle') {
-            if ((int)$row['is_banned'] || $row['status'] === 'Blocked / Alert' || $row['registration_status'] !== 'Active') {
+            if (!$release && ((int)$row['is_banned'] || $row['status'] === 'Blocked / Alert' || $row['registration_status'] !== 'Active')) {
                 throw new MovementFailure(403, 'ACCESS_DENIED', 'The vehicle is blocked or its registration is inactive. Contact an administrator.');
             }
-            if (!empty($row['pass_valid_until']) && $row['pass_valid_until'] < $today) throw new MovementFailure(403, 'EXPIRED', 'This vehicle pass has expired.');
+            if (!$inside && vehiclePassExpired($row, $today)) throw new MovementFailure(403, 'EXPIRED', 'This vehicle pass has expired.');
+            if (!$inside && (int)($row['is_retired'] ?? 0)) throw new MovementFailure(403, 'RETIRED', 'This vehicle was retired. Register the current vehicle before entry.');
+            if (!$inside && ($row['payment_status'] ?? 'Paid') === 'Unpaid') throw new MovementFailure(403, 'UNPAID', 'Pay the registration fee before entry.');
+            if ($release) $notes .= ' | One-time exit release: ' . $release['reason'];
             if (isVipVehicle($row)) {
                 $driverName = $row['owner_name'];
                 $relationship = 'VIP (driver not checked)';
@@ -143,6 +155,7 @@ function confirmMovement($pdo, $actor, array $data) {
             'driverRelationship' => $relationship, 'verifiedDriverName' => $relationship === 'VIP (driver not checked)' ? null : $driverName,
             'gatePoint' => $s['checkpoint'], 'action' => $inside ? 'Exit Approved' : 'Entry Recorded',
             'gateType' => $inside ? 'Egress' : 'Ingress', 'status' => $inside ? 'Exited' : 'Inside Campus',
+            'lookupMethod' => $s['lookup'] ?? 'qr',
             'notes' => $notes, 'clientRef' => $s['ref'], 'loggedAt' => $at,
         ]);
         if ($s['type'] === 'vehicle') {
@@ -156,6 +169,13 @@ function confirmMovement($pdo, $actor, array $data) {
         $q = $pdo->prepare("SELECT * FROM `gate_logs` WHERE `id` = ?");
         $q->execute([$id]);
         $log = $q->fetch();
+        if ($release && !consumeExitRelease($pdo, $release, gateActorLabel($actor))) {
+            throw new MovementFailure(409, 'RELEASE_USED', 'The exit release was already used. Scan the pass again.');
+        }
+        // Queue the notice in the same transaction, so a retry cannot omit or duplicate it.
+        if ($s['type'] === 'vehicle') {
+            noticeVehiclePassage($pdo, $row, $inside ? 'Egress' : 'Ingress', $s['checkpoint'], $driverName, $relationship, $at, gateActorLabel($actor), $id);
+        }
         movementEnd($pdo, true);
         return movementResult($log, false);
     } catch (Throwable $e) {
@@ -164,10 +184,10 @@ function confirmMovement($pdo, $actor, array $data) {
     }
 }
 
-function movementResult($log, $duplicate, $row = null, $type = 'vehicle') {
+function movementResult($log, $duplicate, $row = null, $type = 'vehicle', $pdo = null) {
     $out = $log['action'] === 'Exit Approved';
     $recordedStatus = $out ? 'OUTSIDE' : 'INSIDE';
-    $currentStatus = $row ? (movementInside($row, $type) ? 'INSIDE' : 'OUTSIDE') : $recordedStatus;
+    $currentStatus = $row ? (movementInside($row, $type, $pdo) ? 'INSIDE' : 'OUTSIDE') : $recordedStatus;
     return ['id' => (int)$log['id'], 'duplicate' => $duplicate, 'plateNumber' => $log['plate_number'],
         'action' => $out ? 'OUT' : 'IN', 'currentStatus' => $currentStatus, 'recordedStatus' => $recordedStatus,
         'checkpoint' => $log['gate_point'], 'guardName' => $log['guard_name'], 'loggedAt' => $log['logged_at']];

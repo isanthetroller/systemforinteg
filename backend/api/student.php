@@ -6,8 +6,10 @@
  * token. No endpoint accepts an owner ID, vehicle ID or plate from the client.
  *
  * GET /api/student.php?action=me           Profile + standing summary
- * GET /api/student.php?action=vehicles     Own vehicles with drivers, status, strikes and signed QR pass
- * GET /api/student.php?action=violations   Warnings / violations on own vehicles
+ * GET /api/student.php?action=vehicles     Own vehicles with drivers, status, violation hold and signed QR pass
+ * GET /api/student.php?action=notices     Notices sent to the owner (violations, vehicle blocked at the gate) and whether they were e-mailed
+ * GET /api/student.php?action=payments    Own registration-fee payments / receipts (pay online with student_pay.php)
+ * GET /api/student.php?action=violations   Violations on own vehicles (a pending one blocks entry and exit)
  * GET /api/student.php?action=activity     Gate audit log (entries, exits, denied attempts) of own vehicles
  *                                          optional: &plate=<own plate>  &limit=<1-200, default 50>
  * GET /api/student.php?action=alerts       Own vehicles flagged at the gate: active (Held) cases and recent closed ones
@@ -21,6 +23,10 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/payments.php';
+require_once __DIR__ . '/../lib/notices.php';
+require_once __DIR__ . '/../lib/cases.php';
+require_once __DIR__ . '/../lib/renewals.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendResponse(405, null, 'Method not allowed');
@@ -30,8 +36,8 @@ $student = requireStudent($pdo);
 $ownerId = $student['owner_id_number'];
 $action = $_GET['action'] ?? 'me';
 
-function ownVehicles($pdo, $ownerId) {
-    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `owner_id_number` = ? ORDER BY `id` ASC");
+function ownVehicles($pdo, $ownerId, $includeRetired = true) {
+    $stmt = $pdo->prepare("SELECT * FROM `vehicles` WHERE `owner_id_number` = ?" . ($includeRetired ? '' : ' AND `is_retired` = 0') . " ORDER BY `id` ASC");
     $stmt->execute([$ownerId]);
     return $stmt->fetchAll();
 }
@@ -70,6 +76,14 @@ function incidentView($pdo, $r) {
     ];
 }
 
+function openViolationCount($pdo, $ownerId) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `vehicle_violations` vv
+        JOIN `vehicles` v ON v.`id` = vv.`vehicle_id`
+        WHERE v.`owner_id_number` = ? AND vv.`severity` = 'Violation' AND vv.`status` = 'Pending'");
+    $stmt->execute([$ownerId]);
+    return (int)$stmt->fetchColumn();
+}
+
 function heldIncidentCount($pdo, array $plates) {
     if (!$plates) return 0;
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM `security_incidents` WHERE `status` = 'Held' AND " . plateInClause($plates));
@@ -79,6 +93,7 @@ function heldIncidentCount($pdo, array $plates) {
 
 function studentVehicleView($pdo, $row) {
     $v = vehicleForOutput($pdo, $row, true);
+    $renewal = renewalInfo($pdo, $row);
     // Only what the owner needs; internal / duplicate snake_case keys are dropped
     return [
         'id' => $v['id'],
@@ -92,10 +107,16 @@ function studentVehicleView($pdo, $row) {
         'status' => $v['status'],
         'registrationStatus' => $v['registrationStatus'],
         'vehiclePhoto' => $v['vehiclePhoto'],
+        'renewal' => [
+            'due' => $renewal['due'], 'eligible' => $renewal['eligible'], 'expired' => $renewal['expired'], 'daysLeft' => $renewal['daysLeft'],
+            'fee' => $renewal['fee'], 'targetYear' => $renewal['targetYear'], 'newValidUntil' => $renewal['newValidUntil'], 'blocker' => $renewal['blocker'],
+        ],
+        'paymentStatus' => $v['paymentStatus'],
+        'feeAmount' => $v['feeAmount'],
+        'paidAt' => $v['paidAt'],
         'passId' => $v['passId'],
         'passValidUntil' => $v['passValidUntil'],
         'passExpired' => $v['passValidUntil'] !== null && $v['passValidUntil'] < date('Y-m-d'),
-        'warningCount' => $v['warningCount'],
         'isBanned' => $v['isBanned'],
         'qrPayload' => $v['qrPayload'],
         'authorizedDrivers' => array_map(function ($d) {
@@ -110,25 +131,35 @@ function studentVehicleView($pdo, $row) {
 
 switch ($action) {
     case 'me':
-        $vehicles = ownVehicles($pdo, $ownerId);
+        $vehicles = ownVehicles($pdo, $ownerId, false);
         sendResponse(200, [
             'student' => publicStudent($student),
             'summary' => [
                 'vehicles' => count($vehicles),
                 'banned' => count(array_filter($vehicles, fn($v) => (int)$v['is_banned'] === 1)),
-                'strikes' => array_sum(array_map(fn($v) => (int)$v['warning_count'], $vehicles)),
-                'strikeLimit' => 3,
+                'openViolations' => openViolationCount($pdo, $ownerId),
+                'unpaidVehicles' => count(array_filter($vehicles, fn($v) => ($v['payment_status'] ?? 'Paid') === 'Unpaid')),
                 'activeAlerts' => heldIncidentCount($pdo, array_map(fn($v) => normalizePlate($v['plate_number']), $vehicles)),
             ],
         ]);
 
     case 'vehicles':
-        sendResponse(200, array_map(fn($row) => studentVehicleView($pdo, $row), ownVehicles($pdo, $ownerId)));
+        sendResponse(200, array_map(fn($row) => studentVehicleView($pdo, $row), ownVehicles($pdo, $ownerId, false)));
+
+    case 'notices':
+        $stmt = $pdo->prepare("SELECT * FROM `owner_notices` WHERE `owner_id_number` = ? AND `kind` NOT IN ('Entry', 'Exit') ORDER BY `id` DESC LIMIT 30");
+        $stmt->execute([$ownerId]);
+        sendResponse(200, array_map('noticeView', $stmt->fetchAll()));
+
+    case 'payments':
+        $stmt = $pdo->prepare("SELECT * FROM `payments` WHERE `owner_id_number` = ? AND `status` <> 'Cancelled' ORDER BY `id` DESC LIMIT 100");
+        $stmt->execute([$ownerId]);
+        sendResponse(200, array_map('paymentView', $stmt->fetchAll()));
 
     case 'violations':
         $stmt = $pdo->prepare("SELECT vv.* FROM `vehicle_violations` vv
             JOIN `vehicles` v ON v.`id` = vv.`vehicle_id`
-            WHERE v.`owner_id_number` = ?
+            WHERE v.`owner_id_number` = ? AND vv.`severity` = 'Violation'
             ORDER BY vv.`id` DESC LIMIT 200");
         $stmt->execute([$ownerId]);
         $rows = array_map(function ($r) {
@@ -137,15 +168,37 @@ switch ($action) {
                 'plateNumber' => $r['plate_number'],
                 'violationType' => $r['violation_type'],
                 'description' => $r['description'],
-                'severity' => $r['severity'],
                 'status' => $r['status'],
-                'countsAsStrike' => (int)$r['counts_as_strike'] === 1,
                 'createdAt' => $r['created_at'],
                 'resolvedAt' => $r['resolved_at'],
                 'resolutionNotes' => $r['status'] === 'Pending' ? null : $r['resolution_notes'],
             ];
         }, $stmt->fetchAll());
         sendResponse(200, $rows);
+
+    case 'cases':
+        // Violations and security cases on the owner's vehicles, with a timeline that has no staff names or internal notes
+        $plates = ownPlates($pdo, $ownerId);
+        $stmt = $pdo->prepare("SELECT vv.*, v.`owner_name`, v.`owner_phone`, v.`owner_id_number`, v.`owner_role`
+            FROM `vehicle_violations` vv JOIN `vehicles` v ON v.`id` = vv.`vehicle_id`
+            WHERE v.`owner_id_number` = ? AND vv.`severity` = 'Violation' ORDER BY vv.`id` DESC LIMIT 50");
+        $stmt->execute([$ownerId]);
+        $vRows = $stmt->fetchAll();
+        $iRows = [];
+        if ($plates) {
+            $stmt = $pdo->prepare("SELECT * FROM `security_incidents`
+                WHERE `id` NOT IN (SELECT `incident_id` FROM `vehicle_violations` WHERE `incident_id` IS NOT NULL) AND " . plateInClause($plates) . "
+                ORDER BY `id` DESC LIMIT 50");
+            $stmt->execute($plates);
+            $iRows = $stmt->fetchAll();
+        }
+        $keys = array_merge(array_map(fn($r) => 'V' . $r['id'], $vRows), array_map(fn($r) => 'I' . $r['id'], $iRows));
+        $events = caseEventsFor($pdo, $keys);
+        $out = [];
+        foreach ($vRows as $r) { $k = 'V' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('violation', $r, $ev), $ev); }
+        foreach ($iRows as $r) { $k = 'I' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('incident', $r, $ev), $ev); }
+        usort($out, fn($a, $b) => strcmp((string)$b['openedAt'], (string)$a['openedAt']));
+        sendResponse(200, $out);
 
     case 'activity':
         $plates = ownPlates($pdo, $ownerId);
@@ -195,5 +248,5 @@ switch ($action) {
         sendResponse(200, ['active' => $active, 'recent' => array_map(fn($r) => incidentView($pdo, $r), $stmt->fetchAll())]);
 
     default:
-        sendResponse(400, null, 'Unknown action. Use me, vehicles, violations, activity or alerts.');
+        sendResponse(400, null, 'Unknown action. Use me, vehicles, payments, notices, violations, cases, activity or alerts.');
 }

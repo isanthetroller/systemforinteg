@@ -116,7 +116,7 @@ API endpoints are configured in `lib/core/constants/api_constants.dart`:
 ```dart
 class ApiConstants {
   // Live InfinityFree Endpoint or Local IP
-  static String baseUrl = 'http://ncstparking-test.rf.gd/api';
+  static String baseUrl = 'https://securepark.site.je/api';
   
   static const String vehiclesEndpoint = '/vehicles.php';
   static const String logsEndpoint     = '/logs.php';

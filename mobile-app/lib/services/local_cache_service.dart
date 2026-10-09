@@ -37,7 +37,7 @@ class LocalCacheService {
   };
 
   /// Retrieve persistent backend API base URL
-  static String getServerBaseUrl({String defaultUrl = 'http://ncstparking-test.rf.gd/api'}) {
+  static String getServerBaseUrl({String defaultUrl = 'https://securepark.site.je/api'}) {
     final stored = _getString(keyServerBaseUrl);
     if (stored != null && stored.trim().isNotEmpty) {
       return stored.trim();

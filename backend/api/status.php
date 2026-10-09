@@ -3,6 +3,7 @@
  * SecurePark API Health & Diagnostics Check
  */
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../lib/mailer.php';
 
 $dbConnected = false;
 $tablesFound = [];
@@ -38,6 +39,22 @@ sendResponse(200, [
         'configured_host' => SP_DEBUG ? ($db_host ?? 'unknown') : null,
         'configured_db' => SP_DEBUG ? ($db_name ?? 'unknown') : null,
         'error' => SP_DEBUG ? $errorMsg : ($errorMsg ? 'Database query failed' : null)
+    ],
+    // How this request reached PHP. Open /api/status.php over https:// to confirm HTTPS works on the live host.
+    'transport' => [
+        'secure' => isSecureRequest(),
+        'scheme' => isSecureRequest() ? 'https' : 'http',
+        'https_var' => $_SERVER['HTTPS'] ?? null,
+        'forwarded_proto' => $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? null,
+        'port' => $_SERVER['SERVER_PORT'] ?? null,
+        'hsts_sent' => isSecureRequest(),
+    ],
+    // Never shows the password
+    'mail' => [
+        'configured' => function_exists('spMailConfigured') ? spMailConfigured() : false,
+        'host' => defined('SP_SMTP_HOST') ? SP_SMTP_HOST : null,
+        'port' => defined('SP_SMTP_PORT') ? SP_SMTP_PORT : null,
+        'sends_after_response' => function_exists('fastcgi_finish_request'),
     ],
     'server_time' => date('Y-m-d H:i:s')
 ], 'API status operational');

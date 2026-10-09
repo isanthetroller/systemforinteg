@@ -4,7 +4,7 @@
  * Screens: sign in -> (first sign-in) set password -> app with four tabs:
  *   My Pass   signed QR pass per vehicle, standing, authorized drivers, save as image
  *   Activity  gate audit log (entries, exits, refused passages) and flag history of the owner's vehicles
- *   Strikes   3-strike meter, warnings / violations history
+ *   Violations   violations on my vehicles: a pending one blocks entry and exit until the Security Office resolves it
  *   Account   profile, change password, how the pass works
  * Every entry, exit and refused passage has a 5 second gate clip (simulated: one shared clip, or
  * cctv_clips/log-<id>.mp4 when the school supplies one); a flag's clip is the refused passage that raised it.
@@ -15,8 +15,7 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const STRIKE_LIMIT = 3;
-  const data = { me: null, vehicles: [], violations: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
+  const data = { me: null, vehicles: [], violations: [], cases: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
   const POLL_MS = 15000;
   const DEFAULT_TITLE = document.title;
   let pollTimer = null;
@@ -133,10 +132,9 @@
 
   function vehicleStanding(v) {
     if (activeAlertsFor(v).length) return { cls: 'bad', label: 'FLAGGED · HELD AT GATE', blocked: false, flagged: true };
-    if (v.isBanned) return { cls: 'bad', label: 'BANNED — ENTRY BLOCKED', blocked: true };
+    if (v.isBanned) return { cls: 'bad', label: 'VIOLATION HOLD — CANNOT ENTER OR LEAVE', blocked: true };
     if (v.registrationStatus === 'Suspended') return { cls: 'bad', label: 'REGISTRATION SUSPENDED', blocked: true };
     if (v.passExpired) return { cls: 'bad', label: 'PASS EXPIRED', blocked: true };
-    if (v.warningCount > 0) return { cls: 'warn', label: `ACTIVE · STRIKE ${v.warningCount} OF ${STRIKE_LIMIT}`, blocked: false };
     return { cls: 'ok', label: 'ACTIVE PASS', blocked: false };
   }
 
@@ -253,21 +251,23 @@
   async function enterApp() {
     showScreen('screenApp');
     $('tabPass').innerHTML = '<div class="card empty">Loading your pass&hellip;</div>';
-    const [me, vehicles, violations, activity, alerts] = await Promise.all([
-      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts()
+    const [me, vehicles, violations, activity, alerts, payments, notices, cases] = await Promise.all([
+      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices(), StudentApi.cases()
     ]);
-    Object.assign(data, { me, vehicles, violations, activity, alerts });
+    Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices, cases });
     data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
     $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
     renderAll();
     startPolling();
+    handlePaymentReturn();
   }
 
   function renderAll() {
-    const strikes = data.me.summary.strikes + data.me.summary.banned;
-    $('strikesBadge').textContent = data.me.summary.banned ? '!' : String(data.me.summary.strikes);
-    $('strikesBadge').hidden = strikes === 0;
-    $('strikesBadge').classList.toggle('is-blocked', Boolean(data.me.summary.banned));
+    // The tab badge counts every open case (violations and security cases), the same list the Cases tab shows
+    const open = (data.cases || []).filter(c => c.status !== 'Closed').length;
+    $('strikesBadge').textContent = String(open);
+    $('strikesBadge').hidden = open === 0;
+    $('strikesBadge').classList.add('is-blocked');
     renderAlerts();
     renderPass();
     renderActivity();
@@ -289,20 +289,24 @@
   async function refresh() {
     if (!data.me || document.hidden || $('screenApp').hidden) return;
     try {
-      const [me, alerts, activity] = await Promise.all([StudentApi.me(), StudentApi.alerts(), StudentApi.activity()]);
-      const before = JSON.stringify([data.me.summary, data.alerts, data.activity.slice(0, 20)]);
-      if (before === JSON.stringify([me.summary, alerts, activity.slice(0, 20)])) return;
+      const [me, alerts, activity, notices] = await Promise.all([StudentApi.me(), StudentApi.alerts(), StudentApi.activity(), StudentApi.notices()]);
+      const before = JSON.stringify([data.me.summary, data.alerts, data.activity.slice(0, 20), (data.notices || []).map(n => n.id)]);
+      if (before === JSON.stringify([me.summary, alerts, activity.slice(0, 20), notices.map(n => n.id)])) return;
+
+      const knownNotices = new Set((data.notices || []).map(n => n.id));
+      const newNotice = notices.find(n => !knownNotices.has(n.id));
 
       const known = new Set(data.alerts.active.map(a => a.id));
       const raised = alerts.active.filter(a => !known.has(a.id));
       const standingChanged = JSON.stringify(me.summary) !== JSON.stringify(data.me.summary);
-      Object.assign(data, { me, alerts, activity });
-      if (standingChanged || raised.length || alerts.active.length !== known.size) {
-        const [vehicles, violations] = await Promise.all([StudentApi.vehicles(), StudentApi.violations()]);
-        Object.assign(data, { vehicles, violations });
+      Object.assign(data, { me, alerts, activity, notices });
+      if (standingChanged || raised.length || alerts.active.length !== known.size || newNotice) {
+        const [vehicles, violations, payments, cases] = await Promise.all([StudentApi.vehicles(), StudentApi.violations(), StudentApi.payments(), StudentApi.cases()]);
+        Object.assign(data, { vehicles, violations, payments, cases });
       }
       renderAll();
       if (raised.length) notifyFlag(raised[0]);
+      else if (newNotice) toast(`${newNotice.title} (${newNotice.plateNumber})`, 'error');
     } catch (_) { /* a missed check is retried on the next tick; sign-out is handled by the API client */ }
   }
 
@@ -317,7 +321,48 @@
       if (b.dataset.tab === tabId) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     });
+    $('screenApp').dataset.activeTab = tabId;
     window.scrollTo(0, 0);
+  }
+
+  /* ---- Shared pieces ---- */
+  const ICON_WARN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+  const ICON_TICK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
+
+  /** A strip that tells the owner what is wrong and where to go. tone: 'bad' | 'warn'. */
+  function attentionStrip(tone, title, text, action) {
+    return `<div class="attention ${tone}" role="${tone === 'bad' ? 'alert' : 'status'}">
+      <span class="attention-icon">${ICON_WARN}</span>
+      <div class="attention-text"><strong>${esc(title)}</strong>${esc(text)}</div>
+      ${action ? `<button type="button" class="btn btn-outline btn-sm" data-goto="${esc(action.tab)}">${esc(action.label)}</button>` : ''}
+    </div>`;
+  }
+
+  function openCasesFor(v) {
+    return (data.cases || []).filter(c => c.status !== 'Closed' && normPlate(c.plateNumber) === normPlate(v.plateNumber));
+  }
+
+  /** Renewal card: shown when the pass is inside the renewal window or already expired. */
+  function renewalCard(v) {
+    const r = v.renewal;
+    if (!r || !r.due || r.blocker === 'This vehicle was retired.') return '';
+    const when = r.expired
+      ? `Your pass expired on ${fmtDate(v.passValidUntil)}.`
+      : `Your pass expires on ${fmtDate(v.passValidUntil)} (${r.daysLeft} day${r.daysLeft === 1 ? '' : 's'} left).`;
+    const tone = r.expired ? 'bad' : 'warn';
+    const action = !r.eligible
+      ? `<p class="hint">${esc(r.blocker || 'Renewal is not available right now.')}</p>`
+      : r.fee > 0
+        ? `<button type="button" class="btn btn-gold" data-action="renew">Renew for ${peso(r.fee)} online</button>
+           <p class="hint">Or pay ${peso(r.fee)} at the cashier in the Campus Security Office. Your new pass appears here right after.</p>`
+        : '<p class="hint"><strong>Renewal is free for this vehicle.</strong> Ask the Campus Security Office to renew it; your new pass appears here right after.</p>';
+    return `<div class="card renew-card ${tone}">
+      <h2 class="card-title">${r.expired ? 'Renew your pass' : 'Renew your pass soon'}</h2>
+      <p class="card-sub">${esc(when)} ${r.expired ? 'Until it is renewed this vehicle cannot enter campus.' : 'Renew before then so your QR keeps working at the gate.'}</p>
+      <dl class="renew-facts"><div><dt>New pass valid until</dt><dd>${esc(fmtDate(r.newValidUntil))}</dd></div><div><dt>Fee</dt><dd>${r.fee > 0 ? peso(r.fee) : 'No fee'}</dd></div></dl>
+      ${action}
+      <p class="hint" id="renewError" role="alert" hidden></p>
+    </div>`;
   }
 
   /* ---- My Pass ---- */
@@ -334,20 +379,23 @@
       ? `<div class="chips" role="group" aria-label="Choose vehicle">${data.vehicles.map((x, i) =>
           `<button type="button" class="chip" data-index="${i}" aria-pressed="${i === data.selected}">${esc(x.plateNumber)}</button>`).join('')}</div>`
       : '';
+    if (v.paymentStatus === 'Unpaid') return renderPaymentDue(tab, v, chips);
     const flags = activeAlertsFor(v);
-    const flagNotice = flags.length
-      ? `<div class="notice bad">This vehicle is being <strong>held at the gate</strong> (${esc(flags[0].gatePoint)}). If you did not authorize this, contact the guard or the Campus Security Office right away. See the <strong>Activity</strong> tab.<div class="alert-clip">${clipButton({ logId: flags[0].logId, plate: flags[0].plateNumber, action: '', gatePoint: flags[0].gatePoint, loggedAt: flags[0].reportedAt }, 'Watch gate clip', 'danger')}</div></div>`
-      : '';
-    const blockNotice = v.isBanned
-      ? `<div class="notice bad">Your vehicle reached ${STRIKE_LIMIT} strikes or received a violation and is banned from entering campus. Go to the Campus Security Office to settle it. See the <strong>Warnings</strong> tab for details.</div>`
-      : v.registrationStatus === 'Suspended'
-        ? '<div class="notice bad">Your registration is suspended. Please visit the Campus Security Office.</div>'
-        : v.passExpired
-          ? '<div class="notice bad">This pass has expired. Renew your sticker at the Campus Security Office to get a new pass.</div>'
-          : (v.warningCount > 0 ? `<div class="notice warn">You have ${v.warningCount} of ${STRIKE_LIMIT} strikes. At ${STRIKE_LIMIT} strikes your vehicle is banned.</div>` : '');
+    const cases = openCasesFor(v);
+    const toCases = { tab: 'tabStrikes', label: cases.length > 1 ? 'View cases' : 'View case' };
+    let attention = '';
+    if (flags.length || v.isBanned || cases.length) {
+      attention = attentionStrip('bad', 'This vehicle is on hold',
+        `It cannot enter or leave campus until the Security Office closes ${cases.length > 1 ? `the ${cases.length} open cases` : 'the case'}. ${flags.length ? 'If you did not authorize what happened at the gate, tell the guard right away.' : ''}`.trim(), toCases);
+    } else if (v.registrationStatus === 'Suspended') {
+      attention = attentionStrip('bad', 'Registration suspended', 'Please visit the Campus Security Office.');
+    } else if (v.passExpired) {
+      attention = attentionStrip('warn', 'This pass has expired', v.renewal && v.renewal.eligible ? 'Renew it below, or at the Campus Security Office, to get a new QR pass.' : 'Renew your sticker at the Campus Security Office to get a new pass.');
+    }
 
     tab.innerHTML = `
-      ${chips}
+      ${chips}${attention}
+      <div class="cols"><div class="col">
       <article class="card pass" aria-label="Campus pass for ${esc(v.plateNumber)}">
         <div class="pass-banner ${st.cls}"><span>${esc(st.label)}</span><span>${(v.status || '').toLowerCase().includes('inside') ? 'ON CAMPUS' : 'OFF CAMPUS'}</span></div>
         <div class="pass-body">
@@ -356,7 +404,7 @@
           <div class="pass-vehicle">${esc(v.makeModelColor || v.vehicleType || '')}</div>
           <button type="button" id="passQr" class="pass-qr ${st.blocked ? 'dim' : ''}" aria-label="Show QR full screen" ${qrReady ? '' : 'disabled'}>
             ${qrReady ? '' : '<span class="pass-qr-empty">Pass unavailable<span>Please contact the Security Office.</span></span>'}
-            ${st.blocked ? `<span class="pass-qr-stamp"><span>${v.isBanned ? 'BANNED' : v.passExpired ? 'EXPIRED' : 'SUSPENDED'}</span></span>` : ''}
+            ${st.blocked ? `<span class="pass-qr-stamp"><span>${v.isBanned ? 'ON HOLD' : v.passExpired ? 'EXPIRED' : 'SUSPENDED'}</span></span>` : ''}
           </button>
           <div class="pass-id">${esc(v.passId || '')}</div>
           <div class="pass-actions">
@@ -366,15 +414,18 @@
           <dl class="pass-meta">
             <div><dt>Valid until</dt><dd>${esc(fmtDate(v.passValidUntil))}</dd></div>
             <div><dt>Sticker year</dt><dd>${esc(v.stickerYear || '—')}</dd></div>
-            <div><dt>Warning count</dt><dd>${v.isBanned ? 'Banned' : v.isVip ? 'Not applied to VIP' : `${v.warningCount} of ${STRIKE_LIMIT}`}</dd></div>
+            <div><dt>Registration fee</dt><dd>${v.paymentStatus === 'Waived' ? 'No fee' : v.feeAmount > 0 ? `Paid ${peso(v.feeAmount)}` : 'Paid'}</dd></div>
+            <div><dt>Violations</dt><dd>${v.isBanned ? 'On hold (unresolved)' : v.isVip ? 'Not applied to VIP' : 'None pending'}</dd></div>
             <div><dt>Campus status</dt><dd>${(v.status || '').toLowerCase().includes('inside') ? '<span class="status-on">On Campus</span>' : '<span class="status-off">Outside Campus</span>'}</dd></div>
           </dl>
         </div>
       </article>
-      <div class="pass-support">${flagNotice}${blockNotice}
-      <div class="card gate-help"><h2 class="card-title">At the gate</h2><ol><li><span>1</span><div><strong>Open your pass</strong><p>Tap Show at Gate to make the QR code larger.</p></div></li><li><span>2</span><div><strong>Show it to the guard</strong><p>Keep your screen bright enough to scan.</p></div></li><li><span>3</span><div><strong>${v.isVip ? 'Wait for approval' : 'Confirm the driver'}</strong><p>${v.isVip ? 'The guard checks your pass before entry or exit.' : 'The guard checks the driver before entry or exit.'}</p></div></li></ol></div>
+      </div><div class="col">
+      ${renewalCard(v)}
+      <div class="card gate-help"><h2 class="card-title">At the gate</h2><p class="card-sub">Three quick steps every time you drive in or out.</p><ol><li><span>1</span><div><strong>Open your pass</strong><p>Tap Show at Gate to make the QR code larger.</p></div></li><li><span>2</span><div><strong>Show it to the guard</strong><p>Keep your screen bright enough to scan.</p></div></li><li><span>3</span><div><strong>${v.isVip ? 'Wait for approval' : 'Confirm the driver'}</strong><p>${v.isVip ? 'The guard checks your pass before entry or exit.' : 'The guard checks the driver before entry or exit.'}</p></div></li></ol></div>
       <div class="card">
         <h2 class="card-title">Authorized drivers</h2>
+        <p class="card-sub">The only people the guard will let drive this vehicle through.</p>
         <ul class="drivers">
           ${(v.authorizedDrivers || []).map(d => `
             <li><span class="avatar">${esc(initials(d.fullName))}</span>
@@ -382,7 +433,7 @@
         </ul>
         ${(v.authorizedDrivers || []).length ? '' : '<p class="hint">No drivers are listed. Visit the Security Office to update this vehicle.</p>'}
         <p class="hint">${v.isVip ? 'VIP passes do not need a driver check. Vehicle changes are made at the Security Office.' : 'Only these people may drive this vehicle through the gate. Changes are made at the Security Office.'}</p>
-      </div></div>`;
+      </div></div></div>`;
 
     if (typeof QRCode !== 'undefined' && v.qrPayload) {
       new QRCode($('passQr'), { text: v.qrPayload, width: 216, height: 216, colorDark: '#0F172A', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
@@ -390,7 +441,90 @@
     tab.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => { data.selected = Number(c.dataset.index); renderPass(); }));
     $('passQr').addEventListener('click', () => openZoom(v));
     tab.querySelector('[data-action="zoom"]').addEventListener('click', () => openZoom(v));
+    const renewBtn = tab.querySelector('[data-action="renew"]');
+    if (renewBtn) renewBtn.addEventListener('click', (e) => startPayment(v, e.currentTarget, 'renewal'));
     tab.querySelector('[data-action="save"]').addEventListener('click', () => savePassImage(v));
+  }
+
+  /* ---- Registration fee: no pass until it is paid ---- */
+  const peso = (n) => '\u20b1' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function renderPaymentDue(tab, v, chips) {
+    tab.innerHTML = `
+      ${chips}
+      <div class="cols"><div class="col">
+      <article class="card pass pay-due" aria-label="Registration fee for ${esc(v.plateNumber)}">
+        <div class="pass-banner warn"><span>PAYMENT REQUIRED</span><span>NO PASS YET</span></div>
+        <div class="pass-body">
+          <div class="pass-kind">Registration fee</div>
+          <span class="plate">${esc(v.plateNumber)}</span>
+          <div class="pass-vehicle">${esc(v.makeModelColor || v.vehicleType || '')}</div>
+          <div class="pay-amount">${peso(v.feeAmount)}</div>
+          <p class="pay-note">Your QR pass appears here as soon as the fee is paid. Until then this vehicle cannot enter campus.</p>
+          <div class="pass-actions">
+            <button type="button" class="btn btn-gold" data-action="pay">Pay ${peso(v.feeAmount)} online</button>
+          </div>
+          <p class="hint" id="payError" role="alert" hidden></p>
+        </div>
+      </article>
+      </div><div class="col">
+        <div class="card gate-help"><h2 class="card-title">Two ways to pay</h2><ol>
+          <li><span>1</span><div><strong>Online</strong><p>Pay with GCash, Maya or a card through PayMongo. Your pass is ready within moments of paying.</p></div></li>
+          <li><span>2</span><div><strong>In person</strong><p>Go to the cashier at the Campus Security Office and give your plate number (${esc(v.plateNumber)}) or ID. Your pass appears here right after.</p></div></li>
+        </ol></div>
+      </div></div>`;
+    tab.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => { data.selected = Number(c.dataset.index); renderPass(); }));
+    tab.querySelector('[data-action="pay"]').addEventListener('click', (e) => startPayment(v, e.currentTarget));
+  }
+
+  async function startPayment(v, button, purpose) {
+    const err = $(purpose === 'renewal' ? 'renewError' : 'payError');
+    err.hidden = true;
+    button.disabled = true;
+    const label = button.textContent;
+    button.textContent = 'Opening secure checkout\u2026';
+    try {
+      const r = await StudentApi.startPayment(v.id, location.origin + location.pathname, purpose);
+      window.location.href = r.checkoutUrl;
+    } catch (e) {
+      err.textContent = e.message || 'Could not start the payment. Please try again.';
+      err.hidden = false;
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
+  /* Back from the PayMongo checkout (?payment=success|cancelled&p=<id>) */
+  async function handlePaymentReturn() {
+    const params = new URLSearchParams(location.search);
+    const outcome = params.get('payment');
+    if (!outcome) return;
+    const id = params.get('p');
+    history.replaceState(null, '', location.pathname);
+    selectTab('tabPass');
+    if (outcome !== 'success' || !id) {
+      toast('Payment was cancelled. You can pay again anytime.');
+      return;
+    }
+    toast('Confirming your payment\u2026');
+    let payment = null;
+    for (let i = 0; i < 8; i++) {
+      try { payment = await StudentApi.paymentStatus(id); } catch (_) { break; }
+      if (payment.status !== 'Pending') break;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    try {
+      const [me, vehicles, payments] = await Promise.all([StudentApi.me(), StudentApi.vehicles(), StudentApi.payments()]);
+      Object.assign(data, { me, vehicles, payments });
+      const paidIndex = payment ? vehicles.findIndex(x => x.id === payment.vehicleId) : -1;
+      if (paidIndex >= 0) data.selected = paidIndex; // land on the vehicle that was just paid for
+      renderAll();
+    } catch (_) { /* the next poll refreshes */ }
+    if (payment && payment.status === 'Paid' && payment.purpose === 'Renewal') {
+      const renewed = (data.vehicles || []).find(x => x.id === payment.vehicleId);
+      toast(`Renewal paid (${payment.receiptNumber}). Your new pass is valid until ${fmtDate(renewed && renewed.passValidUntil)}.`, 'success');
+    } else if (payment && payment.status === 'Paid') toast(`Payment received (${payment.receiptNumber}). Your pass is ready.`, 'success');
+    else toast('We have not received the payment yet. If you paid, your pass will appear shortly.');
   }
 
   function openZoom(v) {
@@ -441,7 +575,7 @@
     }, 'image/png');
   }
 
-  /* ---- Flag banner (all tabs) ---- */
+  /* ---- Flag banner (all tabs): one line, details are in Cases and Activity ---- */
   function renderAlerts() {
     const active = data.alerts.active;
     const banner = $('alertBanner');
@@ -450,23 +584,11 @@
     badge.hidden = active.length === 0;
     document.title = active.length ? '⚠ Vehicle flagged · SecurePark' : DEFAULT_TITLE;
     if (!active.length) { banner.hidden = true; banner.innerHTML = ''; return; }
-
-    banner.innerHTML = `
-      <div class="alert-head"><span class="alert-dot" aria-hidden="true"></span>
-        ${active.length > 1 ? `${active.length} VEHICLE FLAGS AT THE GATE` : 'YOUR VEHICLE WAS FLAGGED AT THE GATE'}</div>
-      ${active.slice(0, 3).map(a => {
-        const stranger = a.driverName && !/^(registered owner|unknown|unverified)$/i.test(a.driverName) && !/registered owner/i.test(a.driverRelationship || '');
-        return `<div class="alert-item">
-          <div class="alert-line"><span class="plate plate-sm">${esc(a.plateNumber)}</span>
-            <span>${esc(a.gatePoint)} · ${esc(fmtDateTime(a.reportedAt))}</span></div>
-          <div class="alert-reason">Reason: ${esc(a.reason)}</div>
-          ${stranger ? `<div class="alert-driver">Person at the gate: <strong>${esc(a.driverName)}</strong>${a.driverRelationship && a.driverRelationship !== 'Unverified' ? ' · ' + esc(a.driverRelationship) : ''}</div>` : ''}
-          <div class="alert-case">Case ${esc(a.caseNumber)}</div>
-          <div class="alert-clip">${clipButton({ logId: a.logId, plate: a.plateNumber, action: '', gatePoint: a.gatePoint, loggedAt: a.reportedAt }, 'Watch gate clip', 'on-red')}</div>
-        </div>`;
-      }).join('')}
-      <p class="alert-help">Security is holding this vehicle. <strong>If you did not give anyone permission to drive it, tell the guard or the Campus Security Office right away.</strong></p>
-      <button type="button" class="btn btn-light btn-sm" data-action="open-activity">See what happened</button>`;
+    const plates = [...new Set(active.map(a => a.plateNumber))];
+    banner.innerHTML = attentionStrip('bad',
+      plates.length === 1 ? `Security is holding ${plates[0]}` : `Security is holding ${plates.length} of your vehicles`,
+      'It was stopped at a gate. If you did not give anyone permission to drive it, tell the guard or the Security Office right away.',
+      { tab: 'tabStrikes', label: 'See what to do' });
     banner.hidden = false;
   }
 
@@ -501,7 +623,7 @@
     const flags = [...data.alerts.active, ...data.alerts.recent]
       .filter(a => data.activityFilter === 'all' || normPlate(a.plateNumber) === normPlate(data.activityFilter));
     const flagCard = flags.length
-      ? `<div class="card"><h2 class="card-title">Flags on your vehicle</h2><ul class="history">${flags.map(a => `
+      ? `<div class="card"><h2 class="card-title">Stopped at the gate</h2><p class="card-sub">Times a guard held your vehicle. The case itself, and what to do, is on the Cases tab.</p><ul class="history">${flags.map(a => `
           <li>
             <div class="row1"><span class="type">${esc(a.reason)}</span><span class="date">${esc(fmtDateTime(a.reportedAt))}</span></div>
             <div class="desc">${esc(a.plateNumber)} · ${esc(a.gatePoint)}</div>
@@ -543,40 +665,89 @@
         }).join('')}</ul>`).join('');
     }
 
-    tab.innerHTML = `${chips}${flagCard}
-      <div class="card"><h2 class="card-title">Gate activity</h2>${log}
-        <p class="hint">Every time your vehicle enters, leaves or is stopped at a gate, it is recorded here with the driver who was verified by the guard.</p></div>`;
+    tab.innerHTML = `<div class="tab-narrow col">${chips}${flagCard}
+      <div class="card"><h2 class="card-title">Entries and exits</h2><p class="card-sub">Newest first, with the driver the guard verified.</p>${log}</div></div>`;
     tab.querySelectorAll('[data-filter]').forEach(c => c.addEventListener('click', () => { data.activityFilter = c.dataset.filter; renderActivity(); }));
   }
 
-  /* ---- Strikes ---- */
-  function meter(count, banned) {
-    const n = Math.min(Number(count || 0), STRIKE_LIMIT);
-    const pips = Array.from({ length: STRIKE_LIMIT }, (_, i) =>
-      `<span class="pip ${i < n ? (banned || n >= STRIKE_LIMIT ? 'full' : 'on') : ''}"></span>`).join('');
-    return `<span class="meter" role="img" aria-label="${banned ? 'Banned' : `${n} of ${STRIKE_LIMIT} strikes`}">${pips}<span class="meter-label">${banned ? 'Banned' : `${n} / ${STRIKE_LIMIT}`}</span></span>`;
+  /* ---- Cases ---- */
+  const CASE_STEPS = ['Reported', 'Owner contacted', 'Awaiting clearance', 'Closed'];
+
+  function caseStage(c) {
+    if (c.status === 'Closed') return 4;
+    if (c.status === 'Awaiting clearance') return 3;
+    return (c.policeReferred || c.contactAttempts > 0) ? 2 : 1;
+  }
+
+  function caseCard(c) {
+    const closed = c.status === 'Closed';
+    const stage = caseStage(c);
+    const pill = closed ? ['ok', 'Closed'] : c.status === 'Awaiting clearance' ? ['warn', 'Awaiting clearance'] : ['bad', 'Open'];
+    const steps = CASE_STEPS.map((label, i) => {
+      const n = i + 1;
+      const cls = n < stage || (n === stage && closed) ? 'done' : n === stage ? 'current' : '';
+      return `<li class="${cls}${n === 4 ? ' final' : ''}"${n === stage ? ' aria-current="step"' : ''}>${esc(label)}</li>`;
+    }).join('');
+    return `<article class="card case" aria-label="${esc(c.title)} on ${esc(c.plateNumber)}">
+      <div class="case-head"><h3 class="case-title">${esc(c.title)}</h3><span class="status-pill ${pill[0]}">${esc(pill[1])}</span></div>
+      <div class="case-meta"><span class="plate">${esc(c.plateNumber)}</span><span class="case-type">${esc(c.type)}</span><span>Opened ${esc(fmtDateTime(c.openedAt))}${closed ? ` · Closed ${esc(fmtDateTime(c.closedAt))}` : ''}</span></div>
+      <ol class="steps" aria-label="Case progress">${steps}</ol>
+      ${c.policeReferred && !closed ? '<span class="flag-police">Referred to the police</span>' : ''}
+      ${closed
+        ? `<p class="case-outcome"><strong>Outcome:</strong> ${esc(c.outcome || 'Closed')}. Your vehicle can enter and leave campus again unless another case is open.</p>`
+        : `<div class="next-step"><strong>What to do</strong><p>${esc(c.nextStep)}</p></div>`}
+      <details class="case-history"><summary>See what happened (${c.timeline.length})</summary>
+        <ol class="case-timeline">${c.timeline.map(t => `<li>${esc(t.label)}<time>${esc(fmtDateTime(t.at))}</time></li>`).join('')}</ol></details>
+    </article>`;
+  }
+
+  function noticeItem(n) {
+    const label = { Violation: 'Violation', Reminder: 'Reminder', Expiry: 'Pass expiry' }[n.kind] || 'Blocked at gate';
+    return `<li class="notice-item">
+      <h3>${esc(n.title)}</h3><time>${esc(fmtDateTime(n.createdAt))} · ${esc(n.plateNumber)}</time>
+      <p>${esc(n.message).replace(/\n/g, '<br>')}</p>
+      <div class="notice-tags"><span class="badge ${n.kind === 'Violation' ? 'violation' : 'warning'}">${esc(label)}</span>${n.emailed ? '<span class="badge resolved">Also e-mailed to you</span>' : ''}</div>
+    </li>`;
   }
 
   function renderStrikes() {
-    const standing = data.vehicles.map(v => `
-      <div class="standing-row"><span class="plate" style="font-size:16px">${esc(v.plateNumber)}</span>${meter(v.warningCount, v.isBanned)}</div>`).join('');
-    const history = data.violations.length
-      ? `<ul class="history">${data.violations.map(r => `
-          <li>
-            <div class="row1"><span class="type">${esc(r.violationType)}</span><span class="date">${esc(fmtDateTime(r.createdAt))}</span></div>
-            <div class="desc">${esc(r.plateNumber)}${r.description ? ' · ' + esc(r.description) : ''}</div>
-            <span class="badge ${r.severity === 'Violation' ? 'violation' : 'warning'}">${esc(r.severity)}</span>
-            <span class="badge ${esc(r.status.toLowerCase())}">${esc(r.status)}</span>
-            ${r.resolutionNotes ? `<div class="desc" style="color:var(--muted)">${esc(r.resolutionNotes)}</div>` : ''}
-          </li>`).join('')}</ul>`
-      : '<p class="empty" style="padding:12px 0">No warnings or violations recorded.</p>';
-    const anyBanned = data.vehicles.some(v => v.isBanned);
+    const cases = data.cases || [];
+    const open = cases.filter(c => c.status !== 'Closed');
+    const closed = cases.filter(c => c.status === 'Closed');
+    const notices = data.notices || [];
+
+    const standing = data.vehicles.length ? data.vehicles.map(v => {
+      const n = openCasesFor(v).length;
+      const held = v.isBanned || n > 0 || activeAlertsFor(v).length > 0;
+      return `<div class="standing-row"><span class="plate" style="font-size:16px">${esc(v.plateNumber)}</span>
+        <span class="status-pill ${held ? 'bad' : 'ok'}">${held ? (n ? `On hold · ${n} open case${n === 1 ? '' : 's'}` : 'On hold') : 'Clear to enter and leave'}</span></div>`;
+    }).join('') : '<p class="hint">No vehicles registered.</p>';
+
+    const openHtml = open.length
+      ? open.map(caseCard).join('')
+      : `<div class="card empty-good"><div class="tick">${ICON_TICK}</div><strong>No open cases</strong>
+          <p>Your vehicles are in good standing and can enter and leave campus normally.</p></div>`;
+
+    const closedHtml = closed.length
+      ? `<details class="card fold"><summary>Closed cases (${closed.length})</summary>${closed.map(caseCard).join('')}</details>` : '';
+
+    const shown = notices.slice(0, 4);
+    const older = notices.slice(4);
+    const noticesHtml = notices.length
+      ? `<ul class="notice-list">${shown.map(noticeItem).join('')}</ul>${older.length ? `<details class="fold" style="padding:12px 0 0"><summary>Older notices (${older.length})</summary><ul class="notice-list" style="margin-top:8px">${older.map(noticeItem).join('')}</ul></details>` : ''}`
+      : '<p class="hint">No notices yet.</p>';
 
     $('tabStrikes').innerHTML = `
-      ${anyBanned ? '<div class="notice bad">A vehicle is banned. Visit the Campus Security Office to resolve the violation; the ban and your strikes are cleared once it is resolved.</div>' : ''}
-      <div class="card"><h2 class="card-title">Warning count</h2>${standing || '<p class="hint">No vehicles.</p>'}
-        <p class="hint">Warnings and overnight / after-curfew parking each add one strike. ${STRIKE_LIMIT} strikes = automatic ban.</p></div>
-      <div class="card"><h2 class="card-title">Warnings &amp; violations</h2>${history}</div>`;
+      <div class="cols cols-cases">
+        <div class="col">
+          <section aria-labelledby="openCasesTitle"><h2 id="openCasesTitle" class="section-title">Open cases <span class="count ${open.length ? 'bad' : ''}">${open.length}</span></h2>${openHtml}</section>
+          ${closedHtml}
+        </div>
+        <div class="col">
+          <section class="card"><h2 class="card-title">Your vehicles</h2><p class="card-sub">A vehicle with an open case cannot enter or leave campus.</p><div class="standing-list">${standing}</div></section>
+          <section class="card"><h2 class="card-title">Notices</h2><p class="card-sub">We post here, and e-mail you when we have your address.</p>${noticesHtml}</section>
+        </div>
+      </div>`;
   }
 
   /* ---- Account ---- */
@@ -587,6 +758,11 @@
       <dt>ID number</dt><dd>${esc(s.ownerIdNumber)}</dd>
       <dt>Email</dt><dd>${esc(s.email || '—')}</dd>
       <dt>Vehicles</dt><dd>${data.me.summary.vehicles}</dd>`;
+    const paid = (data.payments || []).filter(p => p.status === 'Paid');
+    $('receiptsCard').hidden = !paid.length;
+    $('receiptList').innerHTML = paid.map(p => `
+      <li><div><div class="name">${esc(p.plateNumber)} \u00b7 ${peso(p.amount)}${p.purpose === 'Renewal' ? ' \u00b7 Pass renewal' : ''}</div>
+        <div class="sub">${esc(p.receiptNumber)} \u00b7 ${p.method === 'Cash' ? 'Cash at cashier' : 'Online'} \u00b7 ${esc(fmtDateTime(p.paidAt))}</div></div></li>`).join('');
   }
 
   /* ---------------- wiring ---------------- */
@@ -596,8 +772,9 @@
     $('passwordForm').addEventListener('submit', onPassword);
     document.querySelectorAll('[data-action="logout"]').forEach(b => b.addEventListener('click', logout));
     document.querySelectorAll('.tabbar-btn').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
-    $('alertBanner').addEventListener('click', (e) => {
-      if (e.target.closest('[data-action="open-activity"]')) selectTab('tabActivity');
+    document.addEventListener('click', (e) => {
+      const go = e.target.closest && e.target.closest('[data-goto]');
+      if (go) selectTab(go.dataset.goto);
     });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
     document.addEventListener('click', (e) => {

@@ -131,6 +131,7 @@ class VisitorPass {
     'plate': plateNumber,
     'plate_number': plateNumber,
     'vehiclePhotoUrl': vehiclePhotoUrl,
+    'vehiclePhoto': vehiclePhotoUrl != null && vehiclePhotoUrl!.startsWith('data:image/') ? vehiclePhotoUrl : null,
     'vehicleModel': vehicleModel ?? 'Visitor Vehicle',
     'vehicle_model': vehicleModel ?? 'Visitor Vehicle',
     'contactNumber': contactNumber ?? '09123456789',
@@ -151,6 +152,9 @@ class VisitorPass {
     if (dbId != null) 'id': dbId,
     if (qrPayload != null) 'qrPayload': qrPayload,
   };
+
+  /// For the phone's own cache: everything except the (large) vehicle photo, which lives on the server.
+  Map<String, dynamic> toCacheJson() => {...toJson(), 'vehiclePhotoUrl': null, 'vehiclePhoto': null};
 
   factory VisitorPass.fromJson(Map<String, dynamic> json) {
     VisitorPassStatus st = VisitorPassStatus.active;
@@ -183,7 +187,7 @@ class VisitorPass {
       passId: json['passId']?.toString() ?? json['passCode']?.toString() ?? json['pass_code']?.toString() ?? 'NCST-VIS-${DateTime.now().millisecondsSinceEpoch}',
       visitorName: json['visitorName']?.toString() ?? json['visitor_name']?.toString() ?? 'Visitor',
       plateNumber: json['plateNumber']?.toString() ?? json['plate_number']?.toString() ?? 'N/A',
-      vehiclePhotoUrl: json['vehiclePhotoUrl']?.toString() ?? json['vehicle_photo']?.toString(),
+      vehiclePhotoUrl: json['vehiclePhotoUrl']?.toString() ?? json['vehiclePhoto']?.toString() ?? json['vehicle_photo']?.toString(),
       entryTime: entry,
       expiryTime: expiry,
       exitTime: json['exitTime'] != null

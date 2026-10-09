@@ -103,6 +103,13 @@ function handleCreateIncident($pdo, $actor) {
     $vehicleType = isset($data['vehicleType']) ? $data['vehicleType'] : 'Vehicle';
     $ownerName = isset($data['ownerName']) ? $data['ownerName'] : 'Unknown';
     $ownerRole = isset($data['ownerRole']) ? $data['ownerRole'] : 'Visitor';
+    // The phone does not send a name: take it from the registered owner or the visitor pass of that plate
+    if (trim((string)$ownerName) === '' || strcasecmp(trim((string)$ownerName), 'Unknown') === 0) {
+        if ($known = ownerForPlate($pdo, $plateNumber)) {
+            $ownerName = $known['name'];
+            $ownerRole = $known['role'];
+        }
+    }
     $driverName = isset($data['driverName']) ? $data['driverName'] : 'Unknown';
     $driverRelationship = isset($data['driverRelationship']) ? $data['driverRelationship'] : 'Unregistered Driver';
     $gatePoint = isset($data['gatePoint']) ? $data['gatePoint'] : 'Gate 1 (Main Ingress)';
@@ -134,6 +141,9 @@ function handleCreateIncident($pdo, $actor) {
         $upd = $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `plate_number` = ?");
         $upd->execute([$plateNumber]);
 
+        // The registered owner is told (portal notice + e-mail); an unregistered plate has no owner to tell
+        noticeVehicleBlocked($pdo, $plateNumber, $reason, $gatePoint, $caseNumber, (int)$newId);
+
         $pdo->commit();
 
         sendResponse(201, [
@@ -164,7 +174,7 @@ function handleResolveIncident($pdo, $admin) {
 
     $plate = $row['plate_number'];
 
-    // Bans from the 3-strike policy / violations are lifted only by resolving the violation
+    // A violation hold is lifted only by resolving the violation
     $linked = $pdo->prepare("SELECT `id` FROM `vehicle_violations` WHERE `incident_id` = ? AND `status` = 'Pending' LIMIT 1");
     $linked->execute([$id]);
     if ($linkedId = $linked->fetchColumn()) {

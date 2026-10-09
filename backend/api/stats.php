@@ -6,6 +6,7 @@
 
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/capacity.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     sendResponse(405, null, "Method not allowed");
@@ -14,25 +15,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 requireStaff($pdo);
 
 try {
-    // 1. Vehicles & Visitors Currently Inside Campus
-    $stmtInsideVehicles = $pdo->query("
-        SELECT COUNT(*) AS cnt FROM `vehicles` 
-        WHERE `status` = 'Inside Campus'
-           OR (`status` = 'Blocked / Alert' AND `last_entry_time` IS NOT NULL AND NOT EXISTS (
-               SELECT 1 FROM `gate_logs` 
-               WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER(`vehicles`.`plate_number`), '-', ''), ' ', '')
-                 AND `action` = 'Exit Approved'
-                 AND `logged_at` >= `vehicles`.`last_entry_time`
-           ))
-    ");
-    $insideVehicles = (int)$stmtInsideVehicles->fetch()['cnt'];
-
-    $stmtInsideVisitors = $pdo->query("
-        SELECT COUNT(*) AS cnt FROM `visitor_passes` 
-        WHERE `entry_time` IS NOT NULL AND `exit_time` IS NULL AND `status` IN ('Active', 'Revoked')
-    ");
-    $insideVisitors = (int)$stmtInsideVisitors->fetch()['cnt'];
-    $insideCount = $insideVehicles + $insideVisitors;
+    // 1. Vehicles & Visitors Currently Inside Campus (with parking capacity)
+    $occupancy = campusOccupancy($pdo);
+    $insideVehicles = $occupancy['insideVehicles'];
+    $insideVisitors = $occupancy['insideVisitors'];
+    $insideCount = $occupancy['inside'];
 
     // 2. Active Incidents / Blocked Vehicles
     $stmtBlocked = $pdo->query("SELECT COUNT(*) AS cnt FROM `security_incidents` WHERE `status` = 'Held'");
@@ -77,6 +64,7 @@ try {
         'inside' => $insideCount,
         'insideVehicles' => $insideVehicles,
         'insideVisitors' => $insideVisitors,
+        'occupancy' => $occupancy,
         'blocked' => $blockedCount,
         'todayEntries' => $todayEntries,
         'registeredFleet' => $fleetCount,

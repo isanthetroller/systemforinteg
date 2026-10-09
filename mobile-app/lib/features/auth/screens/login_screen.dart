@@ -176,13 +176,29 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 16),
                     _buildServerOptionTile(
                       title: 'Live Cloud Server',
-                      subtitle: 'InfinityFree (ncstparking-test.rf.gd)',
+                      subtitle: 'Main server (securepark.site.je)',
                       url: ApiConstants.liveCloudUrl,
                       selectedUrl: selectedUrl,
                       icon: Icons.cloud_outlined,
                       onTap: () {
                         setModalState(() {
                           selectedUrl = ApiConstants.liveCloudUrl;
+                          customController.text = selectedUrl;
+                          testSuccess = null;
+                          testFeedback = '';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    _buildServerOptionTile(
+                      title: 'Previous Cloud Server',
+                      subtitle: 'Backup (ncstparking-test.rf.gd)',
+                      url: ApiConstants.legacyCloudUrl,
+                      selectedUrl: selectedUrl,
+                      icon: Icons.history_rounded,
+                      onTap: () {
+                        setModalState(() {
+                          selectedUrl = ApiConstants.legacyCloudUrl;
                           customController.text = selectedUrl;
                           testSuccess = null;
                           testFeedback = '';
@@ -402,12 +418,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _buildServerConnectionCard() {
     final isCloud = _currentServerUrl == ApiConstants.liveCloudUrl;
+    final isLegacy = _currentServerUrl == ApiConstants.legacyCloudUrl;
     final isLocal = _currentServerUrl == ApiConstants.localLanUrl;
     final isEmulator = _currentServerUrl == ApiConstants.localEmulatorUrl;
 
     String label = 'Custom Server';
     if (isCloud) {
-      label = 'Live Cloud (rf.gd)';
+      label = 'Live Cloud (securepark.site.je)';
+    } else if (isLegacy) {
+      label = 'Previous Cloud (rf.gd)';
     } else if (isLocal) {
       label = 'Local PC (192.168.0.102)';
     } else if (isEmulator) {

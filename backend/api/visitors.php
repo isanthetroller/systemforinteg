@@ -20,6 +20,7 @@
 
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/photos.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 
@@ -50,7 +51,7 @@ switch ($method) {
         sendResponse(405, null, "Method {$method} not allowed");
 }
 
-function formatVisitorPass($row) {
+function formatVisitorPass($row, $withPhoto = false) {
     global $pdo;
     $inside = !empty($row['entry_time']) && empty($row['exit_time']);
     return [
@@ -72,6 +73,9 @@ function formatVisitorPass($row) {
         // Set when the pass was issued on a phone without a connection and reached the server later (migration 006)
         'syncedAt' => $row['synced_at'] ?? null,
         'items' => visitorPassItems($pdo, $row['id']),
+        // The vehicle photo is heavy: lists only say whether there is one; a single pass carries the picture
+        'hasVehiclePhoto' => !empty($row['vehicle_photo']),
+        'vehiclePhoto' => ($withPhoto && !empty($row['vehicle_photo'])) ? $row['vehicle_photo'] : null,
         // Staff can re-display the card; the server re-signs the same content every time
         'qrPayload' => signPassPayload($row['pass_code'], $row['plate_number'], 'visitor_temp', $row['valid_date']),
     ];
@@ -95,7 +99,7 @@ function handleListVisitors($pdo) {
         $stmt->execute([(int)$_GET['id']]);
         $row = $stmt->fetch();
         if (!$row) sendResponse(404, null, 'Visitor pass not found.');
-        sendResponse(200, formatVisitorPass($row));
+        sendResponse(200, formatVisitorPass($row, true));
     }
 
     if (!empty($_GET['q'])) {
@@ -105,7 +109,7 @@ function handleListVisitors($pdo) {
         $stmt->execute([$q, $q, $norm]);
         $row = $stmt->fetch();
         if (!$row) sendResponse(404, null, 'Visitor pass not found.');
-        sendResponse(200, formatVisitorPass($row));
+        sendResponse(200, formatVisitorPass($row, true));
     }
 
     if (!empty($_GET['upcoming'])) {
@@ -184,10 +188,11 @@ function handleCreateVisitor($pdo, $actor) {
     $code = $clientCode !== '' ? $clientCode : newVisitorPassCode($pdo, $validDate);
     $stmt = $pdo->prepare("INSERT INTO `visitor_passes`
         (`pass_code`, `visitor_name`, `contact_number`, `plate_number`, `vehicle_model`, `purpose_of_visit`,
-         `person_to_visit`, `valid_date`, `status`, `created_by`, `created_by_user_id`, `created_at`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)");
+         `person_to_visit`, `valid_date`, `status`, `created_by`, `created_by_user_id`, `created_at`, `vehicle_photo`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?)");
+    $photo = validImageDataUrl($data['vehiclePhoto'] ?? $data['vehicle_photo'] ?? $data['vehiclePhotoUrl'] ?? null);
     $stmt->execute([$code, $visitorName, $contact, $plate, $vehicleModel ?: null, $purpose, $host, $validDate,
-        actorLabel($actor), actorUserId($actor), date('Y-m-d H:i:s', spNow())]);
+        actorLabel($actor), actorUserId($actor), date('Y-m-d H:i:s', spNow()), $photo]);
 
     $passId = (int)$pdo->lastInsertId();
     $itemStmt = $pdo->prepare("INSERT INTO `visitor_pass_items` (`visitor_pass_id`, `item_name`, `quantity`, `description`) VALUES (?, ?, ?, ?)");
@@ -198,7 +203,7 @@ function handleCreateVisitor($pdo, $actor) {
     $row = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `id` = ?");
     $row->execute([$passId]);
     $itemNote = $items ? ' Items declared: ' . count($items) . '.' : '';
-    sendResponse(201, formatVisitorPass($row->fetch()), "Day pass {$code} issued. Valid only on {$validDate}.{$itemNote}");
+    sendResponse(201, formatVisitorPass($row->fetch(), true), "Day pass {$code} issued. Valid only on {$validDate}.{$itemNote}");
 }
 
 /**

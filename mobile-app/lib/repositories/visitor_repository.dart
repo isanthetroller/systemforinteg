@@ -114,7 +114,7 @@ class VisitorRepository {
     final actualPass = ApiService.lastCreatedVisitorPass ?? pass;
     _passes.insert(0, actualPass);
     passesNotifier.value = List.unmodifiable(_passes);
-    await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toJson()).toList());
+    await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toCacheJson()).toList());
 
     return actualPass;
   }
@@ -166,7 +166,7 @@ class VisitorRepository {
       );
       _passes[idx] = updated;
       passesNotifier.value = List.unmodifiable(_passes);
-      await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toJson()).toList());
+      await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toCacheJson()).toList());
 
       // Notify backend
       unawaited(ApiService.postVisitorExit(passId, updated.plateNumber));
@@ -185,7 +185,7 @@ class VisitorRepository {
       );
       _passes[idx] = updated;
       passesNotifier.value = List.unmodifiable(_passes);
-      await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toJson()).toList());
+      await LocalCacheService.saveVisitorPasses(_passes.map((p) => p.toCacheJson()).toList());
       return true;
     }
     return false;

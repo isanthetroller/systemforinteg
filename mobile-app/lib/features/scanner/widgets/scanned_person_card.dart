@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/widgets/driver_photo_view.dart';
+import '../../../core/widgets/vehicle_photo_panel.dart';
 import '../../../core/widgets/plate_badge.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../theme/ncst_theme.dart';
@@ -114,6 +115,10 @@ class ScannedPersonCard extends StatelessWidget {
                 ),
               ],
             ),
+            if (vehicle.vehiclePicture != null && vehicle.vehiclePicture!.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              VehiclePhotoPanel(photoData: vehicle.vehiclePicture!, caption: 'Vehicle photo on file: compare it with the vehicle at the gate', detail: vehicle.makeModelColor),
+            ],
             if (vehicle.isAccessDenied) ...[
               const SizedBox(height: 12),
               Container(
@@ -138,7 +143,7 @@ class ScannedPersonCard extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            vehicle.flagReason ?? 'Vehicle is suspended or banned by administrator / 3-strike policy. Do not allow entrance.',
+                            vehicle.flagReason ?? 'Vehicle registration is suspended or a case is unresolved. Contact the Security Office before approving.',
                             style: const TextStyle(fontWeight: FontWeight.w600, color: NcstColors.slate800, fontSize: 11.5),
                           ),
                         ],
@@ -429,60 +434,6 @@ class ScannedPersonCard extends StatelessWidget {
               ],
             ),
 
-            // Attached Vehicle Picture (Saved in QR)
-            if (vehicle.vehiclePicture != null && vehicle.vehiclePicture!.isNotEmpty) ...[
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: NcstColors.slate50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: NcstColors.slate200),
-                ),
-                child: Row(
-                  children: [
-                    VehiclePhotoThumb(
-                      photoData: vehicle.vehiclePicture!,
-                      width: 68,
-                      height: 50,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: const [
-                              Icon(Icons.camera_alt_outlined, size: 12, color: NcstColors.navy),
-                              SizedBox(width: 4),
-                              Text(
-                                'VEHICLE PHOTO IN QR',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 0.5,
-                                  color: NcstColors.navy,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            vehicle.makeModelColor,
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: NcstColors.slate700,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ],
         ),
       ),

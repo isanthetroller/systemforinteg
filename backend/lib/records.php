@@ -1,11 +1,12 @@
 <?php
 /**
  * SecurePark - Shared writers for gate logs and security incidents
- * Used by verify.php (automatic denials) and the violations / strike engine.
+ * Used by verify.php (automatic denials) and the violations library.
  */
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/qr.php';
+require_once __DIR__ . '/notices.php';
 
 /**
  * Inserts a gate_logs row. $f keys: plate, vehicleType, ownerName, driverName,
@@ -40,6 +41,10 @@ function recordGateLog($pdo, $actor, array $f) {
     if (!empty($f['syncedAt'])) {
         $columns[] = 'synced_at';
         $values[] = $f['syncedAt'];
+    }
+    if (!empty($f['lookupMethod']) && in_array($f['lookupMethod'], ['qr', 'manual'], true)) {
+        $columns[] = 'lookup_method';
+        $values[] = $f['lookupMethod'];
     }
     $marks = implode(', ', array_fill(0, count($columns), '?'));
     $stmt = $pdo->prepare("INSERT INTO `gate_logs` (`" . implode('`, `', $columns) . "`) VALUES ({$marks})");
@@ -89,7 +94,13 @@ function openSecurityIncident($pdo, $actor, array $f, $dedupeMinutes = 0) {
         $f['notes'] ?? '',
         $f['reportedAt'] ?? date('Y-m-d H:i:s'),
     ], !empty($f['clientRef']) ? [$f['clientRef']] : []));
-    return ['id' => (int)$pdo->lastInsertId(), 'caseNumber' => $caseNumber, 'duplicate' => false];
+    $incidentId = (int)$pdo->lastInsertId();
+    // Callers that block a vehicle at the gate pass 'notifyOwner' => true; internal review cases and violation holds do not
+    // (a violation sends its own notice).
+    if (!empty($f['notifyOwner'])) {
+        noticeVehicleBlocked($pdo, $f['plate'] ?? '', $reason, $f['gatePoint'] ?? 'Gate 1 (Main Ingress)', $caseNumber, $incidentId);
+    }
+    return ['id' => $incidentId, 'caseNumber' => $caseNumber, 'duplicate' => false];
 }
 
 /**
@@ -175,4 +186,22 @@ function columnExists($pdo, $table, $column) {
         $found = false;
     }
     return $cache[$key] = $found;
+}
+
+
+/**
+ * Who a plate belongs to when the caller did not say: its registered owner, otherwise the visitor of its most recent
+ * day pass. Returns ['name' => .., 'role' => ..] or null when the plate is unknown.
+ */
+function ownerForPlate($pdo, $plate) {
+    $norm = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)$plate));
+    if ($norm === '') return null;
+    $match = "REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ?";
+    $stmt = $pdo->prepare("SELECT `owner_name`, `owner_role` FROM `vehicles` WHERE {$match} ORDER BY `is_retired` ASC, `id` DESC LIMIT 1");
+    $stmt->execute([$norm]);
+    if ($row = $stmt->fetch()) return ['name' => $row['owner_name'], 'role' => $row['owner_role'] ?: 'Registered Owner'];
+    $stmt = $pdo->prepare("SELECT `visitor_name` FROM `visitor_passes` WHERE {$match} ORDER BY `id` DESC LIMIT 1");
+    $stmt->execute([$norm]);
+    if ($row = $stmt->fetch()) return ['name' => $row['visitor_name'], 'role' => 'Visitor'];
+    return null;
 }

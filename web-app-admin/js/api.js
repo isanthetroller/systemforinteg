@@ -81,6 +81,7 @@ const ApiClient = (function() {
       ...(options.headers || {})
     };
 
+    const originalBody = options.body; // request() turns the body into a string below; a retry needs the object
     const token = getToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -116,7 +117,9 @@ const ApiClient = (function() {
       if (text.includes('<!DOCTYPE') || text.includes('<html')) {
         throw new Error('API server returned HTML. Check InfinityFree DB connection or domain.');
       }
-      throw new Error(`Unexpected API response from ${endpoint}`);
+      // Say what came back (status and the first characters) so a server problem can be diagnosed from the message
+      const peek = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      throw new Error(`Unexpected API response from ${endpoint} (HTTP ${res.status}${peek ? ': ' + peek : ', empty reply'})`);
     }
 
     if (!res.ok) {
@@ -130,6 +133,27 @@ const ApiClient = (function() {
         window.dispatchEvent(new CustomEvent('sp:auth-required', { detail: { message: err.message } }));
       } else if (res.status === 403 && err.code === 'PASSWORD_CHANGE_REQUIRED') {
         window.dispatchEvent(new CustomEvent('sp:password-change-required'));
+      }
+
+      // The server wants a written reason (audit trail) or a decision about the one-vehicle-per-class rule:
+      // ask the administrator, then repeat the same request with the answer.
+      if (!options._asked && window.SPOps && (err.code === 'REASON_REQUIRED' || err.code === 'OWNER_CLASS_LIMIT')) {
+        const method = (options.method || 'GET').toUpperCase();
+        const extra = err.code === 'REASON_REQUIRED'
+          ? await window.SPOps.askReason(err.message)
+          : await window.SPOps.askClassLimit(err, method === 'POST' && /^vehicles\.php/.test(endpoint));
+        if (extra) {
+          const next = { ...options, _asked: true };
+          let nextEndpoint = endpoint;
+          if (method === 'DELETE') {
+            nextEndpoint += (endpoint.includes('?') ? '&' : '?') + new URLSearchParams(extra);
+          } else {
+            let body = originalBody;
+            if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) { body = {}; } }
+            next.body = { ...(body || {}), ...extra };
+          }
+          return request(nextEndpoint, next, retries);
+        }
       }
       throw err;
     }
@@ -167,6 +191,100 @@ const ApiClient = (function() {
       });
       return res.data;
     },
+
+    // Cashier (admin only)
+    getUnpaidVehicles: async () => {
+      const res = await request('payments.php?view=unpaid');
+      return res.data;
+    },
+
+    getPayments: async ({ q = '', status = '', method = '' } = {}) => {
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (status) params.set('status', status);
+      if (method) params.set('method', method);
+      const res = await request('payments.php' + (params.toString() ? '?' + params : ''));
+      return res.data;
+    },
+
+    receiveCashPayment: async (vehicleId, tendered) => {
+      const res = await request('payments.php', { method: 'POST', body: { action: 'cash', vehicleId, tendered } });
+      return res.data;
+    },
+
+    // Renewals (admin): cashier renewal list, cash / free / bulk renewal
+    getRenewals: async () => (await request('renewals.php')).data,
+    renewPass: async (vehicleId, action, tendered) => {
+      const res = await request('renewals.php', { method: 'POST', body: { action, vehicleId, tendered } });
+      return { ...res.data, message: res.message };
+    },
+    renewBulk: async (vehicleIds, cashCollected) => {
+      const res = await request('renewals.php', { method: 'POST', body: { action: 'bulk', vehicleIds, cashCollected } });
+      return { ...res.data, message: res.message };
+    },
+
+    // Retire a vehicle without replacing it (admin; the server asks for a reason)
+    retireVehicle: async (id) => {
+      const res = await request('vehicles.php', { method: 'PUT', body: { id, action: 'retire' } });
+      return res.data;
+    },
+
+    // One-time exit for a vehicle on hold (admin; reason required)
+    releaseExit: async (vehicleId, reason) => {
+      const res = await request('releases.php', { method: 'POST', body: { vehicleId, reason } });
+      return { ...res.data, message: res.message };
+    },
+    getReleases: async () => (await request('releases.php')).data,
+    cancelRelease: async (id) => (await request(`releases.php?id=${id}`, { method: 'DELETE' })).data,
+
+    // Cases: violations and security incidents as one process
+    getCases: async (params = {}) => {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+      return (await request(`cases.php${qs ? '?' + qs : ''}`)).data;
+    },
+    // Downloads the matching cases as a CSV file (admin)
+    exportCases: async (params = {}) => {
+      const qs = new URLSearchParams(Object.entries({ ...params, format: 'csv' }).filter(([, v]) => v !== '' && v != null)).toString();
+      const token = getToken();
+      const res = await fetch(`${baseUrl}/cases.php?${qs}`, { headers: token ? { 'Authorization': `Bearer ${token}`, 'X-Auth-Token': token } : {}, credentials: 'include' });
+      if (!res.ok || !(res.headers.get('Content-Type') || '').includes('csv')) {
+        let msg = `Could not export (HTTP ${res.status}).`;
+        try { msg = (await res.json()).message || msg; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.blob();
+    },
+    getCase: async (key) => (await request(`cases.php?key=${encodeURIComponent(key)}`)).data,
+    caseAction: async (key, action, fields = {}) => {
+      const res = await request('cases.php', { method: 'POST', body: { key, action, ...fields } });
+      return { ...res.data, message: res.message };
+    },
+
+    // Admin Center: activity log, approvals, guard duty, settings
+    getAuditLog: async (params = {}) => {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+      return (await request(`audit.php${qs ? '?' + qs : ''}`)).data;
+    },
+    getApprovals: async (status = '') => (await request(`approvals.php${status ? '?status=' + encodeURIComponent(status) : ''}`)).data,
+    decideApproval: async (id, decision, note = '') => {
+      const res = await request('approvals.php', { method: 'POST', body: { id, decision, note } });
+      return { ...res.data, message: res.message };
+    },
+    getSettings: async () => (await request('settings.php?scope=all')).data,
+    saveSettings: async (values) => (await request('settings.php', { method: 'PUT', body: values })).data,
+    getShifts: async () => (await request('shifts.php')).data,
+    getShiftReport: async (from = '', to = '') => (await request(`shifts.php?scope=report${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
+    getEvidence: async (params) => (await request('evidence.php?' + new URLSearchParams(params))).data,
+    getEvidencePhoto: async (id) => (await request(`evidence.php?id=${id}`)).data,
+    // Sends the owner e-mails that are waiting (entry / exit). Fire and forget: the gate screen never waits for it.
+    flushNotices: () => request('notices_send.php', { method: 'POST', body: {} }).catch(() => null),
+
+    // Sends one test e-mail through the server's SMTP account (admin). Resolves with the server's message, rejects with the reason.
+    sendTestMail: async (to) => {
+      const res = await request('mail_test.php', { method: 'POST', body: { to } });
+      return { ...res.data, message: res.message };
+    },
+    runMaintenance: async () => { try { return (await request('maintenance.php', { method: 'POST', body: {} })).data; } catch (_) { return null; } },
 
     // Staff Accounts (admin only)
     getUsers: async () => {
@@ -270,26 +388,26 @@ const ApiClient = (function() {
       return res.data;
     },
 
-    // Violations & 3-strike policy
+    // Violations (a pending violation blocks the vehicle's entry and exit)
     getViolations: async (params = {}) => {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
       const res = await request(`violations.php${qs ? '?' + qs : ''}`);
       return res.data;
     },
 
-    // { vehicle_id | plate, type, severity, notes } -> { violation, strikes, banned, vehicle, ... }
+    // { vehicle_id | plate, type, notes } -> { violation, onHold, vehicle, ... }
     createViolation: async (payload) => {
       const res = await request('violations.php', { method: 'POST', body: payload });
       return { ...res.data, message: res.message };
     },
 
-    // { violation_id, action: 'resolve' | 'dismiss', notes } or { vehicle_id, action: 'reset', notes }
+    // { violation_id, action: 'resolve' | 'dismiss', notes }
     updateViolation: async (payload) => {
       const res = await request('violations.php', { method: 'PUT', body: payload });
       return { ...res.data, message: res.message };
     },
 
-    // Overtime / overnight parking (server records at most one strike per vehicle per night)
+    // Overtime / overnight parking list (nothing is recorded automatically)
     runOvernightCheck: async () => {
       const res = await request('overnight_check.php', { method: 'POST', body: {} });
       return { ...res.data, message: res.message };

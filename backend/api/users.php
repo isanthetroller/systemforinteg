@@ -14,6 +14,7 @@
 
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
+require_once __DIR__ . '/../lib/audit.php';
 
 $admin = requireStaff($pdo, ['admin']);
 $method = $_SERVER['REQUEST_METHOD'];
@@ -23,7 +24,7 @@ switch ($method) {
         handleListUsers($pdo);
         break;
     case 'POST':
-        handleCreateUser($pdo);
+        handleCreateUser($pdo, $admin);
         break;
     case 'PUT':
         handleUpdateUser($pdo, $admin);
@@ -41,7 +42,7 @@ function validRole($role) {
     return in_array($role, ['admin', 'guard'], true);
 }
 
-function handleCreateUser($pdo) {
+function handleCreateUser($pdo, $admin) {
     $data = getJsonInput();
     $username = isset($data['username']) ? strtolower(trim($data['username'])) : '';
     $fullName = isset($data['full_name']) ? trim($data['full_name']) : '';
@@ -82,6 +83,7 @@ function handleCreateUser($pdo) {
     $stmt->execute([$username, password_hash($finalPassword, PASSWORD_BCRYPT), $fullName, $role, $badge ?: null, $gate ?: null, $mustChange]);
 
     $row = fetchUser($pdo, (int)$pdo->lastInsertId());
+    auditLog($pdo, $admin, 'staff.create', ['entityType' => 'staff', 'entityId' => (int)$row['id'], 'detail' => "{$username} ({$role})"]);
     $msg = $customPassword !== ''
         ? "Account {$username} created with the specified password."
         : "Account {$username} created. Password: {$finalPassword}";
@@ -124,6 +126,7 @@ function handleUpdateUser($pdo, $admin) {
         if ($status === 'Inactive') {
             revokeUserTokens($pdo, 'staff', $id);
         }
+        auditLog($pdo, $admin, 'staff.status', ['entityType' => 'staff', 'entityId' => $id, 'detail' => "{$row['username']} is now {$status}"]);
         sendResponse(200, publicStaff(fetchUser($pdo, $id)), "Account {$row['username']} is now {$status}.");
     }
 
@@ -142,6 +145,7 @@ function handleUpdateUser($pdo, $admin) {
         $stmt = $pdo->prepare("UPDATE `system_users` SET `password_hash` = ?, `must_change_password` = ?, `failed_attempts` = 0, `locked_until` = NULL WHERE `id` = ?");
         $stmt->execute([password_hash($finalPassword, PASSWORD_BCRYPT), $mustChange, $id]);
         revokeUserTokens($pdo, 'staff', $id);
+        auditLog($pdo, $admin, 'staff.password_reset', ['entityType' => 'staff', 'entityId' => $id, 'detail' => $row['username']]);
         sendResponse(200, ['user' => publicStaff(fetchUser($pdo, $id)), 'tempPassword' => $finalPassword],
             "Password for {$row['username']} was updated.");
     }
@@ -164,6 +168,8 @@ function handleUpdateUser($pdo, $admin) {
         }
         $stmt = $pdo->prepare("UPDATE `system_users` SET `full_name` = ?, `role` = ?, `badge_number` = ?, `gate_assigned` = ? WHERE `id` = ?");
         $stmt->execute([$fullName, $role, $badge ?: null, $gate ?: null, $id]);
+        auditLog($pdo, $admin, 'staff.update', ['entityType' => 'staff', 'entityId' => $id,
+            'detail' => "{$row['username']}: role {$row['role']} -> {$role}, gate " . ($row['gate_assigned'] ?: '-') . ' -> ' . ($gate ?: '-')]);
         sendResponse(200, publicStaff(fetchUser($pdo, $id)), "Account {$row['username']} updated.");
     }
 

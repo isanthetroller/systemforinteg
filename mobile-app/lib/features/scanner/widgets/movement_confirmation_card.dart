@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/driver_photo_view.dart';
+import '../../../core/widgets/vehicle_photo_panel.dart';
+import '../../../core/widgets/evidence_button.dart';
+import '../../../services/evidence_service.dart';
+import 'scan_notice_strip.dart';
+
 import '../../../theme/ncst_theme.dart';
 
 /// Displays the server's suggested movement. Scanning alone never calls onConfirm.
@@ -12,6 +18,9 @@ class MovementConfirmationCard extends StatefulWidget {
   final String? error;
   final void Function(int? driverId, bool itemsVerified) onConfirm;
   final VoidCallback onCancel;
+  final VoidCallback? onInspect;
+  final VoidCallback? onIssueViolation;
+  final ValueChanged<PendingEvidence?>? onEvidenceChanged;
   const MovementConfirmationCard({
     super.key,
     required this.preview,
@@ -22,6 +31,9 @@ class MovementConfirmationCard extends StatefulWidget {
     required this.onConfirm,
     required this.onCancel,
     this.error,
+    this.onInspect,
+    this.onIssueViolation,
+    this.onEvidenceChanged,
   });
 
   @override
@@ -52,6 +64,10 @@ class _MovementConfirmationCardState extends State<MovementConfirmationCard> {
     final ready =
         (!needsDriver || (_driverId != null && _driverChecked)) &&
         _checkedItems.length == items.length;
+    final selectedDriver = drivers
+        .where((d) => '${d['id']}' == '$_driverId')
+        .firstOrNull;
+    final driverPhoto = (selectedDriver?['photoUrl'] ?? '').toString();
     final plate = record['plateNumber']?.toString() ?? '';
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -61,6 +77,15 @@ class _MovementConfirmationCardState extends State<MovementConfirmationCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              ScanNoticeStrip(notices: ScanNotice.fromVerify(widget.preview)),
+              for (final warning in (widget.preview['warnings'] as List? ?? []))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    warning.toString(),
+                    style: const TextStyle(color: NcstColors.goldDark),
+                  ),
+                ),
               Text(
                 outgoing ? 'Confirm vehicle exit' : 'Confirm vehicle entry',
                 style: const TextStyle(
@@ -94,6 +119,10 @@ class _MovementConfirmationCardState extends State<MovementConfirmationCard> {
                   'VIP pass • Driver check not required',
                   style: TextStyle(color: NcstColors.navy),
                 ),
+              if ((record['vehiclePhoto'] ?? '').toString().isNotEmpty) ...[
+                const SizedBox(height: 16),
+                VehiclePhotoPanel(photoData: record['vehiclePhoto'].toString()),
+              ],
               const Divider(height: 32),
               _detail('Current status', movement['currentStatus'].toString()),
               _detail(
@@ -129,6 +158,24 @@ class _MovementConfirmationCardState extends State<MovementConfirmationCard> {
                           _driverChecked = false;
                         }),
                 ),
+                if (_driverId != null) ...[
+                  const SizedBox(height: 12),
+                  DriverPhotoView(
+                    photoUrl: driverPhoto.isNotEmpty
+                        ? driverPhoto
+                        : ((selectedDriver?['fullName'] ?? '') ==
+                                  record['ownerName']
+                              ? (record['ownerPhotoUrl'] ?? '').toString()
+                              : ''),
+                    size: 150,
+                  ),
+                  Text(
+                    'Relationship: ${selectedDriver?['relationship'] ?? ''}',
+                  ),
+                  Text(
+                    'License: ${selectedDriver?['licenseNo'] ?? 'Not provided'}',
+                  ),
+                ],
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('I checked the selected driver'),
@@ -161,6 +208,26 @@ class _MovementConfirmationCardState extends State<MovementConfirmationCard> {
                           }),
                   ),
               ],
+              if (widget.onEvidenceChanged != null)
+                AbsorbPointer(
+                  absorbing: locked,
+                  child: EvidenceButton(
+                    expectedPlate: plate,
+                    onChanged: widget.onEvidenceChanged!,
+                  ),
+                ),
+              if (widget.onInspect != null)
+                TextButton.icon(
+                  onPressed: locked ? null : widget.onInspect,
+                  icon: const Icon(Icons.visibility_outlined),
+                  label: const Text('View details / Report incident'),
+                ),
+              if (widget.onIssueViolation != null)
+                TextButton.icon(
+                  onPressed: locked ? null : widget.onIssueViolation,
+                  icon: const Icon(Icons.warning_amber_rounded),
+                  label: const Text('Issue violation'),
+                ),
               if (widget.error != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 16),

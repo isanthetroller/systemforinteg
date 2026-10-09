@@ -115,6 +115,10 @@ def run(s):
     status, response = call(base, 'vehicles.php', vehicle_body, admin)
     assert status == 201, response
     vehicle = response['data']
+    check('new registration is unpaid until cashier payment', vehicle['paymentStatus'] == 'Unpaid' and not vehicle['qrPayload'])
+    code, paid = call(base, 'payments.php', {'action': 'cash', 'vehicleId': vehicle['id']}, admin)
+    check('cashier activates current registration', code == 201)
+    vehicle = next(v for v in call(base, 'vehicles.php', token=admin, method='GET')[1]['data'] if v['id'] == vehicle['id'])
     qr = vehicle['qrPayload']
     driver = vehicle['authorizedDrivers'][0]['id']
 
@@ -234,6 +238,81 @@ def run(s):
     code, replay = confirm(guards[1], pending, driver_id=0)
     check('delayed replay reports current status without replaying old entry', code == 200 and replay['data']['currentStatus'] == 'OUTSIDE' and replay['data']['recordedStatus'] == 'INSIDE')
 
+    # Features introduced upstream must also work through the automatic confirmation path.
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET pass_class='Standard' WHERE id=?", (vehicle['id'],))
+        db.execute("INSERT OR REPLACE INTO system_settings(setting_key, setting_value) VALUES('parking_capacity','1')")
+    pending = prepare(guards[0])
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET payment_status='Unpaid' WHERE id=?", (vehicle['id'],))
+    check('fee changed after preview is rechecked', confirm(guards[0], pending)[0] == 403)
+    check('unpaid registration cannot prepare entry', prepare(guards[0])['accepted'] is False)
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET payment_status='Paid', is_retired=1 WHERE id=?", (vehicle['id'],))
+    check('retired registration cannot prepare entry', prepare(guards[0])['accepted'] is False)
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET is_retired=0 WHERE id=?", (vehicle['id'],))
+    pending = prepare(guards[0])
+    code, saved = confirm(guards[0], pending)
+    assert code == 201, saved
+    log_id = saved['data']['id']
+    oncampus = call(base, 'oncampus.php', token=admin, method='GET')[1]['data']
+    check('web on-campus endpoint sees confirmed mobile entry', 'MOVE100' in json.dumps(oncampus).replace(' ', ''))
+    logs = call(base, 'logs.php', token=admin, method='GET')[1]['data']
+    check('web history sees the exact confirmed movement', any(l['id'] == log_id and l['lookupMethod'] == 'qr' for l in logs))
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute('UPDATE student_accounts SET must_change_password=0 WHERE id=?', (owner_id,))
+    own = call(base, 'student.php?action=vehicles', token=token, method='GET')[1]['data']
+    check('owner portal sees current mobile entry status', any(v['id'] == vehicle['id'] and v['status'] == 'Inside Campus' for v in own))
+    activity = call(base, 'student.php?action=activity', token=token, method='GET')[1]['data']
+    check('owner portal history uses the same movement ID', any(l['id'] == log_id for l in activity))
+    with closing(sqlite3.connect(s.db)) as db, db:
+        n = db.execute("SELECT count(*) FROM owner_notices WHERE ref_key=?", (f'passage:{log_id}',)).fetchone()[0]
+    check('mobile confirmation queues upstream owner passage notice', n == 1)
+    confirm(guards[0], pending)
+    with closing(sqlite3.connect(s.db)) as db, db:
+        n = db.execute("SELECT count(*) FROM owner_notices WHERE ref_key=?", (f'passage:{log_id}',)).fetchone()[0]
+    check('retry does not duplicate the owner notice', n == 1)
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET is_banned=1 WHERE id=?", (vehicle['id'],))
+    check('violation hold inside prevents exit without release', prepare(guards[1])['accepted'] is False)
+    code, released = call(base, 'releases.php', {'vehicleId': vehicle['id'], 'reason': 'Isolated emergency release'}, admin)
+    check('web administrator can grant one exit release', code == 201)
+    pending = prepare(guards[1])
+    check('released hold suggests exit with release and occupancy details', pending['movement']['suggestedAction'] == 'OUT' and pending['exitRelease'] is not None and pending['occupancy']['inside'] >= 1)
+    code, saved = confirm(guards[1], pending)
+    check('other checkpoint consumes one-time exit release', code == 201 and state()[0] == 'Outside')
+    with closing(sqlite3.connect(s.db)) as db, db:
+        used = db.execute('SELECT used_at FROM exit_releases WHERE id=?', (released['data']['id'],)).fetchone()[0]
+    check('release consumption persisted atomically', used is not None)
+    check('released vehicle stays on hold and cannot reenter', prepare(guards[0])['accepted'] is False)
+    check('release confirmation remains idempotent', confirm(guards[1], pending)[0] == 200)
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET is_banned=0 WHERE id=?", (vehicle['id'],))
+    confirm(guards[0], prepare(guards[0]))
+    code, incident = call(base, 'incidents.php', {'plateNumber': 'MOVE 100', 'reason': 'Isolated hold while inside'}, guards[1])
+    check('web incident changes standing without losing physical custody', code == 201 and state()[0] == 'Blocked / Alert')
+    code, released = call(base, 'releases.php', {'vehicleId': vehicle['id'], 'reason': 'Emergency release of held on-campus vehicle'}, admin)
+    check('admin can release a blocked vehicle physically still inside', code == 201)
+    pending = prepare(guards[1])
+    check('blocked standing still produces OUT after admin release', pending['movement']['suggestedAction'] == 'OUT')
+    check('held on-campus release confirms at another checkpoint', confirm(guards[1], pending)[0] == 201)
+    incidents = call(base, 'incidents.php?status=Held', token=admin, method='GET')[1]['data']
+    for case in incidents:
+        if case['plateNumber'].replace(' ', '') == 'MOVE100':
+            call(base, 'incidents.php', {'id': case['id'], 'notes': 'Isolated case cleared'}, admin, method='PUT')
+    code, manual = call(base, 'movements.php', {'action': 'prepare', 'plate': 'MOVE 100', 'lookup_method': 'manual'}, guards[0])
+    code, saved = confirm(guards[0], manual['data'])
+    logs = call(base, 'logs.php', token=admin, method='GET')[1]['data']
+    check('manual lookup method survives confirmation into web history', code == 201 and any(l['id'] == saved['data']['id'] and l['lookupMethod'] == 'manual' for l in logs))
+    # The new payment and retirement restrictions only block entry, not exit from campus.
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET payment_status='Unpaid', is_retired=1, pass_valid_until='2025-01-01' WHERE id=?", (vehicle['id'],))
+    pending = prepare(guards[1])
+    check('already-inside vehicle may exit after payment/retirement/expiry change', pending['movement']['suggestedAction'] == 'OUT' and confirm(guards[1], pending)[0] == 201)
+    with closing(sqlite3.connect(s.db)) as db, db:
+        db.execute("UPDATE vehicles SET payment_status='Paid', is_retired=0, pass_valid_until=? WHERE id=?", (vehicle['passValidUntil'], vehicle['id']))
+
     code, response = call(base, 'visitors.php', {'visitor_name': 'Test Visitor', 'contact_number': '09170000000',
         'plate': 'VISIT 100', 'purpose': 'Test visit', 'person_to_visit': 'Security',
         'items': [{'name': 'Tools', 'quantity': 2}]}, guards[1])
@@ -258,11 +337,17 @@ if __name__ == '__main__':
         with Sandbox() as sandbox:
             baseline = '--baseline-smoke' in sys.argv
             if baseline:
-                for name in ('verify.php', 'logs.php', 'sync.php'):
-                    content = subprocess.check_output(['git', 'show', f'HEAD:backend/api/{name}'], cwd=ROOT)
-                    (sandbox.root / 'web-app-admin' / 'api' / name).write_bytes(content)
+                files = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', 'origin/main', 'backend'], cwd=ROOT).decode().splitlines()
+                for name in files:
+                    content = subprocess.check_output(['git', 'show', f'origin/main:{name}'], cwd=ROOT)
+                    destination = sandbox.root / 'web-app-admin' / Path(name).relative_to('backend')
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(content)
             (sandbox.root / 'tests').mkdir()
-            shutil.copy2(ROOT / 'tests' / 'api_smoke.py', sandbox.root / 'tests' / 'api_smoke.py')
+            if baseline:
+                (sandbox.root / 'tests' / 'api_smoke.py').write_bytes(subprocess.check_output(['git', 'show', 'origin/main:tests/api_smoke.py'], cwd=ROOT))
+            else:
+                shutil.copy2(ROOT / 'tests' / 'api_smoke.py', sandbox.root / 'tests' / 'api_smoke.py')
             result = subprocess.run([sys.executable, str(sandbox.root / 'tests' / 'api_smoke.py')],
                                     env={**os.environ, 'SP_API': sandbox.bases[0]}, capture_output=True, text=True)
             report = ROOT / 'artifacts' / ('movement-baseline-smoke.txt' if baseline else 'movement-regression-smoke.txt')

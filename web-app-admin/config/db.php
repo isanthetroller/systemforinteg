@@ -286,6 +286,134 @@ function initializeSqliteSchema($pdo) {
             `description` TEXT NULL,
             `updated_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS `payments` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `receipt_number` TEXT NULL UNIQUE,
+            `vehicle_id` INTEGER NOT NULL,
+            `plate_number` TEXT NOT NULL,
+            `owner_id_number` TEXT NOT NULL,
+            `owner_name` TEXT NOT NULL,
+            `sticker_year` TEXT NULL,
+            `amount` REAL NOT NULL,
+            `method` TEXT NOT NULL,
+            `status` TEXT NOT NULL DEFAULT 'Pending',
+            `provider_session_id` TEXT NULL,
+            `provider_payment_id` TEXT NULL,
+            `provider_method` TEXT NULL,
+            `cash_tendered` REAL NULL,
+            `recorded_by` TEXT NULL,
+            `recorded_by_user_id` INTEGER NULL,
+            `notes` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `paid_at` TEXT NULL
+        );
+        CREATE TABLE IF NOT EXISTS `owner_notices` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `owner_id_number` TEXT NOT NULL,
+            `vehicle_id` INTEGER NULL,
+            `plate_number` TEXT NOT NULL,
+            `kind` TEXT NOT NULL,
+            `title` TEXT NOT NULL,
+            `message` TEXT NOT NULL,
+            `email_to` TEXT NULL,
+            `email_status` TEXT NOT NULL DEFAULT 'Pending',
+            `email_error` TEXT NULL,
+            `emailed_at` TEXT NULL,
+            `violation_id` INTEGER NULL,
+            `incident_id` INTEGER NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS `idx_notices_owner` ON `owner_notices` (`owner_id_number`, `id`);
+
+        CREATE TABLE IF NOT EXISTS `audit_log` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `actor_user_id` INTEGER NULL,
+            `actor_label` TEXT NOT NULL,
+            `actor_role` TEXT NULL,
+            `action` TEXT NOT NULL,
+            `entity_type` TEXT NULL,
+            `entity_id` INTEGER NULL,
+            `plate_number` TEXT NULL,
+            `detail` TEXT NULL,
+            `reason` TEXT NULL,
+            `ip_address` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS `idx_audit_time` ON `audit_log` (`created_at`);
+
+        CREATE TABLE IF NOT EXISTS `approval_requests` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `type` TEXT NOT NULL,
+            `vehicle_id` INTEGER NULL,
+            `violation_id` INTEGER NULL,
+            `plate_number` TEXT NULL,
+            `requested_by_user_id` INTEGER NULL,
+            `requested_by_label` TEXT NOT NULL,
+            `reason` TEXT NOT NULL,
+            `status` TEXT NOT NULL DEFAULT 'Pending',
+            `decided_by_user_id` INTEGER NULL,
+            `decided_by_label` TEXT NULL,
+            `decision_note` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `decided_at` TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS `exit_releases` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `vehicle_id` INTEGER NOT NULL,
+            `plate_number` TEXT NOT NULL,
+            `reason` TEXT NOT NULL,
+            `released_by_user_id` INTEGER NULL,
+            `released_by_label` TEXT NOT NULL,
+            `expires_at` TEXT NOT NULL,
+            `used_at` TEXT NULL,
+            `used_by_label` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS `evidence_photos` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `kind` TEXT NOT NULL,
+            `gate_log_id` INTEGER NULL,
+            `violation_id` INTEGER NULL,
+            `incident_id` INTEGER NULL,
+            `plate_number` TEXT NOT NULL,
+            `plate_read` TEXT NULL,
+            `plate_matches` INTEGER NULL,
+            `size_bytes` INTEGER NOT NULL DEFAULT 0,
+            `data` TEXT NULL,
+            `taken_by_user_id` INTEGER NULL,
+            `taken_by_label` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `purged_at` TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS `guard_shifts` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `user_id` INTEGER NOT NULL,
+            `guard_label` TEXT NOT NULL,
+            `gate` TEXT NULL,
+            `started_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `ended_at` TEXT NULL,
+            `handover_notes` TEXT NULL
+        );
+        CREATE TABLE IF NOT EXISTS `case_events` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `case_key` TEXT NOT NULL,
+            `event_type` TEXT NOT NULL,
+            `method` TEXT NULL,
+            `result` TEXT NULL,
+            `reference` TEXT NULL,
+            `note` TEXT NULL,
+            `actor_user_id` INTEGER NULL,
+            `actor_label` TEXT NULL,
+            `created_at` TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS `idx_case_events_key` ON `case_events` (`case_key`);
+        CREATE INDEX IF NOT EXISTS `idx_payments_vehicle` ON `payments` (`vehicle_id`);
+        CREATE INDEX IF NOT EXISTS `idx_payments_owner` ON `payments` (`owner_id_number`);
+        CREATE INDEX IF NOT EXISTS `idx_payments_session` ON `payments` (`provider_session_id`);
     ");
 
     // Bring older SQLite databases up to the v2 structure
@@ -298,6 +426,26 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'vehicles', 'pass_class', "TEXT NOT NULL DEFAULT 'Standard'");
     ensureColumn($pdo, 'vehicles', 'pass_class_by', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_class_at', 'TEXT NULL');
+    // Existing vehicles stay usable: 'Paid' by default (mirrors migrations/007_payments.sql)
+    ensureColumn($pdo, 'vehicles', 'payment_status', "TEXT NOT NULL DEFAULT 'Paid'");
+    ensureColumn($pdo, 'vehicles', 'fee_amount', 'REAL NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'paid_at', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'is_retired', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($pdo, 'vehicles', 'retired_at', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'retired_reason', 'TEXT NULL');
+    ensureColumn($pdo, 'vehicles', 'replaced_by_vehicle_id', 'INTEGER NULL');
+    ensureColumn($pdo, 'payments', 'purpose', "TEXT NOT NULL DEFAULT 'Registration'");
+    ensureColumn($pdo, 'owner_notices', 'ref_key', 'TEXT NULL');
+    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_notices_ref_key` ON `owner_notices` (`ref_key`)");
+    ensureColumn($pdo, 'gate_logs', 'lookup_method', 'TEXT NULL');
+    foreach ([['parking_capacity', '0', 'Vehicles the campus can hold at once (0 = not limited)'],
+              ['renewal_window_days', '60', 'Passes can be renewed this many days before they expire'],
+              ['expiry_warning_days', '30', 'Owners get an expiry notice this many days before the pass expires'],
+              ['hold_reminder_days', '3', 'Owners are reminded every N days while a violation stays unresolved'],
+              ['exit_release_minutes', '30', 'How long an admin-released exit for a vehicle on hold stays valid'],
+              ['evidence_retention_days', '90', 'Guard photos are deleted after this many days']] as $setting) {
+        $pdo->prepare("INSERT OR IGNORE INTO `system_settings` (`setting_key`, `setting_value`, `description`) VALUES (?, ?, ?)")->execute($setting);
+    }
     ensureColumn($pdo, 'vehicles', 'pass_id', 'TEXT NULL');
     ensureColumn($pdo, 'vehicles', 'pass_valid_until', 'TEXT NULL');
     ensureColumn($pdo, 'gate_logs', 'verified_driver_name', 'TEXT NULL');
@@ -307,6 +455,7 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'gate_logs', 'client_ref', 'TEXT NULL');
     ensureColumn($pdo, 'security_incidents', 'client_ref', 'TEXT NULL');
     ensureColumn($pdo, 'visitor_passes', 'synced_at', 'TEXT NULL');
+    ensureColumn($pdo, 'visitor_passes', 'vehicle_photo', 'TEXT NULL');
     $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_gate_logs_client_ref` ON `gate_logs` (`client_ref`)");
     $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_incidents_client_ref` ON `security_incidents` (`client_ref`)");
     ensureColumn($pdo, 'security_incidents', 'logged_by_user_id', 'INTEGER NULL');
@@ -397,9 +546,25 @@ function spNow() {
 /**
  * Standard JSON response helper
  */
+/**
+ * True when the browser reached us over HTTPS. Free hosts often terminate TLS in a proxy and pass plain HTTP on, so the
+ * forwarded-protocol headers and port 443 count too.
+ */
+function isSecureRequest() {
+    if (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') return true;
+    if (strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https') return true;
+    if (strpos((string)($_SERVER['HTTP_CF_VISITOR'] ?? ''), '"https"') !== false) return true;
+    return (string)($_SERVER['SERVER_PORT'] ?? '') === '443';
+}
+
 function sendResponse($statusCode, $data = null, $message = '') {
     http_response_code($statusCode);
     header("Content-Type: application/json; charset=UTF-8");
+    header('X-Content-Type-Options: nosniff');
+    if (isSecureRequest()) {
+        // Browsers that reached us over HTTPS keep using HTTPS for the next 180 days
+        header('Strict-Transport-Security: max-age=15552000');
+    }
     $ok = ($statusCode >= 200 && $statusCode < 300);
     // `status` is kept for the mobile app; `success` is the v2 response contract
     $response = [
@@ -412,7 +577,20 @@ function sendResponse($statusCode, $data = null, $message = '') {
     if ($data !== null) {
         $response['data'] = $data;
     }
-    echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    // Bad bytes in one text field must never turn the whole answer into an empty body
+    $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    if ($json === false || $json === '') {
+        $json = '{"status":"error","success":false,"message":"The server could not format its answer (' . json_last_error_msg() . ')."}';
+    }
+    // Anything printed earlier (a stray warning, whitespace) would corrupt the JSON: drop it
+    while (ob_get_level() > 0) @ob_end_clean();
+    $deferred = !empty($GLOBALS['sp_pending_notices']);
+    echo $json;
+    if ($deferred && function_exists('fastcgi_finish_request')) {
+        // Let the client finish before the e-mails go out (see lib/notices.php). No hand-made Content-Length /
+        // Connection headers: behind a compressing proxy they can corrupt the response.
+        fastcgi_finish_request();
+    }
     exit;
 }
 

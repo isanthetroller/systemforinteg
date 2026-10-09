@@ -39,3 +39,13 @@ function lastEntryLog($pdo, $vehicle) {
     }
     return null;
 }
+
+/** Shared custody check: blocked is a standing label, so use passage order to decide where the vehicle is. */
+function vehicleRecordedInside($pdo, $vehicle) {
+    if ($vehicle['status'] === 'Inside Campus') return true;
+    if ($vehicle['status'] !== 'Blocked / Alert' || empty($vehicle['last_entry_time'])) return false;
+    $q = $pdo->prepare("SELECT `action` FROM `gate_logs` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `action` IN ('Entry Recorded', 'Exit Approved') AND `logged_at` >= ? ORDER BY `logged_at` DESC, `id` DESC LIMIT 1");
+    $q->execute([normalizePlate($vehicle['plate_number']), $vehicle['last_entry_time']]);
+    $latest = $q->fetchColumn();
+    return !$latest || $latest === 'Entry Recorded';
+}

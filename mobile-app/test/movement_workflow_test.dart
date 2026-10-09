@@ -246,4 +246,37 @@ void main() {
       expect(saved, 1);
     },
   );
+  testWidgets('automatic preview retains upstream release, capacity and evidence controls', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final data = preview(outgoing: true);
+    data['occupancy'] = {'level': 'full', 'message': 'Campus parking is FULL'};
+    data['exitRelease'] = {'releasedBy': 'Test Admin', 'expiresAt': '2026-10-09 12:30:00', 'reason': 'Emergency'};
+    var inspected = false;
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: MovementConfirmationCard(
+      preview: data, guardName: 'Guard 2', saving: false, retryPending: false, invalidated: false,
+      onConfirm: (_, _) {}, onCancel: () {}, onEvidenceChanged: (_) {}, onInspect: () => inspected = true,
+    ))));
+    expect(find.text('Campus parking is FULL'), findsOneWidget);
+    expect(find.textContaining('Exit released'), findsOneWidget);
+    expect(find.text('Photo of vehicle / plate'), findsOneWidget);
+    await tester.ensureVisible(find.text('View details / Report incident'));
+    await tester.tap(find.text('View details / Report incident'));
+    expect(inspected, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('uncertain confirmation locks incident and violation actions', (tester) async {
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: MovementConfirmationCard(
+      preview: preview(outgoing: true), guardName: 'Guard 1', saving: false, retryPending: true, invalidated: false,
+      onConfirm: (_, _) {}, onCancel: () {}, onInspect: () {}, onIssueViolation: () {},
+    ))));
+    final inspect = tester.widget<TextButton>(find.widgetWithText(TextButton, 'View details / Report incident'));
+    final violation = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Issue violation'));
+    expect(inspect.onPressed, isNull);
+    expect(violation.onPressed, isNull);
+    expect(find.text('Retry confirmation'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show Random;
+import '../../../core/utils/photo_compress.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -74,6 +75,8 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   String _selectedVehicleType = 'Sedan';
   String _vehicleModel = '';
   bool _hasCapturedPhoto = false;
+  // The (shrunk) photo of the visitor's vehicle, sent with the pass so the exit guard can compare it
+  String? _vehiclePhotoData;
   DateTime? _photoCaptureTime;
 
   // Form & Dock Controllers
@@ -597,7 +600,9 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   Future<void> _snapVehiclePhoto() async {
     try {
       if (_cameraController != null && _cameraController!.value.isInitialized) {
-        await _cameraController!.takePicture();
+        final shot = await _cameraController!.takePicture();
+        final small = PhotoCompress.shrinkJpeg(await shot.readAsBytes());
+        _vehiclePhotoData = small == null ? null : PhotoCompress.toDataUrl(small);
       }
     } catch (_) {}
 
@@ -630,6 +635,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
 
   void _retakePhoto() {
     setState(() {
+      _vehiclePhotoData = null;
       _hasCapturedPhoto = false;
       _photoCaptureTime = null;
       _activeScanMode = CameraScanMode.vehiclePhoto;
@@ -917,7 +923,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       purposeOfVisit: purposeOfVisit,
       personToVisit: purposeOfVisit.contains('-') ? purposeOfVisit.split('-').last.trim() : 'Campus Host',
       plateNumber: plateNumber,
-      vehiclePhotoUrl: _hasCapturedPhoto ? 'assets/images/kriz_monares.jpg' : null,
+      vehiclePhotoUrl: _hasCapturedPhoto ? (_vehiclePhotoData ?? 'assets/images/kriz_monares.jpg') : null,
       entryTime: now,
       expiryTime: validUntil,
       status: VisitorPassStatus.active,
@@ -998,6 +1004,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                   _licensePlate = '';
                   _vehicleModel = '';
                   _hasCapturedPhoto = false;
+                  _vehiclePhotoData = null;
                   _photoCaptureTime = null;
                   _declaredItems.clear();
                   _purposeController.clear();

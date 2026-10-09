@@ -10,6 +10,7 @@ require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
 require_once __DIR__ . '/../lib/movements.php';
+require_once __DIR__ . '/../lib/releases.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -46,6 +47,9 @@ function handleGetLogs($pdo) {
     $whereSql = !empty($where) ? "WHERE " . implode(' AND ', $where) : "";
     // Rows recorded offline carry the time they reached the server (migration 006)
     $syncedSelect = columnExists($pdo, 'gate_logs', 'synced_at') ? ",\n            synced_at AS syncedAt" : '';
+    if (columnExists($pdo, 'gate_logs', 'lookup_method')) {
+        $syncedSelect .= ",\n            lookup_method AS lookupMethod";
+    }
     $sql = "
         SELECT 
             id,
@@ -130,6 +134,8 @@ function handleCreateLog($pdo, $actor) {
         $visitor = findVisitorPassByPlate($pdo, $plateNumber, date('Y-m-d'), true);
     }
 
+    $observedVisitorRevision = $visitor ? movementRevision($pdo, $visitor['plate_number']) : null;
+
     /* ---- Driver confirmation ------------------------------------------- */
     $driverName = trim((string)($data['driverName'] ?? $data['driver_name'] ?? ''));
     $driverRelationship = trim((string)($data['driverRelationship'] ?? $data['driver_relationship'] ?? ''));
@@ -149,9 +155,19 @@ function handleCreateLog($pdo, $actor) {
         $driverName = $visitor['visitor_name'];
         $driverRelationship = 'Visitor (Day Pass)';
         $verifiedDriverName = $visitor['visitor_name'];
-    } elseif (!$isScanner && $isApproval && $vehicle && !$isVip) {
-        // The web gate monitor must confirm who is behind the wheel before approving (VIPs are waved through)
-        sendResponse(400, ['code' => 'DRIVER_CONFIRMATION_REQUIRED'], 'Select the authorized driver currently behind the wheel.');
+    } elseif ($isApproval && $vehicle && !$isVip) {
+        // Web monitor AND mobile scanner: whoever is behind the wheel must be on the vehicle's authorized driver list
+        // (VIPs are waved through). A name typed or sent without an id is accepted only if it matches a listed driver.
+        $listed = findAuthorizedDriverByName($pdo, $vehicle['id'], $driverName);
+        if ($listed) {
+            $driverName = $listed['full_name'];
+            $driverRelationship = $listed['relationship'];
+            $verifiedDriverName = $listed['full_name'];
+        } elseif ($driverName !== '' && strcasecmp($driverName, 'Unverified') !== 0) {
+            sendResponse(400, ['code' => 'DRIVER_NOT_AUTHORIZED'], "{$driverName} is not on the authorized driver list of {$vehicle['plate_number']}. Only a listed driver may be admitted.");
+        } else {
+            sendResponse(400, ['code' => 'DRIVER_CONFIRMATION_REQUIRED'], 'Select the authorized driver currently behind the wheel.');
+        }
     }
     if ($driverName === '' && $isVip) {
         $driverName = $vehicle['owner_name'];
@@ -163,14 +179,23 @@ function handleCreateLog($pdo, $actor) {
     }
     if ($driverRelationship === '') $driverRelationship = $verifiedDriverName ? 'Self (Owner)' : 'Unverified';
 
-    /* ---- Server-side standing re-check (entries only; exits are never blocked) ---- */
+    /* ---- Server-side standing re-check: a vehicle with an unresolved violation can neither enter nor leave ---- */
     $today = date('Y-m-d');
     if ($action === 'Entry Recorded') {
         if ($vehicle && (int)$vehicle['is_banned'] === 1) {
-            sendResponse(403, ['code' => 'VEHICLE_BANNED'], "Entry refused: {$vehicle['plate_number']} is banned until an administrator resolves its violation.");
+            sendResponse(403, ['code' => 'VEHICLE_BANNED'], "Entry refused: {$vehicle['plate_number']} has an unresolved violation. An administrator must resolve it first.");
         }
         if ($vehicle && $vehicle['registration_status'] === 'Suspended') {
             sendResponse(403, ['code' => 'VEHICLE_SUSPENDED'], "Entry refused: registration of {$vehicle['plate_number']} is suspended.");
+        }
+        if ($vehicle && (int)($vehicle['is_retired'] ?? 0) === 1) {
+            sendResponse(403, ['code' => 'VEHICLE_RETIRED'], "Entry refused: {$vehicle['plate_number']} was retired (replaced or sold).");
+        }
+        if ($vehicle && ($vehicle['payment_status'] ?? 'Paid') === 'Unpaid') {
+            sendResponse(403, ['code' => 'VEHICLE_UNPAID'], "Entry refused: the registration fee of PHP " . number_format((float)$vehicle['fee_amount'], 2) . " for {$vehicle['plate_number']} is unpaid. Pay at the cashier or online first.");
+        }
+        if ($vehicle && vehiclePassExpired($vehicle, $today)) {
+            sendResponse(403, ['code' => 'PASS_EXPIRED'], "Entry refused: the pass of {$vehicle['plate_number']} expired on {$vehicle['pass_valid_until']}.");
         }
         if (!$vehicle && $visitor) {
             if ($visitor['status'] === 'Revoked' && empty($visitor['exit_time'])) {
@@ -197,6 +222,14 @@ function handleCreateLog($pdo, $actor) {
                 $unregisteredOrOutsideNote = 'Anti-Passback: Visitor re-entered while recorded inside';
             }
         }
+    }
+
+    $usedRelease = null;
+    if ($action === 'Exit Approved' && $vehicle && (int)$vehicle['is_banned'] === 1) {
+        $usedRelease = activeExitRelease($pdo, $vehicle['id']);
+    }
+    if ($action === 'Exit Approved' && $vehicle && (int)$vehicle['is_banned'] === 1 && !$usedRelease) {
+        sendResponse(403, ['code' => 'VEHICLE_BANNED'], "Exit refused: {$vehicle['plate_number']} has an unresolved violation. An administrator must resolve it before it can leave campus.");
     }
 
     $unregisteredOrOutsideNote = $unregisteredOrOutsideNote ?? '';
@@ -255,11 +288,31 @@ function handleCreateLog($pdo, $actor) {
     try {
         if ($isApproval && $vehicle) {
             $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
-            $fresh = $pdo->prepare("SELECT `status` FROM `vehicles` WHERE `id` = ?" . $lock);
+            $fresh = $pdo->prepare("SELECT * FROM `vehicles` WHERE `id` = ?" . $lock);
             $fresh->execute([$vehicle['id']]);
-            if ($fresh->fetchColumn() !== $vehicle['status'] || movementRevision($pdo, $vehicle['plate_number']) !== $observedRevision) {
+            $freshVehicle = $fresh->fetch();
+            if (!$freshVehicle || $freshVehicle['status'] !== $vehicle['status'] || movementRevision($pdo, $vehicle['plate_number']) !== $observedRevision) {
                 movementEnd($pdo, false);
                 sendResponse(409, ['code' => 'STALE_SCAN'], 'Another transaction changed this vehicle. Scan it again before confirming.');
+            }
+        }
+        if ($isApproval && $vehicle) {
+            $usedRelease = $gateType === 'Egress' && vehicleIsOnHold($pdo, $freshVehicle) ? activeExitRelease($pdo, $vehicle['id']) : null;
+            $invalidStanding = !$usedRelease && (vehicleIsOnHold($pdo, $freshVehicle) || $freshVehicle['registration_status'] === 'Suspended');
+            $invalidEntry = $gateType === 'Ingress' && ((int)($freshVehicle['is_retired'] ?? 0) || ($freshVehicle['payment_status'] ?? 'Paid') === 'Unpaid' || vehiclePassExpired($freshVehicle, date('Y-m-d')));
+            if ($invalidStanding || $invalidEntry) {
+                movementEnd($pdo, false);
+                sendResponse(403, ['code' => 'ACCESS_DENIED'], 'The vehicle no longer qualifies for this passage. Check its current registration and hold status.');
+            }
+        }
+        if ($isApproval && !$vehicle && $visitor) {
+            $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
+            $fresh = $pdo->prepare("SELECT `status`, `entry_time`, `exit_time` FROM `visitor_passes` WHERE `id` = ?" . $lock);
+            $fresh->execute([$visitor['id']]);
+            $current = $fresh->fetch();
+            if (!$current || $current['status'] !== $visitor['status'] || $current['entry_time'] !== $visitor['entry_time'] || $current['exit_time'] !== $visitor['exit_time'] || movementRevision($pdo, $visitor['plate_number']) !== $observedVisitorRevision) {
+                movementEnd($pdo, false);
+                sendResponse(409, ['code' => 'STALE_SCAN'], 'Another transaction changed this visitor pass. Scan it again before confirming.');
             }
         }
         $logId = recordGateLog($pdo, $actor, [
@@ -274,6 +327,7 @@ function handleCreateLog($pdo, $actor) {
             'gateType' => $gateType,
             'status' => $status,
             'notes' => $notes,
+            'lookupMethod' => strtolower(trim((string)($data['lookupMethod'] ?? $data['lookup_method'] ?? ''))),
             'clientRef' => $clientRef,
         ]);
 
@@ -295,10 +349,22 @@ function handleCreateLog($pdo, $actor) {
                     ->execute([date('Y-m-d H:i:s'), $visitor['id']]);
             }
         }
+        if ($usedRelease && $isApproval) {
+            consumeExitRelease($pdo, $usedRelease, gateActorLabel($actor));
+        }
         movementEnd($pdo, true);
     } catch (Exception $e) {
         movementEnd($pdo, false);
         sendResponse(500, null, 'Failed to record gate log.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
+    }
+
+    // "Is this you?": tell the registered owner their vehicle came in / went out (never blocks the gate)
+    if ($isApproval && $vehicle) {
+        try {
+            noticeVehiclePassage($pdo, $vehicle, $gateType, $gatePoint, $driverName, $driverRelationship, date('Y-m-d H:i:s'), gateActorLabel($actor), $logId);
+        } catch (Throwable $e) {
+            error_log('[Notices] passage notice failed: ' . $e->getMessage());
+        }
     }
 
     sendResponse(201, [

@@ -40,6 +40,12 @@ class ApiService {
   /// The server's message for the last refused write, or why it could not be sent.
   static String? lastWriteError;
 
+  /// Server id of the gate log written by the last successful postGateLog (null when it was queued offline).
+  static int? lastGateLogId;
+
+  /// Server id of the violation created by the last successful issueViolation.
+  static int? lastViolationId;
+
   /// The server's error message for the last pass verification, or network error.
   static String? lastVerifyError;
 
@@ -196,7 +202,7 @@ class ApiService {
   static Future<http.Response> _post(Uri uri, String body) async {
     try {
       // If not authenticated with InfinityFree test cookie yet, ping status to solve cookie
-      if (_testCookie == null && uri.host.contains('rf.gd')) {
+      if (_testCookie == null && (uri.host.endsWith('rf.gd') || uri.host.endsWith('site.je'))) {
         await _get(Uri.parse('${ApiConstants.baseUrl}${ApiConstants.statsEndpoint}'));
       }
       var res = await _client.post(uri, headers: _buildHeaders(), body: body).timeout(ApiConstants.timeout);
@@ -541,10 +547,13 @@ class ApiService {
     int? driverId,
     int? visitorPassId,
     bool itemsVerified = false,
+    // 'qr' (scanned) or 'manual' (the guard typed the plate): supervisors see how often each guard looks vehicles up by hand
+    String lookupMethod = 'qr',
   }) async {
     final gateType = (action.contains('Exit') || action.contains('Egress')) ? 'Egress' : 'Ingress';
     final clientRef = SyncQueueService.newClientRef();
     final occurredAt = DateTime.now();
+    lastGateLogId = null;
     final Map<String, dynamic> payload = {
       'plate': plateNumber,
       'plateNumber': plateNumber,
@@ -556,6 +565,7 @@ class ApiService {
       // checked the items declared on it (items_verified) before it accepts the entry.
       if (visitorPassId != null && visitorPassId > 0) 'visitor_pass_id': visitorPassId,
       if (itemsVerified) 'items_verified': true,
+      'lookupMethod': lookupMethod,
       'gatePoint': gatePoint,
       'gate_type': gateType,
       'action': action,
@@ -593,6 +603,8 @@ class ApiService {
     // 2. Live write
     final outcome = await _postForOutcome(ApiConstants.logsEndpoint, payload);
     if (outcome == WriteOutcome.accepted) {
+      lastGateLogId = int.tryParse('${lastResponseData?['id'] ?? ''}');
+      if (action == 'Entry Recorded' || action == 'Exit Approved') unawaited(flushOwnerNotices());
       debugPrint('[ApiService] Gate passage logged to server for $plateNumber');
       unawaited(LocalCacheService.updateVehicleCampusStatus(plateNumber, status));
       MockData.updateVehicleCampusStatus(plateNumber, status);
@@ -624,6 +636,30 @@ class ApiService {
   /// Direct HTTP post for a security incident (live write)
   static Future<bool> reportIncidentDirect(Map<String, dynamic> payload) async {
     return (await _postForOutcome(ApiConstants.incidentsEndpoint, payload)) == WriteOutcome.accepted;
+  }
+
+  /// Issues a violation to a vehicle (the vehicle is then on hold and the owner is notified). Online only: a
+  /// violation is never queued. Returns null on success, otherwise a message the guard can read.
+  static Future<String?> issueViolation({required String plateNumber, required String type, String notes = ''}) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.violationsEndpoint}');
+      lastViolationId = null;
+      final res = await _post(uri, jsonEncode({'plate': plateNumber, 'type': type, 'notes': notes}));
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        try {
+          final body = jsonDecode(res.body);
+          final violation = body is Map ? (body['data'] is Map ? body['data']['violation'] : null) : null;
+          if (violation is Map) lastViolationId = int.tryParse('${violation['id']}');
+        } catch (_) {}
+        return null;
+      }
+      if (res.statusCode == 401) return 'Your session expired. Sign in again to issue a violation.';
+      if (res.statusCode >= 500) return 'No connection to the server. Try again.';
+      return _messageOf(res) ?? 'The violation could not be recorded (HTTP ${res.statusCode}).';
+    } catch (e) {
+      debugPrint('[ApiService] issueViolation note: $e');
+      return 'No connection to the server. Try again.';
+    }
   }
 
   /// Post a security incident hold; queued with its real time when offline
@@ -772,6 +808,71 @@ class ApiService {
       debugPrint('[ApiService] Lookup visitor pass note: $e');
     }
     return null;
+  }
+
+  /// Asks the server to send the owner e-mails that are waiting ("is this you?" on entry / exit). Called right after a passage
+  /// was recorded, in its own request that nobody waits for: the e-mail is sent there, so the gate is never held up by the mail
+  /// server. Failures are ignored (the e-mail then goes out with the next call or maintenance run).
+  static Future<void> flushOwnerNotices() async {
+    try {
+      await _post(Uri.parse('${ApiConstants.baseUrl}/notices_send.php'), '{}');
+    } catch (e) {
+      debugPrint('[ApiService] flushOwnerNotices note: $e');
+    }
+  }
+
+  /// Uploads one evidence photo (see api/evidence.php). Returns null on success, otherwise a message to show.
+  static Future<String?> uploadEvidence(Map<String, dynamic> payload) async {
+    try {
+      final uri = Uri.parse('${ApiConstants.baseUrl}/evidence.php');
+      final res = await _post(uri, jsonEncode(payload));
+      if (res.statusCode == 200 || res.statusCode == 201) return null;
+      if (res.statusCode == 401) return 'Your session expired. Sign in again to send photos.';
+      if (res.statusCode >= 500) return 'No connection to the server. The photo was not sent.';
+      return _messageOf(res) ?? 'The photo could not be saved (HTTP ${res.statusCode}).';
+    } catch (e) {
+      debugPrint('[ApiService] uploadEvidence note: $e');
+      return 'No connection to the server. The photo was not sent.';
+    }
+  }
+
+  /// Who is on duty, my open shift and the latest handover note (GET /api/shifts.php). Null when unreachable.
+  static Future<Map<String, dynamic>?> fetchShifts() async {
+    try {
+      final res = await _get(Uri.parse('${ApiConstants.baseUrl}/shifts.php'));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body);
+      if (body is Map && body['data'] is Map) return Map<String, dynamic>.from(body['data']);
+    } catch (e) {
+      debugPrint('[ApiService] fetchShifts note: $e');
+    }
+    return null;
+  }
+
+  /// Goes on duty at [gate]. Returns {'shift': .., 'handover': ..} or {'error': message}.
+  static Future<Map<String, dynamic>> startShift(String gate) async {
+    try {
+      final res = await _post(Uri.parse('${ApiConstants.baseUrl}/shifts.php'), jsonEncode({'action': 'start', 'gate': gate}));
+      final body = jsonDecode(res.body);
+      if ((res.statusCode == 200 || res.statusCode == 201) && body is Map && body['data'] is Map) {
+        return Map<String, dynamic>.from(body['data']);
+      }
+      return {'error': _messageOf(res) ?? 'Could not go on duty (HTTP ${res.statusCode}).'};
+    } catch (e) {
+      return {'error': 'No connection to the server.'};
+    }
+  }
+
+  /// Ends my shift with an optional handover note. Returns null on success, otherwise a message to show.
+  static Future<String?> endShift(String notes) async {
+    try {
+      final res = await _post(Uri.parse('${ApiConstants.baseUrl}/shifts.php'), jsonEncode({'action': 'end', 'notes': notes}));
+      if (res.statusCode == 200) return null;
+      if (res.statusCode == 409) return null; // not on duty: nothing to end
+      return _messageOf(res) ?? 'Could not end the shift (HTTP ${res.statusCode}).';
+    } catch (e) {
+      return 'No connection to the server.';
+    }
   }
 
   /// Verify pass against backend /api/verify.php

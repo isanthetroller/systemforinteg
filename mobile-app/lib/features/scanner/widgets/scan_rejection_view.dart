@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../core/widgets/driver_photo_view.dart';
 import '../../../core/widgets/plate_badge.dart';
 import '../../../models/scanned_visitor_pass.dart';
 import '../../../models/vehicle_model.dart';
 import '../../../theme/ncst_theme.dart';
+import 'scan_notice_strip.dart';
 
 enum ScanRejectionType {
   blocked,
@@ -28,6 +30,9 @@ class ScanRejectionDetails {
   final String? statusBadge;
   final String? reason;
 
+  /// Parking nearly full, which case holds the vehicle, ... (from the server's verify answer)
+  final List<ScanNotice> notices;
+
   ScanRejectionDetails({
     required this.type,
     required this.title,
@@ -40,6 +45,7 @@ class ScanRejectionDetails {
     this.ownerName,
     this.statusBadge,
     this.reason,
+    this.notices = const [],
   }) : resolutionInstructions = resolutionInstructions ??
             (type == ScanRejectionType.blocked
                 ? 'The vehicle owner must resolve all issues with administration before the vehicle can proceed.'
@@ -64,6 +70,7 @@ class ScanRejectionView extends StatelessWidget {
   final ScanRejectionDetails details;
   final VoidCallback onScanAnother;
   final VoidCallback? onInspect;
+  final VoidCallback? onIssueViolation;
   final String? buttonLabel;
   final String? inspectButtonLabel;
 
@@ -72,6 +79,7 @@ class ScanRejectionView extends StatelessWidget {
     required this.details,
     required this.onScanAnother,
     this.onInspect,
+    this.onIssueViolation,
     this.buttonLabel,
     this.inspectButtonLabel,
   });
@@ -192,6 +200,7 @@ class ScanRejectionView extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
+                      ScanNoticeStrip(notices: details.notices),
                       // Prominent Notice Container
                       Container(
                         width: double.infinity,
@@ -388,6 +397,12 @@ class ScanRejectionView extends StatelessWidget {
                         const SizedBox(height: 12),
                       ],
 
+                      // A vehicle that is already inside: who it belongs to and how to reach them
+                      if (vehicle != null && details.type == ScanRejectionType.duplicateEntry) ...[
+                        OnCampusDetailsCard(vehicle: vehicle),
+                        const SizedBox(height: 16),
+                      ],
+
                       // Optional In-Campus Patrol Inspection / Incident Action Button
                       if (onInspect != null) ...[
                         SizedBox(
@@ -414,6 +429,31 @@ class ScanRejectionView extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               elevation: 0,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+
+                      if (onIssueViolation != null) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: OutlinedButton.icon(
+                            key: const Key('issueViolationButton'),
+                            onPressed: onIssueViolation,
+                            icon: const Icon(Icons.gavel_rounded, size: 20),
+                            label: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                'ISSUE VIOLATION',
+                                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, letterSpacing: 0.4),
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: NcstColors.crimson,
+                              side: const BorderSide(color: NcstColors.crimson, width: 1.5),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                             ),
                           ),
                         ),
@@ -452,6 +492,122 @@ class ScanRejectionView extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Full details of a vehicle that is already on campus: owner, how to contact them, the vehicle, who drove it in
+/// and when, and the authorized drivers. Shown when the entry guard scans a vehicle that is already inside.
+class OnCampusDetailsCard extends StatelessWidget {
+  final VehicleRecord vehicle;
+
+  const OnCampusDetailsCard({super.key, required this.vehicle});
+
+  static const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  static String formatTime(DateTime t) {
+    final hour12 = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final minute = t.minute.toString().padLeft(2, '0');
+    return '${_months[t.month - 1]} ${t.day}, $hour12:$minute ${t.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  Widget _row(String label, String value, {Widget? trailing, bool strong = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 104,
+            child: Text(label, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: NcstColors.slate500)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: strong ? 15 : 13,
+                fontWeight: strong ? FontWeight.w900 : FontWeight.w700,
+                color: NcstColors.slate800,
+              ),
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final phone = vehicle.ownerPhone;
+    final since = vehicle.onCampusSince;
+    final hours = vehicle.hoursInside;
+    final drivers = vehicle.authorizedDrivers.where((d) => d.fullName.trim().isNotEmpty).toList();
+
+    return Container(
+      key: const Key('onCampusDetails'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: NcstColors.slate100,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: NcstColors.slate200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'VEHICLE ON CAMPUS • CONTACT & DETAILS',
+            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w900, letterSpacing: 0.6, color: NcstColors.navy),
+          ),
+          const SizedBox(height: 8),
+          _row('Owner', vehicle.ownerName),
+          _row('Role / ID', '${vehicle.ownerRole} • ${vehicle.ownerIdNumber}'),
+          if (vehicle.department != null) _row('Department', vehicle.department!),
+          _row(
+            'Contact no.',
+            phone ?? 'No number on file',
+            strong: phone != null,
+            trailing: phone == null
+                ? null
+                : IconButton(
+                    key: const Key('copyPhoneButton'),
+                    tooltip: 'Copy number',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.copy_rounded, size: 18, color: NcstColors.navy),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: phone));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Copied $phone'), duration: const Duration(seconds: 2)),
+                        );
+                      }
+                    },
+                  ),
+          ),
+          const Divider(height: 18),
+          _row('Vehicle', '${vehicle.makeModelColor} • ${vehicle.vehicleType}'),
+          _row('Sticker year', vehicle.stickerYear),
+          if (since != null)
+            _row('Inside since', hours != null ? '${formatTime(since)} (${hours.toStringAsFixed(1)} h)' : formatTime(since)),
+          if (vehicle.entryGate != null) _row('Entered at', vehicle.entryGate!),
+          if (vehicle.enteredBy != null) _row('Driven in by', vehicle.enteredBy!),
+          if (vehicle.admittedBy != null) _row('Admitted by', vehicle.admittedBy!),
+          if (drivers.isNotEmpty) ...[
+            const Divider(height: 18),
+            const Text('Authorized drivers', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: NcstColors.slate500)),
+            const SizedBox(height: 4),
+            for (final d in drivers)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  '${d.fullName} • ${d.relationship}${(d.phone ?? '').trim().isNotEmpty ? ' • ${d.phone}' : ''}',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: NcstColors.slate700),
+                ),
+              ),
+          ],
+        ],
       ),
     );
   }
