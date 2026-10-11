@@ -30,9 +30,12 @@ document.addEventListener('DOMContentLoaded', () => {
       eventType: 'All',
       gate: 'All',
       dateRange: 'All',
+      dateFrom: '', dateTo: '', timeFrom: '', timeTo: '',
+      officer: '', source: 'All', sort: 'newest',
       page: 1,
-      pageSize: 10
+      pageSize: 25
     },
+    auditResults: null,
     driverCounter: 1
   };
 
@@ -151,6 +154,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const auditEventTypeFilter = document.getElementById('auditEventTypeFilter');
   const auditGateFilter = document.getElementById('auditGateFilter');
   const auditDateFilter = document.getElementById('auditDateFilter');
+  const auditDateFrom = document.getElementById('auditDateFrom');
+  const auditDateTo = document.getElementById('auditDateTo');
+  const auditTimeFrom = document.getElementById('auditTimeFrom');
+  const auditTimeTo = document.getElementById('auditTimeTo');
+  const auditOfficerFilter = document.getElementById('auditOfficerFilter');
+  const auditSourceFilter = document.getElementById('auditSourceFilter');
+  const auditSortFilter = document.getElementById('auditSortFilter');
+  const auditPageSize = document.getElementById('auditPageSize');
+  const auditFilterMessage = document.getElementById('auditFilterMessage');
+  const auditFilterRetryBtn = document.getElementById('auditFilterRetryBtn');
   const auditResetFiltersBtn = document.getElementById('auditResetFiltersBtn');
 
   // Registration Form
@@ -330,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (targetViewId === 'flaggedView') {
       renderIncidentsTable();
     } else if (targetViewId === 'auditView') {
-      renderFullAuditTable();
+      loadGateRecords();
     } else if (targetViewId === 'accountView') {
       generateQrPass(false);
     }
@@ -504,7 +517,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3.1 Today's successful traffic, with denied attempts kept separate.
   function renderActivityTrendChart(mode = trendViewMode) {
-    if (typeof Chart === 'undefined' || !gateActivityChartCanvas) return;
+    if (typeof Chart === 'undefined' || !gateActivityChartCanvas?.isConnected) return;
+    if (charts.activityTrend && (!charts.activityTrend.canvas || !charts.activityTrend.ctx)) charts.activityTrend = null;
     const logs = todaysGateLogs();
     const labels = mode === 'hourly'
       ? Array.from({length:24}, (_, h) => `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`)
@@ -557,7 +571,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3.2 Occupancy uses mutually exclusive registered / visitor counts.
   function renderGateStatusChart() {
-    if (typeof Chart === 'undefined' || !gateStatusChartCanvas) return;
+    if (typeof Chart === 'undefined' || !gateStatusChartCanvas?.isConnected) return;
+    if (charts.gateStatus && (!charts.gateStatus.canvas || !charts.gateStatus.ctx)) charts.gateStatus = null;
     const registered = Number(state.onCampus?.counts?.registered ?? state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length);
     const visitors = Number(state.onCampus?.counts?.visitors ?? (state.visitors || []).filter(v => v.entryTime && !v.exitTime && /active|inside/i.test(v.status || '')).length);
     const total = registered + visitors;
@@ -576,12 +591,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3.3 Registered Fleet Types Composition Bar Chart
   function renderFleetTypesChart() {
-    if (typeof Chart === 'undefined' || !fleetTypesChartCanvas) return;
+    if (typeof Chart === 'undefined' || !fleetTypesChartCanvas?.isConnected) return;
 
-    if (charts.fleetTypes) {
-      charts.fleetTypes.destroy();
-      charts.fleetTypes = null;
-    }
+    if (charts.fleetTypes && (!charts.fleetTypes.canvas || !charts.fleetTypes.ctx)) charts.fleetTypes = null;
 
     const count4W = state.vehicles.filter(v => v.vehicleType && v.vehicleType.toLowerCase().includes('4-wheel')).length;
     const countMoto = state.vehicles.filter(v => v.vehicleType && v.vehicleType.toLowerCase().includes('motorcycle')).length;
@@ -590,6 +602,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (fleetTotalBadge) fleetTotalBadge.textContent = state.vehicles.length;
 
+    if (charts.fleetTypes) {
+      charts.fleetTypes.data.datasets[0].data = [count4W, countMoto, countBike, countFleet];
+      charts.fleetTypes.update('none');
+      return;
+    }
     charts.fleetTypes = new Chart(fleetTypesChartCanvas, {
       type: 'bar',
       data: {
@@ -2119,81 +2136,79 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
+  let auditLoadGeneration = 0, auditLoadTimer, auditLoading = false, auditError = '', auditExporting = false;
+  function manilaDay(offset = 0) {
+    const parts = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Manila', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date());
+    const value = key => parts.find(part => part.type === key).value;
+    const day = new Date(`${value('year')}-${value('month')}-${value('day')}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() + offset);
+    return day.toISOString().slice(0,10);
+  }
+  function gateRecordParams() {
+    const f = state.auditFilter;
+    // Resolve relative dates on every refresh, including midnight in Manila.
+    let from = f.dateFrom, to = f.dateTo;
+    if (f.dateRange !== 'Custom') {
+      from = ''; to = '';
+      if (f.dateRange === 'Today') from = to = manilaDay();
+      if (f.dateRange === 'Yesterday') from = to = manilaDay(-1);
+      if (f.dateRange === 'Last7Days') {from = manilaDay(-6); to = manilaDay();}
+      if (f.dateRange === 'Last30Days') {from = manilaDay(-29); to = manilaDay();}
+      if (f.dateRange === 'ThisMonth') {from = manilaDay().slice(0,8)+'01'; to = manilaDay();}
+      if (auditDateFrom) auditDateFrom.value = from;
+      if (auditDateTo) auditDateTo.value = to;
+    }
+    return {q:f.search.trim(), status:f.status, event:f.eventType, gate:f.gate,
+      from, to, time_from:f.timeFrom, time_to:f.timeTo, officer:f.officer, source:f.source,
+      sort:f.sort, page:f.page, limit:f.pageSize};
+  }
+  async function loadGateRecords() {
+    clearTimeout(auditLoadTimer);
+    const mine = ++auditLoadGeneration;
+    const params = gateRecordParams();
+    auditError = '';
+    if (params.from && params.to && params.from > params.to) {
+      auditError = 'Start date must be on or before end date.';
+      auditLoading = false; state.auditResults = null; renderFullAuditTable(); return;
+    }
+    if (!window.ApiClient || (window.SPAuth && !SPAuth.isAuthenticated())) return;
+    auditLoading = true; state.auditResults = null; renderFullAuditTable();
+    try {
+      const data = await ApiClient.getGateRecords(params);
+      if (mine !== auditLoadGeneration) return;
+      if (!data || !Array.isArray(data.rows) || !Number.isInteger(data.total) || !data.summary) throw new Error('The server returned incomplete gate records.');
+      state.auditResults = data; state.auditFilter.page = data.page;
+      if (auditOfficerFilter) {
+        auditOfficerFilter.replaceChildren(new Option('All officers',''));
+        const officers = [...new Set([...(data.officers || []), ...(state.auditFilter.officer ? [state.auditFilter.officer] : [])])];
+        officers.forEach(name => auditOfficerFilter.add(new Option(name,name)));
+        auditOfficerFilter.value = state.auditFilter.officer;
+      }
+    } catch (error) {
+      if (mine !== auditLoadGeneration) return;
+      auditError = error.message || 'Gate records could not be loaded. Try again.';
+    } finally {
+      if (mine === auditLoadGeneration) {auditLoading = false; renderFullAuditTable();}
+    }
+  }
+  function requestGateRecords(delay = 0) {
+    clearTimeout(auditLoadTimer);
+    // Invalidate an older reply as soon as a filter changes, before debounce expires.
+    ++auditLoadGeneration;
+    state.auditFilter.page = 1; state.auditResults = null; auditError = ''; auditLoading = true;
+    renderFullAuditTable();
+    auditLoadTimer = setTimeout(loadGateRecords,delay);
+  }
   function getFilteredAuditLogs() {
-    return state.auditLogs.filter(log => {
-      const q = (state.auditFilter.search || '').toLowerCase().trim();
-      const matchesSearch = !q ||
-        (log.plateNumber && log.plateNumber.toLowerCase().includes(q)) ||
-        (log.ownerName && log.ownerName.toLowerCase().includes(q)) ||
-        (log.driverName && log.driverName.toLowerCase().includes(q)) ||
-        (log.gatePoint && log.gatePoint.toLowerCase().includes(q)) ||
-        (log.guardName && log.guardName.toLowerCase().includes(q)) ||
-        (log.action && log.action.toLowerCase().includes(q)) ||
-        (log.status && log.status.toLowerCase().includes(q)) ||
-        (log.vehicleType && log.vehicleType.toLowerCase().includes(q)) ||
-        (log.notes && log.notes.toLowerCase().includes(q)) ||
-        (String(log.id).includes(q));
-
-      // 1. Quick Pills Status Filter
-      let matchesStatus = true;
-      if (state.auditFilter.status === 'Inside') {
-        matchesStatus = log.status === 'Inside Campus';
-      } else if (state.auditFilter.status === 'Exited') {
-        matchesStatus = log.status === 'Exited';
-      } else if (state.auditFilter.status === 'Blocked') {
-        matchesStatus = log.status === 'Blocked / Alert' || /denied|hold|flag/i.test(log.action || '');
-      }
-
-      // 2. Event Type Filter
-      let matchesEventType = true;
-      const act = (log.action || '').toLowerCase();
-      if (state.auditFilter.eventType === 'Entry') {
-        matchesEventType = (act.includes('entry') || act.includes('ingress')) && !act.includes('denied');
-      } else if (state.auditFilter.eventType === 'ExitApproved') {
-        matchesEventType = (act.includes('exit') || act.includes('egress')) && !act.includes('denied');
-      } else if (state.auditFilter.eventType === 'ExitDenied') {
-        matchesEventType = act.includes('exit') && act.includes('denied');
-      } else if (state.auditFilter.eventType === 'EntryDenied') {
-        matchesEventType = act.includes('entry') && act.includes('denied');
-      } else if (state.auditFilter.eventType === 'SecurityHold') {
-        matchesEventType = act.includes('hold') || act.includes('flag') || act.includes('alert') || log.status === 'Blocked / Alert';
-      }
-
-      // 3. Gate Filter
-      let matchesGate = true;
-      if (state.auditFilter.gate !== 'All') {
-        matchesGate = Boolean(log.gatePoint && log.gatePoint.toLowerCase().includes(state.auditFilter.gate.toLowerCase()));
-      }
-
-      // 4. Date Range Filter
-      let matchesDate = true;
-      if (state.auditFilter.dateRange !== 'All') {
-        const logDate = getLogDate(log);
-        if (logDate) {
-          const now = new Date();
-          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-          const logTime = logDate.getTime();
-          if (state.auditFilter.dateRange === 'Today') {
-            matchesDate = logTime >= todayStart;
-          } else if (state.auditFilter.dateRange === 'Yesterday') {
-            const yesterdayStart = todayStart - 86400000;
-            matchesDate = logTime >= yesterdayStart && logTime < todayStart;
-          } else if (state.auditFilter.dateRange === 'Last7Days') {
-            const weekStart = todayStart - (7 * 86400000);
-            matchesDate = logTime >= weekStart;
-          }
-        }
-      }
-
-      return matchesSearch && matchesStatus && matchesEventType && matchesGate && matchesDate;
-    });
+    return state.auditResults?.rows || [];
   }
 
   function updateAuditSummaryStats() {
-    const total = state.auditLogs.length;
-    const insideCount = state.auditLogs.filter(l => entryPassage(l) && !deniedPassage(l)).length;
-    const exitedCount = state.auditLogs.filter(l => /exit|egress/i.test(l.action || '') && !deniedPassage(l)).length;
-    const blockedCount = state.auditLogs.filter(l => l.status === 'Blocked / Alert' || /denied|hold|flag/i.test(l.action || '')).length;
+    const summary = state.auditResults?.summary || {};
+    const total = summary.total || 0;
+    const insideCount = summary.entries || 0;
+    const exitedCount = summary.exits || 0;
+    const blockedCount = summary.security || 0;
 
     if (auditSummaryTotal) auditSummaryTotal.textContent = total;
     if (auditSummaryInside) auditSummaryInside.textContent = insideCount;
@@ -2215,8 +2230,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (auditPillCountAll) auditPillCountAll.textContent = `(${total})`;
-    if (auditPillCountInside) auditPillCountInside.textContent = `(${state.auditLogs.filter(log => log.status === 'Inside Campus').length})`;
-    if (auditPillCountExited) auditPillCountExited.textContent = `(${state.auditLogs.filter(log => log.status === 'Exited').length})`;
+    if (auditPillCountInside) auditPillCountInside.textContent = `(${summary.inside || 0})`;
+    if (auditPillCountExited) auditPillCountExited.textContent = `(${summary.exited || 0})`;
     if (auditPillCountBlocked) auditPillCountBlocked.textContent = `(${blockedCount})`;
   }
 
@@ -2231,14 +2246,15 @@ document.addEventListener('DOMContentLoaded', () => {
       state.auditFilter.status !== 'All' ||
       state.auditFilter.eventType !== 'All' ||
       state.auditFilter.gate !== 'All' ||
-      state.auditFilter.dateRange !== 'All'
+      state.auditFilter.dateRange !== 'All' || state.auditFilter.dateFrom || state.auditFilter.dateTo ||
+      state.auditFilter.timeFrom || state.auditFilter.timeTo || state.auditFilter.officer || state.auditFilter.source !== 'All' || state.auditFilter.sort !== 'newest'
     );
     if (auditResetFiltersBtn) {
       auditResetFiltersBtn.classList.toggle('hidden', !isFiltered);
     }
 
     const filtered = getFilteredAuditLogs();
-    const total = filtered.length;
+    const total = state.auditResults?.total || 0;
     const pageSize = state.auditFilter.pageSize;
     const totalPages = Math.ceil(total / pageSize) || 1;
 
@@ -2247,7 +2263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.auditFilter.page < 1) state.auditFilter.page = 1;
 
     const startIdx = (state.auditFilter.page - 1) * pageSize;
-    const pagedLogs = filtered.slice(startIdx, startIdx + pageSize);
+    const pagedLogs = filtered;
 
     // Update Pagination UI
     if (auditPaginationInfo) {
@@ -2259,8 +2275,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (auditPrevBtn) auditPrevBtn.disabled = state.auditFilter.page <= 1;
-    if (auditNextBtn) auditNextBtn.disabled = state.auditFilter.page >= totalPages;
+    if (auditPrevBtn) auditPrevBtn.disabled = auditLoading || !!auditError || state.auditFilter.page <= 1;
+    if (auditNextBtn) auditNextBtn.disabled = auditLoading || !!auditError || state.auditFilter.page >= totalPages;
+    if (exportCsvBtn) exportCsvBtn.disabled = auditLoading || auditExporting || !!auditError || !total;
+    if (auditFilterMessage) auditFilterMessage.textContent = auditLoading ? 'Loading matching gate records…' : auditError || `${total} matching record${total === 1 ? '' : 's'} across the full gate history.`;
+    if (auditFilterRetryBtn) auditFilterRetryBtn.classList.toggle('hidden', !auditError || auditError.startsWith('Start date'));
+    fullAuditTableBody.closest('table').setAttribute('aria-busy', String(auditLoading));
+    if (auditLoading || auditError) {
+      if (auditPaginationInfo) auditPaginationInfo.textContent = auditLoading ? 'Loading…' : 'Records unavailable';
+      fullAuditTableBody.innerHTML = `<tr><td colspan="8" class="py-12 text-center text-slate-500 text-xs">${auditLoading ? 'Loading gate records…' : 'Adjust the filters or retry to load gate records.'}</td></tr>`;
+      return;
+    }
 
     if (pagedLogs.length === 0) {
       fullAuditTableBody.innerHTML = `
@@ -2442,7 +2467,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fullAuditSearchInput.addEventListener('input', (e) => {
       state.auditFilter.search = e.target.value;
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords(250);
     });
   }
 
@@ -2457,7 +2482,7 @@ document.addEventListener('DOMContentLoaded', () => {
       pill.className = activeClass;
       state.auditFilter.status = pill.getAttribute('data-filter') || 'All';
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   });
 
@@ -2465,7 +2490,7 @@ document.addEventListener('DOMContentLoaded', () => {
     auditEventTypeFilter.addEventListener('change', (e) => {
       state.auditFilter.eventType = e.target.value;
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
@@ -2473,15 +2498,17 @@ document.addEventListener('DOMContentLoaded', () => {
     auditGateFilter.addEventListener('change', (e) => {
       state.auditFilter.gate = e.target.value;
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
   if (auditDateFilter) {
     auditDateFilter.addEventListener('change', (e) => {
       state.auditFilter.dateRange = e.target.value;
+      if (e.target.value !== 'Custom') {state.auditFilter.dateFrom = ''; state.auditFilter.dateTo = '';}
+      else {state.auditFilter.dateFrom = auditDateFrom.value; state.auditFilter.dateTo = auditDateTo.value;}
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
@@ -2493,7 +2520,14 @@ document.addEventListener('DOMContentLoaded', () => {
       state.auditFilter.gate = 'All';
       state.auditFilter.dateRange = 'All';
       state.auditFilter.page = 1;
+      state.auditFilter.dateFrom = ''; state.auditFilter.dateTo = '';
+      state.auditFilter.timeFrom = ''; state.auditFilter.timeTo = '';
+      state.auditFilter.officer = ''; state.auditFilter.source = 'All';
+      state.auditFilter.sort = 'newest';
 
+      [auditDateFrom, auditDateTo, auditTimeFrom, auditTimeTo, auditOfficerFilter].forEach(el => {if (el) el.value = '';});
+      if (auditSourceFilter) auditSourceFilter.value = 'All';
+      if (auditSortFilter) auditSortFilter.value = 'newest';
       if (fullAuditSearchInput) fullAuditSearchInput.value = '';
       if (auditEventTypeFilter) auditEventTypeFilter.value = 'All';
       if (auditGateFilter) auditGateFilter.value = 'All';
@@ -2505,7 +2539,7 @@ document.addEventListener('DOMContentLoaded', () => {
         p.className = p.getAttribute('data-filter') === 'All' ? activeClass : inactiveClass;
       });
 
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
@@ -2513,17 +2547,17 @@ document.addEventListener('DOMContentLoaded', () => {
     auditPrevBtn.addEventListener('click', () => {
       if (state.auditFilter.page > 1) {
         state.auditFilter.page--;
-        renderFullAuditTable();
+        loadGateRecords();
       }
     });
   }
 
   if (auditNextBtn) {
     auditNextBtn.addEventListener('click', () => {
-      const totalPages = Math.ceil(getFilteredAuditLogs().length / state.auditFilter.pageSize) || 1;
+      const totalPages = Math.ceil((state.auditResults?.total || 0) / state.auditFilter.pageSize) || 1;
       if (state.auditFilter.page < totalPages) {
         state.auditFilter.page++;
-        renderFullAuditTable();
+        loadGateRecords();
       }
     });
   }
@@ -2534,40 +2568,51 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function exportAuditCsv() {
-    const logs = getFilteredAuditLogs();
-    if (logs.length === 0) {
-      showToast("No matching audit logs available to export.");
-      return;
+  [
+    [auditDateFrom,'dateFrom'], [auditDateTo,'dateTo'], [auditTimeFrom,'timeFrom'], [auditTimeTo,'timeTo'],
+    [auditOfficerFilter,'officer'], [auditSourceFilter,'source'], [auditSortFilter,'sort'], [auditPageSize,'pageSize']
+  ].forEach(([element,key]) => element?.addEventListener('change', () => {
+    state.auditFilter[key] = key === 'pageSize' ? Number(element.value) : element.value;
+    if (key === 'dateFrom' || key === 'dateTo') {
+      state.auditFilter.dateFrom = auditDateFrom.value; state.auditFilter.dateTo = auditDateTo.value;
+      state.auditFilter.dateRange = 'Custom'; if (auditDateFilter) auditDateFilter.value = 'Custom';
     }
+    requestGateRecords();
+  }));
+  auditFilterRetryBtn?.addEventListener('click',loadGateRecords);
+  document.addEventListener('sp:auth-required', () => {
+    ++auditLoadGeneration; clearTimeout(auditLoadTimer); state.auditResults = null; auditLoading = false;
+  });
 
-    const headers = ["Log ID", "Timestamp", "Plate Number", "Vehicle Type", "Owner Name", "Driver Name", "Relationship", "Gate Point", "Action", "Status", "Officer", "Notes"];
-    const rows = logs.map(l => [
-      l.id,
-      `"${l.timestamp}"`,
-      `"${l.plateNumber}"`,
-      `"${l.vehicleType || ''}"`,
-      `"${l.ownerName || ''}"`,
-      `"${l.driverName || ''}"`,
-      `"${l.driverRelationship || ''}"`,
-      `"${l.gatePoint || ''}"`,
-      `"${l.action || ''}"`,
-      `"${l.status || ''}"`,
-      `"${l.guardName || ''}"`,
-      `"${(l.notes || '').replace(/"/g, '""')}"`
-    ]);
-
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `securepark_audit_logs_${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast(`Exported ${logs.length} audit logs to CSV.`);
+  async function exportAuditCsv() {
+    if (auditExporting || auditLoading || auditError || !state.auditResults?.total) return;
+    auditExporting = true; renderFullAuditTable();
+    try {
+      const params = {...gateRecordParams(), page:1, limit:200, snapshot:state.auditResults.snapshot};
+      const logs = [];
+      let total;
+      do {
+        const data = await ApiClient.getGateRecords(params);
+        if (!data || !Array.isArray(data.rows) || !Number.isInteger(data.total)) throw new Error('The server returned incomplete gate records.');
+        total = data.total;
+        if (!data.rows.length && logs.length < total) throw new Error('The record export was interrupted. Please retry.');
+        logs.push(...data.rows); params.page++;
+      } while (logs.length < total);
+      if (!logs.length) {showToast('No matching gate records to export.'); return;}
+      const cell = value => {
+        let text = String(value ?? '');
+        if (/^\s*[=+@-]/.test(text)) text = "'" + text;
+        return '"' + text.replace(/"/g,'""') + '"';
+      };
+      const headers = ['Log ID','Timestamp (Manila UTC+8)','Plate Number','Vehicle Type','Owner Name','Driver Name','Relationship','Gate Point','Action','Status','Officer','Notes','Offline synced at'];
+      const rows = logs.map(l => [l.id,l.loggedAt,l.plateNumber,l.vehicleType,l.ownerName,l.driverName,l.driverRelationship,l.gatePoint,l.action,l.status,l.guardName,l.notes,l.syncedAt].map(cell).join(','));
+      const blob = new Blob(['\uFEFF'+[headers.map(cell).join(','),...rows].join('\r\n')],{type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = `securepark_gate_records_${manilaDay()}.csv`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      showToast(`Exported ${logs.length} matching gate records.`);
+    } catch (error) {showToast(error.message || 'Export failed. Please retry.','error');}
+    finally {auditExporting = false; renderFullAuditTable();}
   }
 
   /* ==========================================================================
@@ -5099,7 +5144,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDashboard();
         renderVehiclesTable();
         renderIncidentsTable();
-        renderFullAuditTable();
+        if (state.currentView === 'auditView') await loadGateRecords();
         if (!silent) console.log('[App] Synchronized state with backend.');
       }
     } catch (err) {
@@ -5116,7 +5161,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SPLive?.subscribe(async changed => {
     if (!liveDrawer || drawerOverlay.classList.contains('hidden') || !changed.some(k => ['vehicles','movements','cases','visitors','evidence'].includes(k))) return;
     const {kind,id} = liveDrawer;
-    const record = ({vehicle:state.vehicles, incident:state.incidents, log:state.auditLogs}[kind] || []).find(r => String(r.id) === String(id));
+    const record = ({vehicle:state.vehicles, incident:state.incidents, log:[...getFilteredAuditLogs(),...state.auditLogs]}[kind] || []).find(r => String(r.id) === String(id));
     if (!record) { closeDrawer(); showToast('This record is no longer available.', 'warning'); return; }
     ({vehicle:openVehicleDrawer, incident:openIncidentDrawer, log:openAuditDrawer}[kind])(record);
   });

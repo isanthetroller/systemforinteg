@@ -472,6 +472,10 @@ const ApiClient = (function() {
     },
 
     // Gate Audit Logs
+    getGateRecords: async (params = {}) => {
+      const qs = new URLSearchParams({paginated: '1', ...params}).toString();
+      return (await request(`logs.php?${qs}`, {cache: 'no-store'})).data;
+    },
     getLogs: async (params = {}) => {
       const qs = new URLSearchParams(params).toString();
       try {

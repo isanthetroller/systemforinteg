@@ -218,7 +218,7 @@
       }
     }
   </style>
-<link rel="stylesheet" href="css/workspace.css?v=20261007q">
+<link rel="stylesheet" href="css/workspace.css?v=20261011filters1">
 <link rel="stylesheet" href="css/login.css?v=20261007d"></head>
 <body class="sp-auth-pending h-full font-sans text-slate-900 antialiased bg-slate-50 overflow-x-hidden">
   <div id="authLoading" role="status" aria-live="polite">
@@ -1010,7 +1010,7 @@
           <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
             <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Total Passages</div>
             <div id="auditSummaryTotal" class="text-xl font-bold font-mono text-slate-900 mt-0.5">0</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">Logged movements</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Matching records</div>
           </div>
           <div class="bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
             <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Gate Entries</div>
@@ -1057,7 +1057,7 @@
             <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Filter by:</span>
             
             <!-- Event Type Filter -->
-            <select id="auditEventTypeFilter" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+            <select id="auditEventTypeFilter" aria-label="Event type" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
               <option value="All">All Event Types</option>
               <option value="Entry">Entry Recorded</option>
               <option value="ExitApproved">Exit Approved</option>
@@ -1067,18 +1067,21 @@
             </select>
 
             <!-- Gate Filter -->
-            <select id="auditGateFilter" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+            <select id="auditGateFilter" aria-label="Gate" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
               <option value="All">All Gates</option>
-              <option value="Gate 1">Gate 1 · Entry</option>
-              <option value="Gate 2">Gate 2 · Exit</option>
+              <option value="Gate 1">Gate 1</option>
+              <option value="Gate 2">Gate 2</option>
             </select>
 
             <!-- Date Filter -->
-            <select id="auditDateFilter" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+            <select id="auditDateFilter" aria-label="Date preset" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
               <option value="All">All Dates</option>
               <option value="Today">Today</option>
               <option value="Yesterday">Yesterday</option>
               <option value="Last7Days">Last 7 Days</option>
+              <option value="Last30Days">Last 30 Days</option>
+              <option value="ThisMonth">This Month</option>
+              <option value="Custom">Custom Dates</option>
             </select>
 
             <!-- Reset Filters Button -->
@@ -1088,6 +1091,21 @@
             </button>
           </div>
 
+        </div>
+
+        <div class="gate-record-date-panel bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
+          <div class="gate-record-filter-grid">
+            <label>From date<input id="auditDateFrom" type="date" min="1000-01-01" max="9999-12-30" class="gate-record-input"></label>
+            <label>To date<input id="auditDateTo" type="date" min="1000-01-01" max="9999-12-30" class="gate-record-input"></label>
+            <label>From time<input id="auditTimeFrom" type="time" step="60" class="gate-record-input"></label>
+            <label>To time<input id="auditTimeTo" type="time" step="60" class="gate-record-input"></label>
+            <label>Officer<select id="auditOfficerFilter" aria-label="Officer" class="gate-record-input"><option value="">All officers</option></select></label>
+            <label>Recorded through<select id="auditSourceFilter" aria-label="Recorded through" class="gate-record-input"><option value="All">Online &amp; offline</option><option value="online">Online</option><option value="offline">Synced from offline</option></select></label>
+            <label>Sort by<select id="auditSortFilter" aria-label="Sort by" class="gate-record-input"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <label>Rows per page<select id="auditPageSize" aria-label="Rows per page" class="gate-record-input"><option value="10">10</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+          </div>
+          <p id="auditTimeHint" class="text-xs text-slate-500 mt-2">All dates and times use Manila time (UTC+8). Time filters apply to each selected date; 22:00–06:00 includes late evening and early morning.</p>
+          <div class="flex items-center gap-2 mt-2"><p id="auditFilterMessage" role="status" aria-live="polite" class="text-xs text-slate-600"></p><button id="auditFilterRetryBtn" type="button" class="hidden text-xs font-semibold underline">Retry</button></div>
         </div>
 
         <!-- Full Audit Table with Institutional Header -->
@@ -2865,7 +2883,7 @@
   <!-- Scripts -->
   <script src="js/qrcode.min.js?v=20260930c"></script>
   <script src="js/data.js?v=20260930c"></script>
-  <script src="js/api.js?v=20261012c"></script>
+  <script src="js/api.js?v=20261011filters1"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -2897,7 +2915,7 @@
   <script src="js/login.js?v=20261007a"></script>
   <script src="js/live.js?v=20261011audit"></script>
   <script src="js/auth.js?v=20261007g"></script>
-  <script src="js/app.js?v=20261012c"></script>
+  <script src="js/app.js?v=20261011filters1"></script>
   <script src="js/users.js?v=20261007d"></script>
   <script src="js/payments.js?v=20261011a"></script>
   <script src="js/ops.js?v=20261010a"></script>

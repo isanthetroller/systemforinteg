@@ -28,6 +28,15 @@ switch ($method) {
 }
 
 function handleGetLogs($pdo) {
+    if (isset($_GET['paginated'])) {
+        if ($_GET['paginated'] !== '1') sendResponse(400, null, 'Invalid paginated filter.');
+        require_once __DIR__ . '/../lib/gate_records.php';
+        try { readGateRecords($pdo); }
+        catch (Throwable $error) {
+            error_log('Gate history read failed: ' . $error->getMessage());
+            sendResponse(503, null, 'Gate records are temporarily unavailable. Please retry.');
+        }
+    }
     $plate = isset($_GET['plate']) ? trim($_GET['plate']) : '';
     $action = isset($_GET['action']) ? trim($_GET['action']) : '';
     $limit = isset($_GET['limit']) ? min((int)$_GET['limit'], 200) : 100;

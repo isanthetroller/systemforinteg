@@ -534,3 +534,12 @@
  #drawerFooter > .flex { flex-wrap:wrap; }
  .sp-record-card,.sp-record-summary { padding:16px; }
 }
+
+/* Gate history date/time controls keep usable widths at every breakpoint. */
+.gate-record-filter-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+.gate-record-filter-grid label { display:flex; flex-direction:column; gap:5px; min-width:0; font-size:11px; font-weight:600; color:#475569; }
+.gate-record-input { width:100%; min-width:0; height:36px; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-size:12px; color:#0f172a; }
+.gate-record-input:focus { outline:2px solid #cbd5e1; outline-offset:1px; border-color:#16336a; }
+#exportCsvBtn:disabled { opacity:.5; cursor:not-allowed; }
+@media(max-width:640px) { .gate-record-filter-grid {grid-template-columns:repeat(2,minmax(0,1fr));} }
+@media(max-width:360px) { .gate-record-filter-grid {grid-template-columns:minmax(0,1fr);} }
