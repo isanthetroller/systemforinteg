@@ -545,3 +545,33 @@
 #exportCsvBtn:disabled { opacity:.5; cursor:not-allowed; }
 @media(max-width:640px) { .gate-record-filter-grid {grid-template-columns:repeat(2,minmax(0,1fr));} }
 @media(max-width:360px) { .gate-record-filter-grid {grid-template-columns:minmax(0,1fr);} }
+
+/* Dashboard: movement, attention and category colors have distinct meanings. */
+#dashboardView {
+ --dashboard-entry:#15803d; --dashboard-exit:#1d4ed8; --dashboard-danger:#b42336;
+ --dashboard-warning:#a16207; --dashboard-registered:#253475; --dashboard-visitor:#7c3aed;
+ --dashboard-muted:#52627a;
+}
+#dashboardView #dashboardEntries, #dashboardView .sp-kpis #kpiTotalLogs { color:var(--dashboard-entry); }
+#dashboardView #dashboardExits { color:var(--dashboard-exit); }
+#dashboardView #dashboardDenied, #dashboardView .sp-kpis #kpiBlocked { color:var(--dashboard-muted); }
+#dashboardView #dashboardDenied[data-attention="true"], #dashboardView .sp-kpis [data-attention="true"] #kpiBlocked { color:var(--dashboard-danger); }
+#dashboardView .sp-kpis > div:nth-child(2) { background:#fff; }
+#dashboardView .sp-kpis > div[data-attention="true"] { background:#fffafb; }
+#dashboardView .sp-kpis > div:nth-child(2) > div:last-child { color:var(--dashboard-muted); }
+#dashboardView .sp-kpis > div[data-attention="true"] > div:last-child { color:var(--dashboard-danger); }
+#dashboardView #kpiInsideLink { color:var(--dashboard-registered); }
+#dashboardView .sp-occupancy-label { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:5px; }
+#dashboardView .sp-chart-swatch { display:inline-block; width:9px; height:9px; border-radius:50%; flex-shrink:0; background:currentColor; }
+#dashboardView .sp-registered-label, #dashboardView #legendInsideCount { color:var(--dashboard-registered); }
+#dashboardView .sp-visitor-label, #dashboardView #legendExitedCount { color:var(--dashboard-visitor); }
+#dashboardView #legendBlockedCount { color:#334155; }
+#dashboardView :is(.text-slate-400,#overnightMeta,.sp-cell-detail) { color:var(--dashboard-muted); }
+#dashboardView #overnightList :is(.sp-status-navy,.sp-status-amber) { color:var(--dashboard-warning); background:#fff5e8; }
+#dashboardView #overnightList .sp-parking-row > .flex > .ml-auto { color:var(--dashboard-warning); }
+#dashboardView #overnightCountBadge:not(.text-slate-600) { color:var(--dashboard-warning); background:#fff5e8; border-color:#e7c994; }
+#dashboardView #occupancyCard #occupancyBar { background:var(--dashboard-entry); }
+#dashboardView #occupancyCard[data-level="nearly_full"] #occupancyBar { background:#d97706; }
+#dashboardView #occupancyCard[data-level="full"] #occupancyBar { background:var(--dashboard-danger); }
+#dashboardView #occupancyCard[data-level="nearly_full"] #occupancyNote { color:var(--dashboard-warning); }
+#dashboardView #occupancyCard[data-level="full"] #occupancyNote { color:var(--dashboard-danger); }

@@ -86,6 +86,7 @@
     const card = $('occupancyCard');
     if (!card || !o) return;
     const unlimited = !o.capacity;
+    card.dataset.level = unlimited ? 'unset' : o.level;
     $('occupancyInside').textContent = o.inside;
     $('occupancyOf').textContent = unlimited ? 'No capacity set' : `of ${o.capacity} spaces`;
     const bar = $('occupancyBar');

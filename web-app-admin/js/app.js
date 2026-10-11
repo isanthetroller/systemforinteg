@@ -427,7 +427,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const exitLogs = state.auditLogs.filter(l => l.action === 'Exit Approved' || l.action === 'Exit Denied' || l.gateType === 'Exit' || l.gateType === 'Egress' || (l.action && l.action.toLowerCase().includes('exit')));
 
     if (kpiInside) kpiInside.textContent = state.stats?.inside ?? '—';
-    if (kpiBlocked) kpiBlocked.textContent = state.stats?.blocked ?? '—';
+    if (kpiBlocked) {
+      kpiBlocked.textContent = state.stats?.blocked ?? '—';
+      kpiBlocked.closest('.sp-kpis > div')?.setAttribute('data-attention', String(Number(state.stats?.blocked) > 0));
+    }
     if (kpiTotalLogs) kpiTotalLogs.textContent = state.stats?.todayEntries ?? '—';
     if (kpiRegistered) kpiRegistered.textContent = state.stats?.registeredFleet ?? '—';
     [kpiInside, kpiBlocked, kpiTotalLogs, kpiRegistered].forEach(el => { if (el) el.title = state.stats ? `Server totals as of ${state.stats.asOf || 'last refresh'}` : 'Current totals unavailable'; });
@@ -469,6 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ==========================================================================
      3. Dashboard Controller & Analytics
      ========================================================================== */
+  const dashboardPalette = { entry:'#15803d', exit:'#1d4ed8', registered:'#253475', visitor:'#7c3aed', empty:'#edf0f6' };
   // Configure Chart.js global typography and branding defaults if available
   if (typeof Chart !== 'undefined') {
     Chart.defaults.font.family = '"Plus Jakarta Sans", system-ui, sans-serif';
@@ -536,14 +540,15 @@ document.addEventListener('DOMContentLoaded', () => {
       dashboardDenied: logs.filter(deniedPassage).length
     };
     Object.entries(totals).forEach(([id, value]) => { const element = document.getElementById(id); if (element) element.textContent = value; });
+    document.getElementById('dashboardDenied')?.setAttribute('data-attention', String(totals.dashboardDenied > 0));
     gateActivityChartCanvas.setAttribute('aria-label', `${mode === 'hourly' ? 'Hourly' : 'By gate'} activity today: ${totals.dashboardEntries} approved entries, ${totals.dashboardExits} approved exits, ${totals.dashboardDenied} denied attempts.`);
     activityTrendHourlyBtn?.setAttribute('aria-pressed', String(mode === 'hourly'));
     activityTrendGateBtn?.setAttribute('aria-pressed', String(mode !== 'hourly'));
     const data = {
       labels,
       datasets: [
-        {label:'Entries', data:entries, borderColor:'#253475', backgroundColor:mode === 'hourly' ? '#25347514' : '#253475', fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointRadius:2, pointHoverRadius:5, borderRadius:6, maxBarThickness:42},
-        {label:'Exits', data:exits, borderColor:'#8294c5', backgroundColor:mode === 'hourly' ? '#8294c51a' : '#8294c5', fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointRadius:2, pointHoverRadius:5, borderRadius:6, maxBarThickness:42}
+        {label:'Entries', data:entries, borderColor:dashboardPalette.entry, backgroundColor:mode === 'hourly' ? dashboardPalette.entry+'14' : dashboardPalette.entry, fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointStyle:'circle', pointRadius:3, pointHoverRadius:5, borderRadius:6, maxBarThickness:42},
+        {label:'Exits', data:exits, borderColor:dashboardPalette.exit, backgroundColor:mode === 'hourly' ? dashboardPalette.exit+'14' : dashboardPalette.exit, fill:mode === 'hourly', tension:.35, borderWidth:2.5, borderDash:mode === 'hourly' ? [6,4] : [], pointStyle:'rectRot', pointRadius:3, pointHoverRadius:5, borderRadius:6, maxBarThickness:42}
       ]
     };
     const type = mode === 'hourly' ? 'line' : 'bar';
@@ -581,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (legendBlockedCount) legendBlockedCount.textContent = total;
     if (donutCenterTotal) donutCenterTotal.textContent = total;
     gateStatusChartCanvas.setAttribute('aria-label', `Campus occupancy: ${registered} registered vehicles and ${visitors} visitors, ${total} total.`);
-    const data = {labels:total ? ['Registered vehicles', 'Visitor vehicles'] : ['No vehicles on campus'],datasets:[{data:total ? [registered,visitors] : [1],backgroundColor:total ? ['#253475','#a8b6d9'] : ['#edf0f6'],borderWidth:4,borderColor:'#fff',hoverOffset:total ? 5 : 0}]};
+    const data = {labels:total ? ['Registered vehicles', 'Visitor vehicles'] : ['No vehicles on campus'],datasets:[{data:total ? [registered,visitors] : [1],backgroundColor:total ? [dashboardPalette.registered,dashboardPalette.visitor] : [dashboardPalette.empty],borderWidth:4,borderColor:'#fff',hoverOffset:total ? 5 : 0}]};
     if (charts.gateStatus) { charts.gateStatus.data = data; charts.gateStatus.update('none'); return; }
     charts.gateStatus = new Chart(gateStatusChartCanvas, {
       type:'doughnut',data,
@@ -614,7 +619,7 @@ document.addEventListener('DOMContentLoaded', () => {
         datasets: [{
           label: 'Vehicles',
           data: [count4W, countMoto, countBike, countFleet],
-          backgroundColor: ['#253475', '#6478b5', '#a8b6d9', '#172747'],
+          backgroundColor: dashboardPalette.registered,
           borderRadius: 4,
           barThickness: 24
         }]
