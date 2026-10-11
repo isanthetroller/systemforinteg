@@ -149,7 +149,7 @@ function requireStudent($pdo, $allowPendingPassword = false) {
 function requireStaffOrScanner($pdo) {
     $auth = resolveAuth($pdo);
     if ($auth && $auth['type'] === 'staff') {
-        return requireStaff($pdo, ['admin', 'guard'], true);
+        return requireStaff($pdo);
     }
 
     // A rejected staff session must never become a scanner/device session.

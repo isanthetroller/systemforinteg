@@ -133,11 +133,12 @@
      Resolve / dismiss modal (admin)
      ------------------------------------------------------------------------ */
   function openResolveModal(target) {
+    if (target.record?.id && window.SPCases) return SPCases.open('V' + target.record.id);
     view.resolveTarget = target;
     const titles = { resolve: 'Resolve Violation', dismiss: 'Dismiss Violation' };
     $('resolveModalTitle').textContent = titles[target.action];
     let summary = '';
-    if (target.action === 'resolve') summary = `Resolving "${target.record.violationType}" on ${target.record.plateNumber} lets the vehicle enter and leave campus again (if no other violation is pending).`;
+    if (target.action === 'resolve') summary = `Resolving "${target.record.violationType}" on ${target.record.plateNumber} closes this violation. Other cases and registration restrictions still apply.`;
     if (target.action === 'dismiss') summary = `Dismiss this violation on ${target.record.plateNumber} as issued by mistake. The hold is lifted if nothing else is pending.`;
     $('resolveModalSummary').textContent = summary;
     $('resolveNotes').value = '';
@@ -153,7 +154,7 @@
     e.preventDefault();
     const t = view.resolveTarget;
     const notes = $('resolveNotes').value.trim();
-    if (!notes) return setError('resolveError', 'Resolution notes are required (e.g. "Fine paid / clearance signed").');
+    if (!notes) return setError('resolveError', 'Resolution notes are required (e.g. "Clearance signed").');
     const body = { violation_id: t.record.id, action: t.action, notes };
     $('resolveSubmitBtn').disabled = true;
     try {

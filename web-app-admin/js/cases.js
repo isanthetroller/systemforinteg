@@ -170,7 +170,7 @@
       buttons.push(`<button type="button" data-act="note" class="${plain}">Add note</button>`);
       if (isAdmin()) {
         if (!c.policeReferred) buttons.push(`<button type="button" data-act="police" class="${danger}">Refer to police</button>`);
-        if (c.vehicle && c.vehicle.isBanned && c.vehicle.status === 'Inside Campus') buttons.push(`<button type="button" data-act="release" class="${plain}">Release one exit</button>`);
+        if (c.vehicle?.standing?.releaseEligible) buttons.push(`<button type="button" data-act="release" class="${plain}">Release one exit</button>`);
         buttons.push(`<button type="button" data-act="close" class="${navy}">Close case</button>`);
       }
     }
@@ -328,6 +328,7 @@
     document.addEventListener('sp:gate-passage', () => { if ($('casesView').classList.contains('active')) load(); });
     setInterval(() => { if (!document.hidden && window.SPAuth && SPAuth.isAuthenticated()) load(); }, 60000);
   });
+  window.SPCases = { open: openCase };
   window.SPLive?.subscribe(async changed => {
     if (!changed.some(k => ['cases','vehicles','evidence'].includes(k))) return;
     await load();

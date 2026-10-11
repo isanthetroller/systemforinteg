@@ -41,8 +41,19 @@ const StudentApi = (function () {
       body = JSON.stringify(options.body);
     }
 
-    const res = await fetch(`${baseUrl}/${path}`, { method: options.method || 'GET', headers, body, credentials: 'include' });
-    const text = await res.text();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), (options.method || 'GET').toUpperCase() === 'GET' ? 30000 : 60000);
+    let res, text;
+    try {
+      res = await fetch(`${baseUrl}/${path}`, { method: options.method || 'GET', headers, body, credentials: 'include', signal: controller.signal });
+      text = await res.text();
+    } catch (err) {
+      throw new Error(err.name === 'AbortError'
+        ? 'The request took too long. Check the latest information before trying again.'
+        : 'Could not reach the server. Check your connection and try again.');
+    } finally {
+      clearTimeout(timeout);
+    }
     let json;
     try {
       json = JSON.parse(text);
@@ -54,8 +65,16 @@ const StudentApi = (function () {
       throw new Error('The server is not responding correctly. Please try again later.');
     }
 
+    if (!json || typeof json !== 'object' || typeof json.success !== 'boolean') {
+      throw new Error('The server sent an unexpected response. Please try again later.');
+    }
+    if (res.ok && !json.success) {
+      throw new Error('The server could not complete the request. Please try again.');
+    }
     if (!res.ok) {
-      const err = new Error(json.message || `Request failed (${res.status})`);
+      const err = new Error(res.status >= 500
+        ? 'The service is temporarily unavailable. Please try again later.'
+        : (json.message || 'The request could not be completed.'));
       err.status = res.status;
       err.code = json.data && json.data.code ? json.data.code : null;
       if (res.status === 401 && !path.startsWith('auth.php?action=login')) {

@@ -152,7 +152,7 @@ function caseTimeline($kind, $row, array $events, array $summary) {
 }
 
 /** What the vehicle's owner sees: no staff names, no internal notes. */
-function casePublicView($summary, array $events) {
+function casePublicView($summary, array $events, $pdo = null) {
     $tl = [['at' => $summary['openedAt'], 'label' => 'Case opened: ' . $summary['title']]];
     foreach ($events as $e) {
         if ($e['event_type'] === 'contact') {
@@ -167,7 +167,7 @@ function casePublicView($summary, array $events) {
     if ($summary['status'] === 'Closed') $tl[] = ['at' => $summary['closedAt'], 'label' => 'Closed: ' . $summary['outcome']];
     usort($tl, fn($a, $b) => strcmp((string)$a['at'], (string)$b['at']));
 
-    if ($summary['status'] === 'Closed') $next = 'This case is closed. Your vehicle can enter and leave campus again unless another case is open.';
+    if ($summary['status'] === 'Closed') $next = 'This case is closed. ' . ($pdo ? caseStandingMessage($pdo, $summary['plateNumber']) : 'Check your current pass and any remaining restrictions before passage.');
     elseif ($summary['status'] === 'Awaiting clearance') $next = 'Come to the Security Office to sign your clearance. Bring a valid ID.';
     elseif ($summary['policeReferred']) $next = 'Your vehicle was referred to the police. Visit the Security Office to settle this.';
     else $next = 'Please contact or visit the Security Office to settle this case. Your vehicle cannot enter or leave campus until it is closed.';
@@ -326,14 +326,6 @@ function caseOpenForPlate($pdo, $plate) {
  */
 function caseResolveIncident($pdo, $admin, $row, $notes) {
     closeIncident($pdo, $row['id'], $admin, $notes);
-    $check = $pdo->prepare("SELECT `id` FROM `security_incidents` WHERE `plate_number` = ? AND `status` = 'Held'");
-    $check->execute([$row['plate_number']]);
-    if (!$check->fetch()) {
-        $logStmt = $pdo->prepare("SELECT `action` FROM `gate_logs`
-            WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `action` IN ('Entry Recorded', 'Exit Approved')
-            ORDER BY `id` DESC LIMIT 1");
-        $logStmt->execute([normalizePlate($row['plate_number'])]);
-        $restored = ($logStmt->fetchColumn() === 'Entry Recorded') ? 'Inside Campus' : 'Outside';
-        $pdo->prepare("UPDATE `vehicles` SET `status` = ? WHERE `plate_number` = ? AND `status` = 'Blocked / Alert'")->execute([$restored, $row['plate_number']]);
-    }
+    $vehicle = findVehicleByPlate($pdo, $row['plate_number']);
+    if ($vehicle) restoreVehiclePresence($pdo, $vehicle);
 }

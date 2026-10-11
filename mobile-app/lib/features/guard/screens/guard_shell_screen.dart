@@ -30,6 +30,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
   late GuardUser _currentUser;
   int _selectedIndex = 0;
   bool _movementPending = false;
+  Map<String, dynamic>? _stats;
+  Map<String, dynamic>? _gatePolicy;
+  bool _statsStale = true;
+  bool _policyStale = true;
+  bool _contextLoading = false;
 
   // Shared Dashboard State
   late List<AuditLogEntry> _auditLogs;
@@ -46,6 +51,8 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     ApiService.sessionError.addListener(_onSessionEnded);
     ApiService.currentSessionUser.addListener(_onSessionUpdated);
     SyncQueueService().lastSyncTimeNotifier.addListener(_onAutoSyncCompleted);
+    SyncQueueService().statusNotifier.addListener(_onSyncStatusChanged);
+    _refreshOperationalContext();
   }
 
   @override
@@ -55,6 +62,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     );
     ApiService.sessionError.removeListener(_onSessionEnded);
     ApiService.currentSessionUser.removeListener(_onSessionUpdated);
+    SyncQueueService().statusNotifier.removeListener(_onSyncStatusChanged);
     super.dispose();
   }
 
@@ -79,9 +87,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     setState(() {
       _currentUser = GuardUser.fromJson(user);
     });
+    _refreshOperationalContext();
   }
 
   void _onAutoSyncCompleted() {
+    _refreshOperationalContext();
     if (mounted) {
       final cached = LocalCacheService.getCachedLogs();
       {
@@ -96,6 +106,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     // Just signed in: load the server's logs now instead of showing sample data until the next 30-second refresh
     SyncQueueService().requestRefresh();
     await SyncQueueService().processQueue();
+    await _refreshOperationalContext();
     final serverLogs = LocalCacheService.getCachedLogs();
     if (mounted) {
       setState(() {
@@ -161,21 +172,39 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     );
   }
 
-  int get _insideCount {
-    final Map<String, AuditLogEntry> latestByPlate = {};
-    for (final log in _auditLogs) {
-      final key = log.plateNumber.toUpperCase().trim();
-      if (!latestByPlate.containsKey(key)) {
-        latestByPlate[key] = log;
-      }
+  void _onSyncStatusChanged() {
+    if (mounted && SyncQueueService().status == SyncStatus.offline) {
+      setState(() { _statsStale = true; _policyStale = true; });
     }
-    return latestByPlate.values.where((l) => l.isInside).length;
   }
 
-  int get _blockedTodayCount => _auditLogs.where((l) => l.isBlocked).length;
-  int get _totalEntriesToday => _auditLogs
-      .where((l) => l.isInside || l.action.toLowerCase().contains('entry'))
-      .length;
+  Future<void> _refreshOperationalContext() async {
+    if (_contextLoading || !mounted) return;
+    _contextLoading = true;
+    await Future.wait([
+      () async {
+        try {
+          final stats = await ApiService.fetchOperationalStats();
+          if (mounted) setState(() { _stats = stats; _statsStale = false; });
+        } catch (_) {
+          if (mounted) setState(() => _statsStale = true);
+        }
+      }(),
+      () async {
+        try {
+          final policy = await ApiService.fetchGatePolicy();
+          if (mounted) setState(() { _gatePolicy = policy; _policyStale = false; });
+        } catch (_) {
+          if (mounted) setState(() => _policyStale = true);
+        }
+      }(),
+    ]);
+    _contextLoading = false;
+  }
+
+  int? get _insideCount => (_stats?['inside'] as num?)?.toInt();
+  int? get _blockedTodayCount => (_stats?['todayDenied'] as num?)?.toInt();
+  int? get _totalEntriesToday => (_stats?['todayEntries'] as num?)?.toInt();
 
   List<AuditLogEntry> get _filteredLogs {
     return _auditLogs.where((log) {
@@ -204,7 +233,20 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
             ? Colors.black
             : NcstColors.slate100,
         appBar: _buildAppBar(isEntrance),
-        body: _buildBody(isEntrance),
+        body: Column(children: [
+          Container(
+            key: const Key('gatePolicyBanner'),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: NcstColors.slate100,
+            child: Text(
+              _gatePolicy == null ? 'Gate permissions unavailable. Connect before confirming a passage.'
+                : '${_gatePolicy!['modeLabel']} · ${_gatePolicy!['checkpoint']}\n${_gatePolicy!['message']}${_policyStale ? ' Last known policy — reconnect to confirm.' : ''}',
+              style: const TextStyle(fontSize: 12, color: NcstColors.navy),
+            ),
+          ),
+          Expanded(child: _buildBody(isEntrance)),
+        ]),
         bottomNavigationBar: _buildBottomNav(isEntrance),
       ),
     );
@@ -364,6 +406,11 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
             ShiftBanner(assignedGate: _currentUser.assignedGate),
 
             // KPI Counters
+            if (_statsStale) Text(
+              _stats == null ? 'Current totals unavailable' : 'Totals are from the last successful refresh',
+              key: const Key('dashboardStatsStale'),
+              style: const TextStyle(fontSize: 12, color: NcstColors.slate600),
+            ),
             DashboardKpiRow(
               insideCount: _insideCount,
               totalEntriesToday: _totalEntriesToday,

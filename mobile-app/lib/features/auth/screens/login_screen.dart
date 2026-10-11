@@ -77,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
       // A temporary password (set by the administrator) must be replaced before the terminal can be used:
       // until then the server refuses most requests with "password change required".
       if (user.mustChangePassword) {
-        final changed = await _forcePasswordChange(_passwordController.text.trim());
+        final changed = await _forcePasswordChange(_passwordController.text);
         if (!mounted) return;
         if (!changed) {
           await AuthService().logout();
@@ -608,11 +608,12 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ],
           ),
-          child: const Center(
-            child: Icon(
-              Icons.shield_outlined,
-              size: 38,
-              color: NcstColors.gold,
+          child: Center(
+            child: Image.asset(
+              'assets/images/securepark_mark.png',
+              width: isCompact ? 47 : 56,
+              height: isCompact ? 47 : 56,
+              filterQuality: FilterQuality.high,
             ),
           ),
         ),

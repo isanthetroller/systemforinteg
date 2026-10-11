@@ -168,7 +168,7 @@ function syncOneEvent($pdo, $actor, array $event, $ref, array $when, $now) {
     if ($type === 'gate_log') $result = syncGateLog($pdo, $actor, $ref, $ts, $payload, $notes, $now);
     elseif ($type === 'incident') $result = syncIncident($pdo, $actor, $ref, $ts, $payload, $notes);
     elseif ($type === 'visitor_pass') $result = syncVisitorPass($pdo, $actor, $ref, $ts, $payload, $now);
-    else $result = syncVisitorExit($pdo, $ref, $ts, $payload);
+    else $result = syncVisitorExit($pdo, $actor, $ref, $ts, $payload, $notes, $now);
 
     if ($forcedFailure === 'after_commit') {
         throw new RuntimeException('forced failure after commit (test)');
@@ -195,9 +195,14 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
 
     $vehicle = findVehicleByPlate($pdo, $plate);
     $visitor = $vehicle ? null : findVisitorPassByPlate($pdo, $plate, $eventDay, true);
+    if (!$vehicle && !empty($p['visitor_pass_id'])) {
+        $q = $pdo->prepare('SELECT * FROM visitor_passes WHERE id = ?');
+        $q->execute([(int)$p['visitor_pass_id']]);
+        $visitor = $q->fetch() ?: null;
+    }
     $isVip = isVipVehicle($vehicle);
 
-    /* What the server knows now that the guard could not know offline (entries only; exits are never questioned) */
+    /* What the server knows now that the guard could not know offline (historical events are retained and inconsistencies flagged) */
     $flags = [];
     if ($isApproval && $gateType === 'Ingress') {
         if ($vehicle) {
@@ -219,6 +224,13 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
         }
     }
 
+    if ($visitor && $isApproval && $gateType === 'Egress') {
+        if (empty($visitor['entry_time']) || strtotime($visitor['entry_time']) > $ts) return syncResult($ref, 'rejected', 'NO_PRIOR_ENTRY', 'Review checkout: no prior entry is recorded.');
+        if (visitorPassItems($pdo, $visitor['id']) && empty($p['items_verified'])) $flags[] = 'ITEMS_NOT_VERIFIED';
+        $q = $pdo->prepare("SELECT COUNT(*) FROM security_incidents WHERE REPLACE(REPLACE(UPPER(plate_number), '-', ''), ' ', '') = ? AND status = 'Held'");
+        $q->execute([normalizePlate($visitor['plate_number'])]);
+        if ($q->fetchColumn() || ($visitor['status'] === 'Revoked' && empty($visitor['exit_time']))) $flags[] = 'SECURITY_HOLD_AT_SYNC';
+    }
     $driverName = trim((string)($p['driverName'] ?? $p['driver_name'] ?? ''));
     $driverRelationship = trim((string)($p['driverRelationship'] ?? $p['driver_relationship'] ?? ''));
     if ($visitor && $isApproval && $driverName === '') {
@@ -247,6 +259,20 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
     if ($vehicle && $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
         $lockVehicle = $pdo->prepare("SELECT `id` FROM `vehicles` WHERE `id` = ? FOR UPDATE");
         $lockVehicle->execute([$vehicle['id']]);
+    }
+    if ($visitor && $isApproval && $gateType === 'Egress') {
+        $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
+        $q = $pdo->prepare('SELECT * FROM visitor_passes WHERE id = ?' . $lock);
+        $q->execute([$visitor['id']]);
+        $visitor = $q->fetch();
+        if (!empty($visitor['exit_time'])) {
+            $q = $pdo->prepare("SELECT id FROM gate_logs WHERE REPLACE(REPLACE(UPPER(plate_number), '-', ''), ' ', '') = ? AND action = 'Exit Approved' AND logged_at = ? LIMIT 1");
+            $q->execute([normalizePlate($visitor['plate_number']), $visitor['exit_time']]);
+            if ($id = $q->fetchColumn()) {
+                $pdo->commit();
+                return syncResult($ref, 'duplicate', null, 'This visitor departure is already recorded.', ['id' => (int)$id]);
+            }
+        }
     }
     $logId = recordGateLog($pdo, $actor, [
         'plate' => $storedPlate,
@@ -298,9 +324,9 @@ function syncGateLog($pdo, $actor, $ref, $ts, array $p, $offlineNote, $now) {
             'ownerRole' => $vehicle['owner_role'] ?? ($visitor ? 'Visitor' : null),
             'driverName' => $driverName,
             'driverRelationship' => $driverRelationship,
-            'reason' => 'Offline entry needs review',
+            'reason' => $gateType === 'Egress' ? 'Offline exit needs review' : 'Offline entry needs review',
             'gatePoint' => $gatePoint,
-            'notes' => 'Admitted offline at ' . $occurred . '; at sync the server found: ' . implode(', ', $flags) . '. The vehicle is on campus.',
+            'notes' => ($gateType === 'Egress' ? 'Departure' : 'Admission') . ' recorded offline at ' . $occurred . '; at sync the server found: ' . implode(', ', $flags) . '. Review this historical movement.',
             'reportedAt' => date('Y-m-d H:i:s', $now),
         ], 60);
     }
@@ -350,33 +376,31 @@ function syncIncident($pdo, $actor, $ref, $ts, array $p, $offlineNote) {
         'clientRef' => $ref,
         'notifyOwner' => true,
     ]);
-    if ($vehicle && $vehicle['status'] === 'Inside Campus') {
-        $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `id` = ?")->execute([$vehicle['id']]);
-    }
+    // The incident changes standing, not recorded physical presence.
     $pdo->commit();
     return syncResult($ref, 'accepted', null, null, ['id' => $incident['id'], 'caseNumber' => $incident['caseNumber']]);
 }
 
-function syncVisitorExit($pdo, $ref, $ts, array $p) {
-    $passCode = trim((string)($p['passId'] ?? $p['pass_code'] ?? ''));
+function syncVisitorExit($pdo, $actor, $ref, $ts, array $p, $notes, $now) {
+    $code = trim((string)($p['passId'] ?? $p['pass_code'] ?? ''));
     $plate = trim((string)($p['plateNumber'] ?? $p['plate'] ?? ''));
-    $occurred = date('Y-m-d H:i:s', $ts);
-
-    $pass = null;
-    if ($passCode !== '') {
-        $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `pass_code` = ? LIMIT 1");
-        $stmt->execute([$passCode]);
-        $pass = $stmt->fetch() ?: null;
-    }
-    if (!$pass && $plate !== '') {
-        $pass = findVisitorPassByPlate($pdo, $plate, date('Y-m-d', $ts), true);
-    }
+    $q = $pdo->prepare($code !== '' ? "SELECT * FROM `visitor_passes` WHERE `pass_code` = ? LIMIT 1"
+        : "SELECT * FROM `visitor_passes` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? ORDER BY `id` DESC LIMIT 1");
+    $q->execute([$code !== '' ? $code : normalizePlate($plate)]);
+    $pass = $q->fetch();
     if (!$pass) return syncResult($ref, 'rejected', 'NOT_FOUND', 'No visitor pass matches this checkout.');
-
-    // Checking out twice is harmless: the first exit time is kept
-    $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Revoked' WHERE `id` = ?")
-        ->execute([$occurred, $pass['id']]);
-    return syncResult($ref, 'accepted', null, null, ['id' => (int)$pass['id']]);
+    if ($plate !== '' && normalizePlate($plate) !== normalizePlate($pass['plate_number'])) return syncResult($ref, 'rejected', 'PLATE_MISMATCH', 'Pass and plate do not match.');
+    if (empty($pass['entry_time']) || strtotime($pass['entry_time']) > $ts) return syncResult($ref, 'rejected', 'NO_PRIOR_ENTRY', 'Review this checkout: no earlier visitor entry is recorded.');
+    if (!empty($pass['exit_time'])) {
+        $q = $pdo->prepare("SELECT `id` FROM `gate_logs` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `action` = 'Exit Approved' AND `logged_at` = ? LIMIT 1");
+        $q->execute([normalizePlate($pass['plate_number']), $pass['exit_time']]);
+        if ($id = $q->fetchColumn()) return syncResult($ref, 'duplicate', null, 'This visitor departure is already recorded.', ['id' => (int)$id]);
+        $ts = strtotime($pass['exit_time']); // Repair a legacy checkout's missing audit without changing its time.
+    }
+    $p['plate'] = $pass['plate_number'];
+    $p['visitor_pass_id'] = (int)$pass['id'];
+    $p['action'] = 'Exit Approved';
+    return syncGateLog($pdo, $actor, $ref, $ts, $p, $notes, $now);
 }
 
 function syncVisitorPass($pdo, $actor, $ref, $ts, array $p, $now) {

@@ -187,8 +187,8 @@ void main() {
         widget: const Scaffold(body: DashboardScreen()),
       );
       expect(find.text('INSIDE CAMPUS'), findsOneWidget);
-      expect(find.text('TOTAL ENTRIES'), findsOneWidget);
-      expect(find.text('BLOCKED ATTEMPTS'), findsOneWidget);
+      expect(find.text('ENTRIES TODAY'), findsOneWidget);
+      expect(find.text('DENIED TODAY'), findsOneWidget);
       expect(find.text('SCAN QR PASS'), findsOneWidget);
     });
 

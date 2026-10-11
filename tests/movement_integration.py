@@ -102,6 +102,7 @@ def run(s):
     assert status == 200, response
     admin = response['data']['token']
     call(base, 'auth.php?action=change_password', {'current_password': 'Password123!', 'new_password': 'Movement-Admin-2026'}, admin)
+    assert call(base, 'settings.php', {'event_gate_mode': 1, 'reason': 'Movement suite covers both directions at each gate'}, admin, method='PUT')[0] == 200
     guards = []
     for n in (1, 2):
         status, response = call(base, 'users.php', {'username': f'guard{n}', 'full_name': f'Guard {n}',
@@ -143,7 +144,7 @@ def run(s):
         check('entry confirmed exactly once', code == 201 and state() == ('Inside Campus', before[1]+1))
         with closing(sqlite3.connect(s.db)) as db, db:
             log = db.execute('SELECT gate_point, logged_by_user_id, gate_type FROM gate_logs WHERE id=?', (saved['data']['id'],)).fetchone()
-        check('checkpoint recorded independently of direction', log[0] == f'Checkpoint {entry_guard+1}' and log[1] is not None and log[2] == 'Ingress')
+        check('checkpoint recorded independently of direction', log[0] == f'Gate {entry_guard+1}' and log[1] is not None and log[2] == 'Ingress')
         code, replay = confirm(guards[entry_guard], preview)
         check('duplicate entry cannot toggle to exit', code == 200 and replay['data']['duplicate'] and state() == ('Inside Campus', before[1]+1))
         out = prepare(guards[exit_guard])
@@ -291,7 +292,7 @@ def run(s):
         db.execute("UPDATE vehicles SET is_banned=0 WHERE id=?", (vehicle['id'],))
     confirm(guards[0], prepare(guards[0]))
     code, incident = call(base, 'incidents.php', {'plateNumber': 'MOVE 100', 'reason': 'Isolated hold while inside'}, guards[1])
-    check('web incident changes standing without losing physical custody', code == 201 and state()[0] == 'Blocked / Alert')
+    check('web incident changes standing without losing physical custody', code == 201 and state()[0] == 'Inside Campus' and prepare(guards[1])['accepted'] is False)
     code, released = call(base, 'releases.php', {'vehicleId': vehicle['id'], 'reason': 'Emergency release of held on-campus vehicle'}, admin)
     check('admin can release a blocked vehicle physically still inside', code == 201)
     pending = prepare(guards[1])

@@ -25,11 +25,14 @@ enum CameraScanMode {
 class VisitorRegistrationScreen extends StatefulWidget {
   final GuardUser currentGuard;
   final VoidCallback? onReturnToDashboard;
+  @visibleForTesting
+  final Future<Uint8List> Function()? capturePhotoBytesForTesting;
 
   const VisitorRegistrationScreen({
     super.key,
     required this.currentGuard,
     this.onReturnToDashboard,
+    this.capturePhotoBytesForTesting,
   });
 
   @override
@@ -257,56 +260,30 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   // -------------------------------------------------------------
   Future<void> _runOcrOnCurrentFrame({bool isUserTriggered = false}) async {
     if (_isOcrBusy || _isScanningProcessing || _isOcrLocked) return;
-    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      if (isUserTriggered && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Camera unavailable. Check camera permission or enter the details manually.'),
+        ));
+      }
+      return;
+    }
 
     _isOcrBusy = true;
     XFile? capturedFile;
+    final scanMode = _activeScanMode;
     try {
       capturedFile = await _cameraController!.takePicture();
       final inputImage = InputImage.fromFilePath(capturedFile.path);
       final recognizedText = await _textRecognizer.processImage(inputImage);
-
-      final rawText = recognizedText.text.trim();
-      if (rawText.isNotEmpty) {
-        if (_activeScanMode == CameraScanMode.idCard) {
-          // Extract strictly the person's name using IdOcrParser
-          String name = IdOcrParser.extractNameFromOcr(rawText);
-          if (name.isEmpty) {
-            name = _extractNameFromIdPayload(rawText);
-          }
-          if (name.isNotEmpty && name != _visitorName) {
-            _handleOcrCandidateDetected(name, isId: true, isUserTriggered: isUserTriggered);
-            return;
-          }
-        } else if (_activeScanMode == CameraScanMode.licensePlate) {
-          // Extract vehicle plate using IdOcrParser
-          String plate = IdOcrParser.extractPlateFromOcr(rawText);
-          if (plate.isEmpty) {
-            plate = _extractPlateFromPayload(rawText);
-          }
-          if (plate.isNotEmpty && plate != _licensePlate) {
-            _handleOcrCandidateDetected(plate, isId: false, isUserTriggered: isUserTriggered);
-            return;
-          }
-        }
-      }
-
-      if (isUserTriggered && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: NcstColors.slate800,
-            content: Text(
-              _activeScanMode == CameraScanMode.idCard
-                  ? 'No name detected on ID. Hold closer or enter manually.'
-                  : 'No plate number detected. Position camera closer to plate.',
-            ),
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      if (!mounted || scanMode != _activeScanMode) return;
+      _consumeRecognizedText(recognizedText.text, scanMode: scanMode, isUserTriggered: isUserTriggered);
     } catch (_) {
-      // Ignored during background auto-loop
+      if (isUserTriggered && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not scan the image. Try again or enter the details manually.'),
+        ));
+      }
     } finally {
       if (capturedFile != null) {
         try {
@@ -319,6 +296,42 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       _isOcrBusy = false;
     }
   }
+
+  void _consumeRecognizedText(String raw, {required CameraScanMode scanMode, bool isUserTriggered = false}) {
+    if (!mounted || scanMode != _activeScanMode) return;
+    final rawText = raw.trim();
+    if (rawText.isNotEmpty) {
+      if (scanMode == CameraScanMode.idCard) {
+        String name = IdOcrParser.extractNameFromOcr(rawText);
+        if (name.isEmpty) name = _extractNameFromIdPayload(rawText);
+        if (name.isNotEmpty && name != _visitorName) {
+          _handleOcrCandidateDetected(name, isId: true, isUserTriggered: isUserTriggered);
+          return;
+        }
+      } else if (scanMode == CameraScanMode.licensePlate) {
+        String plate = IdOcrParser.extractPlateFromOcr(rawText);
+        if (plate.isEmpty) plate = IdOcrParser.extractPlateFromPayload(rawText);
+        if (plate.isNotEmpty && plate != _licensePlate) {
+          _handleOcrCandidateDetected(plate, isId: false, isUserTriggered: isUserTriggered);
+          return;
+        }
+      }
+    }
+    if (isUserTriggered) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: NcstColors.slate800,
+        content: Text(scanMode == CameraScanMode.idCard
+            ? 'No name detected on ID. Hold closer or enter manually.'
+            : 'No plate number detected. Position camera closer to plate.'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  @visibleForTesting
+  void testConsumeOcrText(String raw) =>
+      _consumeRecognizedText(raw, scanMode: _activeScanMode, isUserTriggered: true);
 
   void _handleOcrCandidateDetected(String detectedText, {required bool isId, bool isUserTriggered = false}) {
     if (_isOcrLocked || _isScanningProcessing) return;
@@ -571,24 +584,6 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
     );
   }
 
-  String _extractPlateFromPayload(String raw) {
-    final clean = raw.trim().toUpperCase();
-
-    // Check for standard Philippine plate pattern: ABC-1234 or ABC 1234 or ABC1234
-    final plateMatch = RegExp(r'([A-Z]{2,3})[\s\-]?(\d{3,4})').firstMatch(clean);
-    if (plateMatch != null) {
-      return '${plateMatch.group(1)}-${plateMatch.group(2)}';
-    }
-
-    // Fallback alphanumeric
-    final alphanumeric = clean.replaceAll(RegExp(r'[^A-Z0-9]'), '');
-    if (alphanumeric.length >= 4 && alphanumeric.length <= 8) {
-      return alphanumeric;
-    }
-
-    return clean;
-  }
-
   String _formatToTitleCase(String text) {
     if (text.isEmpty) return text;
     return text.split(' ').map((word) {
@@ -598,16 +593,44 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
   }
 
   Future<void> _snapVehiclePhoto() async {
+    XFile? shot;
+    String? photoData;
     try {
-      if (_cameraController != null && _cameraController!.value.isInitialized) {
-        final shot = await _cameraController!.takePicture();
-        final small = PhotoCompress.shrinkJpeg(await shot.readAsBytes());
-        _vehiclePhotoData = small == null ? null : PhotoCompress.toDataUrl(small);
+      final Uint8List bytes;
+      if (widget.capturePhotoBytesForTesting != null) {
+        bytes = await widget.capturePhotoBytesForTesting!();
+      } else {
+        if (_cameraController == null || !_cameraController!.value.isInitialized) {
+          throw StateError('Camera unavailable');
+        }
+        shot = await _cameraController!.takePicture();
+        bytes = await shot.readAsBytes();
       }
-    } catch (_) {}
+      final small = PhotoCompress.shrinkJpeg(bytes);
+      if (small == null || small.isEmpty) {
+        throw StateError('Photo could not be prepared');
+      }
+      photoData = PhotoCompress.toDataUrl(small);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          backgroundColor: NcstColors.crimson,
+          content: Text('Vehicle photo was not captured. Check the camera and try again.'),
+        ));
+      }
+      return;
+    } finally {
+      if (shot != null) {
+        try {
+          final file = File(shot.path);
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
+      }
+    }
 
     if (!mounted) return;
     setState(() {
+      _vehiclePhotoData = photoData;
       _hasCapturedPhoto = true;
       _photoCaptureTime = DateTime.now();
     });
@@ -619,7 +642,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
           children: [
             Icon(Icons.camera_alt, color: NcstColors.gold, size: 18),
             SizedBox(width: 8),
-            Text('Front vehicle security photo captured & verified.', style: TextStyle(fontWeight: FontWeight.w600)),
+            Expanded(child: Text('Front vehicle security photo captured & verified.', style: TextStyle(fontWeight: FontWeight.w600))),
           ],
         ),
         duration: Duration(seconds: 2),
@@ -969,7 +992,7 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
         : '';
 
     // Post to gate audit logs
-    await ApiService.postGateLog(
+    final entryRecorded = await ApiService.postGateLog(
       plateNumber: registeredPass.plateNumber,
       driverName: registeredPass.visitorName,
       driverRelationship: 'Visitor / Guest Driver',
@@ -983,6 +1006,27 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
       visitorPassId: registeredPass.dbId,
       itemsVerified: registeredPass.items.isNotEmpty,
     );
+
+    if (!entryRecorded && mounted) {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Entry not recorded'),
+          content: Text(
+            'The visitor pass was issued, but the gate entry was not recorded. '
+            '${ApiService.lastWriteError ?? ''} '
+            'Ask a supervisor to check the gate audit before admitting the visitor.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('CONTINUE'),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (mounted) {
       setState(() {
@@ -1817,13 +1861,16 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
             children: [
               Icon(icon, size: 18, color: NcstColors.navy),
               const SizedBox(width: 8),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.6,
-                  color: NcstColors.navy,
+              Flexible(
+                child: Text(
+                  title,
+                  softWrap: true,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.6,
+                    color: NcstColors.navy,
+                  ),
                 ),
               ),
             ],
@@ -1865,12 +1912,15 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                 children: [
                   Row(
                     children: [
-                      Text(
-                        label,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: NcstColors.slate700,
+                      Flexible(
+                        child: Text(
+                          label,
+                          softWrap: true,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: NcstColors.slate700,
+                          ),
                         ),
                       ),
                       if (isRequired)
@@ -1956,12 +2006,16 @@ class _VisitorRegistrationScreenState extends State<VisitorRegistrationScreen>
                 children: [
                   const Icon(Icons.info_outline, size: 14, color: NcstColors.slate500),
                   const SizedBox(width: 5),
-                  Text(
-                    'Missing: ${missing.join(', ')}',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: NcstColors.slate500,
+                  Flexible(
+                    child: Text(
+                      'Missing: ${missing.join(', ')}',
+                      textAlign: TextAlign.center,
+                      softWrap: true,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: NcstColors.slate500,
+                      ),
                     ),
                   ),
                 ],

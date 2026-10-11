@@ -1,7 +1,7 @@
 <?php
 /**
  * SecurePark - Database Configuration & PDO Handler
- * Configured for InfinityFree Free Hosting with Automatic SQLite Fallback
+ * MySQL in production; SQLite only when explicitly selected or in unconfigured local debug mode.
  */
 
 // All dates and times operate in Philippine Standard Time (UTC+8)
@@ -51,10 +51,12 @@ $db_pass = getenv('DB_PASS') !== false ? getenv('DB_PASS') : (defined('SP_DB_PAS
 
 $pdo = null;
 $db_driver = 'mysql';
+$sqliteRequested = getenv('DB_DRIVER') === 'sqlite' || (defined('SP_FORCE_SQLITE') && SP_FORCE_SQLITE);
+$allowLocalSqlite = $sqliteRequested || (SP_DEBUG && $db_host === '' && $db_name === '' && $db_user === '');
 
 try {
     // Local development: DB_DRIVER=sqlite (env) or SP_FORCE_SQLITE (secret.php) skips MySQL entirely
-    if (getenv('DB_DRIVER') === 'sqlite' || (defined('SP_FORCE_SQLITE') && SP_FORCE_SQLITE)) {
+    if ($sqliteRequested) {
         throw new PDOException('MySQL skipped (DB_DRIVER=sqlite)');
     }
     if ($db_host === '' || $db_name === '' || $db_user === '') {
@@ -71,9 +73,18 @@ try {
     $pdo = new PDO($dsn, $db_user, $db_pass, $options);
     ensureMysqlSchemaAndBaseline($pdo);
 } catch (PDOException $e) {
+    // A production database outage must not create a separate empty database
+    // with a new default administrator and a different set of gate records.
+    if (!$allowLocalSqlite) {
+        error_log('SecurePark MySQL unavailable: ' . $e->getMessage());
+        http_response_code(503);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(['status' => 'error', 'success' => false,
+            'message' => 'The database is temporarily unavailable. Please try again later.']);
+        exit;
+    }
     // -------------------------------------------------------------------------
-    // Fallback: Resilient Local SQLite Database
-    // Automatically takes over when MySQL is unavailable or unconfigured.
+    // Explicit local SQLite database (never fail over from configured MySQL).
     // -------------------------------------------------------------------------
     try {
         $dataDir = dirname(__DIR__) . '/data';
@@ -110,13 +121,13 @@ try {
         initializeSqliteSchema($pdo);
     } catch (Exception $sqliteErr) {
         if (basename($_SERVER['PHP_SELF']) !== 'db.php') {
-            http_response_code(500);
+            error_log('SecurePark SQLite unavailable: ' . $sqliteErr->getMessage());
+            http_response_code(503);
             header("Content-Type: application/json; charset=UTF-8");
             echo json_encode([
                 'status' => 'error',
-                'message' => 'Database initialization failed.',
-                'mysql_error' => $e->getMessage(),
-                'sqlite_error' => $sqliteErr->getMessage()
+                'success' => false,
+                'message' => 'Database initialization failed.'
             ]);
             exit;
         }
@@ -438,7 +449,8 @@ function initializeSqliteSchema($pdo) {
     ensureColumn($pdo, 'owner_notices', 'ref_key', 'TEXT NULL');
     $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uq_notices_ref_key` ON `owner_notices` (`ref_key`)");
     ensureColumn($pdo, 'gate_logs', 'lookup_method', 'TEXT NULL');
-    foreach ([['parking_capacity', '0', 'Vehicles the campus can hold at once (0 = not limited)'],
+    foreach ([['event_gate_mode', '0', '0: normal gate directions; 1: entry and exit at both gates'],
+              ['parking_capacity', '0', 'Vehicles the campus can hold at once (0 = not limited)'],
               ['renewal_window_days', '60', 'Passes can be renewed this many days before they expire'],
               ['expiry_warning_days', '30', 'Owners get an expiry notice this many days before the pass expires'],
               ['hold_reminder_days', '3', 'Owners are reminded every N days while a violation stays unresolved'],

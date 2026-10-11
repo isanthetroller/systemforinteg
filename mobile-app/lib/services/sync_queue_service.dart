@@ -221,7 +221,6 @@ class SyncQueueService {
       var pending = LocalCacheService.getSyncQueue();
       while (pending.isNotEmpty && connectionHealthy) {
         final batchRaw = pending.take(_batchSize).toList();
-        final rest = pending.skip(batchRaw.length).toList();
         final items = batchRaw.map(QueueItem.fromJson).toList();
 
         final results = await ApiService.syncEvents(
@@ -288,7 +287,17 @@ class SyncQueueService {
             '[SyncQueueService] Server refused ${refused.length} event(s): ${refused.map((r) => r['code']).join(', ')}',
           );
         }
-        pending = [...unanswered, ...rest];
+        // enqueue() can run while the HTTP request (or rejected-event save) is
+        // awaiting. Reconcile only this batch against the latest stored queue;
+        // replacing it with the pre-request snapshot would silently lose new events.
+        final batchRefs = items.map((item) => item.clientRef).toSet();
+        final currentPending = LocalCacheService.getSyncQueue();
+        pending = [
+          ...unanswered,
+          ...currentPending.where(
+            (raw) => !batchRefs.contains(QueueItem.fromJson(raw).clientRef),
+          ),
+        ];
         await LocalCacheService.saveSyncQueue(pending);
         pendingCountNotifier.value = pending.length;
         if (unanswered.isNotEmpty) connectionHealthy = false;

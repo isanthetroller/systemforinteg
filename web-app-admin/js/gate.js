@@ -21,10 +21,14 @@
 
   const gate = {
     mode: readMode(),
+    policy: null,
+    checkpoint: 'Gate 1',
+    policyError: null,
     input: '',          // raw scanned / typed value of the current verification
     result: null,       // verify.php response data
     driverId: null,     // selected authorized driver id
     itemsChecked: false, // guard confirmed a visitor's declared items
+    decisionRef: null, // stable across a manual retry when a write's reply is lost
     busy: false,
     cctv: null,
     scanner: null,      // Html5Qrcode instance
@@ -56,6 +60,8 @@
   function renderMode() {
     document.querySelectorAll('#gateModeToggle .gate-mode-btn').forEach(btn => {
       const active = btn.dataset.mode === gate.mode;
+      btn.disabled = !gate.policy?.allowedDirections.includes(btn.dataset.mode);
+      btn.classList.remove('hidden');
       btn.setAttribute('aria-checked', active ? 'true' : 'false');
       btn.className = 'gate-mode-btn' + (btn.classList.contains('hidden') ? ' hidden' : '');
     });
@@ -73,11 +79,37 @@
         btn.classList.add('bg-ncst-navy', 'hover:bg-ncst-navyDark');
       }
     }
-    $('gateModeHint').textContent = gate.mode === 'Ingress' ? 'Checking vehicles at the entry gate' : 'Checking vehicles at the exit gate';
+    $('gateModeHint').textContent = gate.policy ? `${gate.policy.modeLabel} · ${gate.policy.checkpoint} · ${gate.policy.message}` : (gate.policyError || 'Loading gate permissions…');
+    if (btn) btn.disabled = !gate.policy?.allowedDirections.includes(gate.mode);
+  }
+
+  let policyGeneration = 0;
+  async function refreshPolicy() {
+    const generation = ++policyGeneration;
+    try {
+      const policy = await ApiClient.getGatePolicy(gate.checkpoint);
+      if (generation !== policyGeneration) return;
+      gate.policy = policy;
+      gate.policyError = null;
+      const selector = $('gateCheckpoint');
+      if (selector) {
+        selector.classList.toggle('hidden', !policy.canSelectCheckpoint);
+        selector.disabled = gate.busy;
+      }
+      if (!policy.allowedDirections.includes(gate.mode) && policy.allowedDirections.length) {
+        gate.mode = policy.allowedDirections[0];
+        if (!gate.busy) resetResult();
+      }
+    } catch (err) {
+      if (generation !== policyGeneration) return;
+      gate.policy = null;
+      gate.policyError = 'Gate permissions unavailable. Reconnect before recording a passage.';
+    }
+    renderMode();
   }
 
   function setMode(mode) {
-    if (mode === gate.mode) return;
+    if (gate.busy || mode === gate.mode || !gate.policy?.allowedDirections.includes(mode)) return;
     gate.mode = mode;
     try { sessionStorage.setItem(MODE_KEY, mode); } catch (_) {}
     renderMode();
@@ -93,21 +125,17 @@
      ------------------------------------------------------------------------ */
   async function verify(raw) {
     const value = (raw || '').trim();
-    if (!value || gate.busy) return;
+    if (!value || gate.busy || !gate.policy?.allowedDirections.includes(gate.mode)) return;
     gate.busy = true;
     gate.input = value;
     gate.driverId = null;
     gate.itemsChecked = false;
+    gate.decisionRef = null;
     renderLoading(value);
     pauseCamera();
     try {
       // Server decides whether the text is a signed pass, legacy pass, pass code or plate
-      gate.result = await ApiClient.verifyPass({ qrCode: value }, gate.mode);
-      if (document.body.classList.contains('role-guard2') && gate.result && gate.result.visitor) {
-        gate.result = null;
-        renderError('Gate 2 handles registered student and staff vehicles only. Use the visitor gate for visitor passes.');
-        return;
-      }
+      gate.result = await ApiClient.verifyPass({ qrCode: value, checkpoint: gate.policy.checkpoint }, gate.mode);
       autoSelectDriver();
       renderResult();
     } catch (err) {
@@ -130,6 +158,7 @@
     gate.input = '';
     gate.driverId = null;
     gate.itemsChecked = false;
+    gate.decisionRef = null;
     renderIdle();
     if ($('gateManualInput')) {
       $('gateManualInput').value = '';
@@ -172,6 +201,19 @@
         <button type="button" data-act="reset" class="px-4 py-2 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer">Try Again</button>
       </div>`;
     $('gateResult').querySelector('[data-act="reset"]').addEventListener('click', resetResult);
+  }
+
+  function renderDecisionError(message) {
+    const box = $('gateResult');
+    let notice = box.querySelector('[data-decision-error]');
+    if (!notice) {
+      notice = document.createElement('p');
+      notice.dataset.decisionError = '';
+      notice.setAttribute('role', 'alert');
+      notice.className = 'mx-5 my-3 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight px-4 py-3 text-sm font-semibold text-ncst-crimson';
+      box.prepend(notice);
+    }
+    notice.textContent = message;
   }
 
   const RESULT_LABELS = {
@@ -413,12 +455,17 @@
     return (r.vehicle.authorizedDrivers || []).find(d => Number(d.id) === gate.driverId) || null;
   }
 
+  function decisionRef() {
+    if (!gate.decisionRef) gate.decisionRef = `web:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    return gate.decisionRef;
+  }
+
   async function approve() {
     const r = gate.result;
     if (!r || gate.busy) return;
     const plate = r.vehicle ? r.vehicle.plateNumber : r.visitor.plateNumber;
     const action = r.gateType === 'Ingress' ? 'Entry Recorded' : 'Exit Approved';
-    const payload = { plate, action, gate_type: r.gateType, qr_code: gate.input.startsWith('{') ? gate.input : undefined };
+    const payload = { plate, action, gate_type: r.gateType, checkpoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint, qr_code: gate.input.startsWith('{') ? gate.input : undefined, client_ref: `${decisionRef()}:approve` };
     if (r.vehicle) { if (gate.driverId) payload.driver_id = gate.driverId; }
     else if (r.visitor) {
       payload.visitor_pass_id = r.visitor.id;
@@ -431,10 +478,10 @@
     try {
       const log = await ApiClient.createLog(payload);
       ApiClient.flushNotices(); // the owner's "is this you?" e-mail goes out now, in its own request
-      SP.showToast(`${action.toUpperCase()}: ${log.plateNumber} — ${log.driverName}. 5 s CCTV clip attached.`);
-      afterDecision();
+      SP.showToast(`${action.toUpperCase()}: ${log.plateNumber || plate} — ${log.driverName || selectedDriver()?.fullName || 'verified driver'}.`);
+      await afterDecision().catch(() => SP.showToast('Entry was recorded, but the latest gate list could not load. It will refresh when the connection recovers.', 'warning'));
     } catch (err) {
-      renderError(err.message || 'Could not record the decision.');
+      renderDecisionError(`${err.message || 'Could not confirm the decision.'} Check gate records before trying again.`);
     } finally {
       gate.busy = false;
     }
@@ -449,14 +496,18 @@
     const detail = notes ? `${reason}: ${notes}` : reason;
 
     gate.busy = true;
+    let denialRecorded = false;
     try {
       await ApiClient.createLog({
-        plate, action, gate_type: r.gateType,
+        plate, action, gate_type: r.gateType, checkpoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint,
+        client_ref: `${decisionRef()}:log`,
         driverName: drv ? drv.fullName : (r.visitor ? r.visitor.visitorName : 'Unverified'),
         driverRelationship: drv ? drv.relationship : (r.visitor ? 'Visitor (Day Pass)' : 'Unverified'),
         notes: detail
       });
+      denialRecorded = true;
       const incident = await ApiClient.createIncident({
+        client_ref: `${decisionRef()}:case`,
         plateNumber: plate,
         reason,
         vehicleType: r.vehicle ? r.vehicle.vehicleType : 'Visitor Vehicle',
@@ -464,13 +515,17 @@
         ownerRole: r.vehicle ? r.vehicle.ownerRole : 'Visitor',
         driverName: drv ? drv.fullName : 'Unverified',
         driverRelationship: drv ? drv.relationship : 'Unverified',
-        gatePoint: r.gateType === 'Ingress' ? 'Gate 1 (Main Ingress)' : 'Gate 2 (Main Egress)',
+        gatePoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint,
         notes: `${action} at gate verification. ${notes}`.trim()
       });
       SP.showToast(`${action.toUpperCase()}: ${plate} flagged (${incident.caseNumber}).`);
-      afterDecision();
+      await afterDecision().catch(() => SP.showToast('Denial and case were saved, but the latest gate list could not load.', 'warning'));
     } catch (err) {
-      renderError(err.message || 'Could not record the denial.');
+      if (denialRecorded) {
+        renderDecisionError('The denial was recorded, but the security case could not be confirmed. Review gate records and cases before trying again.');
+      } else {
+        renderDecisionError(`${err.message || 'Could not confirm the denial.'} Check gate records before trying again.`);
+      }
     } finally {
       gate.busy = false;
     }
@@ -587,15 +642,19 @@
       btn.addEventListener('click', () => setMode(btn.dataset.mode));
     });
 
-    if (window.SPAuth) {
-      SPAuth.whenAuthenticated(user => {
-        if (user && (user.username === 'guard2' || (user.gateAssigned && (user.gateAssigned.includes('2') || user.gateAssigned.toLowerCase().includes('exit'))))) {
-          setMode('Egress');
-          const ingressBtn = document.querySelector('#gateModeToggle .gate-mode-btn[data-mode="Ingress"]');
-          if (ingressBtn) ingressBtn.classList.add('hidden');
-        }
-      });
-    }
+    const selector = document.createElement('select');
+    selector.id = 'gateCheckpoint';
+    selector.setAttribute('aria-label', 'Physical checkpoint');
+    selector.className = 'hidden rounded border border-slate-300 text-xs p-2';
+    selector.innerHTML = '<option>Gate 1</option><option>Gate 2</option>';
+    $('gateModeHint').after(selector);
+    selector.addEventListener('change', async () => {
+      gate.checkpoint = selector.value;
+      resetResult();
+      await refreshPolicy();
+    });
+    if (window.SPAuth) SPAuth.whenAuthenticated(refreshPolicy);
+    window.addEventListener('online', refreshPolicy);
     $('gateManualForm').addEventListener('submit', (e) => {
       e.preventDefault();
       verify($('gateManualInput').value);
@@ -609,6 +668,7 @@
     }).observe($('gateView'), { attributes: true, attributeFilter: ['class'] });
   });
   window.SPLive?.subscribe(async changed => {
+    if (!gate.policy || changed.some(k => ['settings','session','staff'].includes(k))) await refreshPolicy();
     if (!gate.result || gate.busy || !changed.some(k => ['vehicles','visitors','cases','movements','settings'].includes(k))) return;
     resetResult(); SP.showToast('Gate information changed. Scan or check the pass again before approval.', 'warning');
   });

@@ -44,6 +44,23 @@ class ApiService {
   static final ValueNotifier<int> liveRevision = ValueNotifier(0);
   static bool lastFetchWasLive = false;
   static Map<String, String>? _revisions;
+  static Future<Map<String, dynamic>> fetchOperationalStats() async {
+    final response = await _get(Uri.parse('${ApiConstants.baseUrl}/stats.php'));
+    if (response.statusCode != 200) throw StateError('Current totals unavailable.');
+    final data = Map<String, dynamic>.from((jsonDecode(response.body) as Map)['data'] as Map);
+    for (final key in ['inside', 'todayEntries', 'todayDenied']) {
+      if (data[key] is! num) throw StateError('Current totals unavailable.');
+    }
+    return data;
+  }
+
+  static Future<Map<String, dynamic>> fetchGatePolicy() async {
+    final response = await _get(Uri.parse('${ApiConstants.baseUrl}/gate_policy.php'));
+    if (response.statusCode != 200) throw StateError('Gate permissions unavailable.');
+    final data = Map<String, dynamic>.from((jsonDecode(response.body) as Map)['data'] as Map);
+    if (data['allowedDirections'] is! List) throw StateError('Gate permissions unavailable.');
+    return data;
+  }
   static Future<Map<String, dynamic>> fetchUpdates() async {
     final res = await _get(Uri.parse('${ApiConstants.baseUrl}/updates.php'));
     if (res.statusCode != 200) {

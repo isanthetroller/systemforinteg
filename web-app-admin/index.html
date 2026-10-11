@@ -120,15 +120,6 @@
     /* Role-based visibility (set on <body> by js/auth.js). Server enforces the same rules. */
     body.role-guard .admin-only { display: none !important; }
     
-    /* Guard 2: Dedicated strictly to Dashboard and QR Scan (Gate Monitor) - No Visitors */
-    body.role-guard2 #navVisitorsBtn,
-    body.role-guard2 #navAccountBtn,
-    body.role-guard2 #navStaffBtn,
-    body.role-guard2 #visitorsView,
-    body.role-guard2 .guard2-hidden {
-      display: none !important;
-    }
-    
     /* Nothing behind the login screen is visible until a session is confirmed */
     body:not(.sp-authed) #appShell { visibility: hidden; }
 
@@ -2874,7 +2865,7 @@
   <!-- Scripts -->
   <script src="js/qrcode.min.js?v=20260930c"></script>
   <script src="js/data.js?v=20260930c"></script>
-  <script src="js/api.js?v=20261012b"></script>
+  <script src="js/api.js?v=20261012c"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -2904,9 +2895,9 @@
   </script>
   <script src="js/alerts.js?v=20261001c"></script>
   <script src="js/login.js?v=20261007a"></script>
-  <script src="js/live.js?v=20261009sync"></script>
+  <script src="js/live.js?v=20261011audit"></script>
   <script src="js/auth.js?v=20261007g"></script>
-  <script src="js/app.js?v=20261012b"></script>
+  <script src="js/app.js?v=20261012c"></script>
   <script src="js/users.js?v=20261007d"></script>
   <script src="js/payments.js?v=20261011a"></script>
   <script src="js/ops.js?v=20261010a"></script>
@@ -2914,7 +2905,7 @@
   <script src="js/center.js?v=20261012a"></script>
   <script src="js/cctv.js?v=20261007a"></script>
   <script src="js/cctvclip.js?v=20261007f"></script>
-  <script src="js/gate.js?v=20261012a"></script>
+  <script src="js/gate.js?v=20261012b"></script>
   <script src="js/violations.js?v=20261009a"></script>
   <script src="js/overnight.js?v=20261009a"></script>
   <script src="js/visitors.js?v=20261007d"></script>

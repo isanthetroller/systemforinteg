@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'core/constants/api_constants.dart';
-import 'features/auth/screens/login_screen.dart';
+import 'features/splash/screens/launch_screen.dart';
 import 'services/local_cache_service.dart';
 import 'services/sync_queue_service.dart';
 import 'theme/ncst_theme.dart';
@@ -56,7 +56,7 @@ class NcstGateSecurityApp extends StatelessWidget {
       title: 'NCST Gate Security Terminal',
       debugShowCheckedModeBanner: false,
       theme: NcstTheme.lightTheme,
-      home: const LoginScreen(),
+      home: const LaunchScreen(),
     );
   }
 }

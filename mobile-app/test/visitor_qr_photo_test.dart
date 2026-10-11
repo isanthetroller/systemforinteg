@@ -148,9 +148,9 @@ void main() {
       expect(base64Decode(PhotoCompress.toDataUrl(small).split(',').last), small);
     });
 
-    test('bytes that are not an image and are small pass through; huge garbage is refused', () {
+    test('unreadable camera bytes are never accepted as a captured photo', () {
       final tiny = Uint8List.fromList(List.filled(100, 1));
-      expect(PhotoCompress.shrinkJpeg(tiny), tiny);
+      expect(PhotoCompress.shrinkJpeg(tiny), isNull);
       expect(PhotoCompress.shrinkJpeg(Uint8List(PhotoCompress.maxBytes + 10)), isNull);
     });
   });

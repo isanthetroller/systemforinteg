@@ -83,7 +83,7 @@
     const clip = options.clip || null;
     const sources = clip ? clip.sources.slice() : [VIDEO_SRC];
     const clipSeconds = clip ? (clip.seconds || 5) : 0;
-    const badge = clip ? 'REC' : 'DEMO';
+    const badge = 'DEMO';
 
     host.innerHTML = `
       <div class="sp-cctv" role="img" aria-label="Simulated ${clip ? 'recorded CCTV clip' : 'live CCTV feed'}, ${camera}">
@@ -92,7 +92,7 @@
         </video>
         <div class="sp-cctv-nosignal">
           <span style="font-size:18px;font-weight:800;letter-spacing:0.3em;">${clip ? 'CLIP PLACEHOLDER' : 'NO SIGNAL'}</span>
-          <span style="font-size:10px;color:#94a3b8;">${clip ? `${clipSeconds} s recording &middot; awaiting ${sources[sources.length - 1]}` : `Awaiting feed: ${VIDEO_SRC}`}</span>
+          <span style="font-size:10px;color:#94a3b8;">${clip ? `No recording captured &middot; demo media unavailable` : `Awaiting feed: ${VIDEO_SRC}`}</span>
         </div>
         <div class="sp-cctv-scan"></div>
         <div class="sp-cctv-vignette"></div>

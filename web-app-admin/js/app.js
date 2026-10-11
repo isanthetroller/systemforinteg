@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     incidents: [...INITIAL_DATA.incidents],
     visitors: [],
     onCampus: null,
+    stats: null,
     gateFlowTab: 'inside',
     currentView: 'dashboardView',
     vehicleFilter: {
@@ -286,7 +287,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!views[targetViewId]) return;
     // Views hidden for the current role cannot be opened
     if (views[targetViewId].classList.contains('admin-only') && window.SPAuth && !SPAuth.hasRole('admin')) return;
-    if (document.body.classList.contains('role-guard2') && (targetViewId === 'visitorsView' || targetViewId === 'accountView')) return;
 
     state.currentView = targetViewId;
 
@@ -413,17 +413,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const entranceLogs = state.auditLogs.filter(l => l.action === 'Entry Recorded' || l.action === 'Entry Denied' || l.gateType === 'Entry' || l.gateType === 'Ingress' || (l.action && l.action.toLowerCase().includes('entry')));
     const exitLogs = state.auditLogs.filter(l => l.action === 'Exit Approved' || l.action === 'Exit Denied' || l.gateType === 'Exit' || l.gateType === 'Egress' || (l.action && l.action.toLowerCase().includes('exit')));
 
-    if (kpiInside) kpiInside.textContent = insideCount;
-    if (kpiBlocked) kpiBlocked.textContent = blockedCount;
-    if (kpiTotalLogs) kpiTotalLogs.textContent = todaysGateLogs().filter(log => entryPassage(log) && !deniedPassage(log)).length;
-    if (kpiRegistered) kpiRegistered.textContent = state.vehicles.length;
+    if (kpiInside) kpiInside.textContent = state.stats?.inside ?? '—';
+    if (kpiBlocked) kpiBlocked.textContent = state.stats?.blocked ?? '—';
+    if (kpiTotalLogs) kpiTotalLogs.textContent = state.stats?.todayEntries ?? '—';
+    if (kpiRegistered) kpiRegistered.textContent = state.stats?.registeredFleet ?? '—';
+    [kpiInside, kpiBlocked, kpiTotalLogs, kpiRegistered].forEach(el => { if (el) el.title = state.stats ? `Server totals as of ${state.stats.asOf || 'last refresh'}` : 'Current totals unavailable'; });
 
     if (onCampusSidebarCount) onCampusSidebarCount.textContent = insideCount;
     if (tabCountInside) tabCountInside.textContent = insideCount;
     if (tabCountEntrance) tabCountEntrance.textContent = entranceLogs.length;
     if (tabCountExit) {
       tabCountExit.textContent = exitLogs.length;
-      const hasBlockedExit = exitLogs.some(l => l.action === 'Exit Denied' || (l.notes && l.notes.toLowerCase().includes('exit denied')));
+      const hasBlockedExit = state.vehicles.some(v => v.standing?.isInside && v.standing?.onHold);
       if (hasBlockedExit) {
         tabCountExit.className = "px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
@@ -814,22 +815,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     }
 
-    // 2. Check recent Exit Denied in auditLogs
-    const deniedExit = (state.auditLogs || []).find(l => 
-      (l.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm &&
-      (l.action === 'Exit Denied' || (l.action && l.action.toLowerCase().includes('exit') && l.action.toLowerCase().includes('denied')))
-    );
-    if (deniedExit) {
-      return {
-        type: 'exit_denied',
-        badge: 'EXIT BLOCKED',
-        reason: deniedExit.notes || 'Exit Denied at gate verification',
-        gatePoint: deniedExit.gatePoint,
-        id: deniedExit.id,
-        guard: deniedExit.guardName
-      };
-    }
-
+    // Current holds come from cases/standing; historical denials are not current restrictions.
     // 3. Check vehicle record standing
     const veh = (state.vehicles || []).find(v => 
       (v.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm
@@ -1887,6 +1873,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function toggleVehicleRegistrationStatus(vehicle) {
+    if (vehicle._statusPending) return;
     if (vehicle.isBanned) {
       if (window.SPAlert) {
         SPAlert.warning({
@@ -1912,16 +1899,23 @@ document.addEventListener('DOMContentLoaded', () => {
       : confirm(`Are you sure you want to change pass status of ${vehicle.plateNumber} to ${nextStatus}?`);
 
     if (confirmed) {
-      vehicle.registrationStatus = nextStatus;
-      renderVehiclesTable();
-      updateCounts();
-      renderDashboard();
-      showToast(`Pass for ${vehicle.plateNumber} is now ${actionDesc}.`, 'success');
-
-      if (window.ApiClient && vehicle.id) {
-        ApiClient.toggleVehicleStatus(vehicle.id).catch(err => {
-          console.warn('[App] API status sync notice:', err.message);
-        });
+      vehicle._statusPending = true;
+      let savedOnServer = false;
+      try {
+        const saved = await ApiClient.toggleVehicleStatus(vehicle.id);
+        savedOnServer = true;
+        if (saved) applyServerPass(vehicle, saved);
+        vehicle.registrationStatus = saved?.registrationStatus || saved?.registration_status || nextStatus;
+        renderVehiclesTable();
+        updateCounts();
+        renderDashboard();
+        showToast(`Pass for ${vehicle.plateNumber} is now ${actionDesc}.`, 'success');
+      } catch (err) {
+        showToast(savedOnServer
+          ? 'Pass status changed, but the fleet display could not update. Refresh the fleet before another action.'
+          : `Pass status was not changed: ${err.message}`, 'error');
+      } finally {
+        vehicle._statusPending = false;
       }
     }
   }
@@ -2056,7 +2050,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </button>
             ${isHeld ? `
               <button type="button" class="resolve-btn admin-only px-2.5 py-1 rounded text-xs font-semibold text-ncst-greenDark bg-ncst-greenLight border border-ncst-green/30 hover:bg-ncst-greenLight/80 shadow-xs transition-colors">
-                Clear & Unblock
+                Review case
               </button>
             ` : ''}
           </div>
@@ -2079,46 +2073,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('incidentStatusFilter')?.addEventListener('change', renderIncidentsTable);
 
   async function resolveIncident(inc) {
-    const notes = await SPAlert.prompt({
-      title: 'Clear & Unblock Vehicle?',
-      html: `<div style="text-align:left"><div><strong>${escapeHtml(inc.plateNumber)}</strong> &middot; <span style="font-family:'JetBrains Mono',monospace">${escapeHtml(inc.caseNumber)}</span></div>
-        <div>Reason: ${escapeHtml(inc.reason)}</div></div>
-        <div style="margin-top:0.5rem">Releasing the hold lets this vehicle through the gate again. Your statement is saved in the audit trail.</div>`,
-      label: 'Resolution statement',
-      value: 'Identity and authorization confirmed with registered owner.',
-      confirmText: 'Clear & Unblock',
-      requiredMessage: 'A resolution statement is required.'
-    });
-    if (notes === null) return;
-
-    // The server decides first: a ban tied to a pending violation can only be lifted in Violations & Penalties
-    if (window.ApiClient && inc.id) {
-      try {
-        await ApiClient.resolveIncident(inc.id, notes);
-      } catch (err) {
-        if (err.code === 'VIOLATION_PENDING') {
-          await SPAlert.warning({ title: 'Resolve the violation first', text: err.message, confirmText: 'Understood' });
-        } else {
-          await SPAlert.error({ title: 'Could not clear the hold', text: err.message || 'The server did not accept the resolution. Please try again.' });
-        }
-        return;
-      }
-    }
-
-    const resolverLabel = (window.SPAuth && SPAuth.label()) || 'Security Administrator';
-    inc.status = 'Resolved';
-    inc.notes = (inc.notes || '') + ` [Resolved by ${resolverLabel}: ${notes}]`;
     closeDrawer();
-    renderIncidentsTable();
-    renderDashboard();
-    // Vehicles, logs and cases exactly as the server now has them (no guessed local state)
-    loadInitialDataFromApi(true, true);
-
-    SPAlert.success({
-      title: 'Vehicle Unblocked',
-      text: `${inc.plateNumber} was cleared and the gate hold was released.`,
-      timer: 2600
-    });
+    try {
+    if (window.SPCases) {
+      const rows = await ApiClient.getCases({ plate: inc.plateNumber, status: 'all' });
+      const linked = rows.cases.find(c => Number(c.incidentId) === Number(inc.id));
+      if (linked) return SPCases.open(linked.key);
+    }
+    SP.showToast('Open Cases and review the related record before resolving it.', 'warning');
+    } catch (err) { SP.showToast(err.message || 'Could not load the case. Please retry.', 'error'); }
   }
 
   /* ==========================================================================
@@ -2381,7 +2344,7 @@ document.addEventListener('DOMContentLoaded', () => {
         eventTitleClass = 'font-bold text-amber-800';
       }
 
-      const campusStateSubtext = log.status === 'Inside Campus' ? 'Currently on campus' : (log.status === 'Exited' ? 'Departed campus' : (log.status || 'Movement logged'));
+      const campusStateSubtext = log.status === 'Inside Campus' ? 'Inside after this event' : (log.status === 'Exited' ? 'Outside after this event' : (log.status || 'Movement logged'));
 
       // 4. Vehicle Column
       const plateHtml = `
@@ -2762,6 +2725,7 @@ document.addEventListener('DOMContentLoaded', () => {
       vipGrantedBy: v.vipGrantedBy || null,
       vipGrantedAt: v.vipGrantedAt || null,
       isBanned: !!v.isBanned,
+      standing: v.standing || null,
       isRetired: !!v.isRetired,
       retiredReason: v.retiredReason || null,
       entryTime: entryTime,
@@ -2959,7 +2923,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
           Replace Pass
         </button>
-        ${v.isBanned && v.status === 'Inside Campus' ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
+        ${v.standing?.releaseEligible ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
         ${v.isRetired ? '' : `<button id="drawerRetireBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="The owner sold or no longer uses this vehicle. History is kept.">Retire</button>`}
         <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
           <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3146,7 +3110,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isHeld) {
       footerHtml = `
         <button id="drawerResolveBtn" class="admin-only px-3 py-1.5 rounded-md bg-ncst-green hover:bg-ncst-greenDark text-white text-xs font-semibold">
-          Clear & Unblock
+          Review case
         </button>
         <button id="drawerCancelBtnInner" class="px-3 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700">
           Close
@@ -3699,12 +3663,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Edit Vehicle Form Submission
   if (editVehicleForm) {
-    editVehicleForm.addEventListener('submit', (e) => {
+    editVehicleForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const saveButton = document.getElementById('saveEditVehicleBtn');
+      if (saveButton?.disabled) return;
       const targetId = editVehicleId.value;
       const v = state.vehicles.find(item => String(item.id) === String(targetId));
       if (!v) return;
-      const beforeSave = { ...v };
       const requestedVip = editPassClassVip ? editPassClassVip.checked : Boolean(v.isVip);
 
       const ownerRole = editOwnerRole ? editOwnerRole.value : (v.ownerRole || 'Student');
@@ -3759,85 +3724,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
-      // Update in-memory vehicle record
-      v.plateNumber = plateNumber;
-      v.plate_number = plateNumber;
-      v.ownerName = ownerFullName;
-      v.owner_name = ownerFullName;
-      v.ownerRole = ownerRole;
-      v.owner_role = ownerRole;
-      v.ownerIdNumber = ownerIdNumber;
-      v.owner_id_number = ownerIdNumber;
-      v.department = department;
-      v.ownerPhone = ownerPhone;
-      v.owner_phone = ownerPhone;
-      v.ownerEmail = ownerEmail;
-      v.owner_email = ownerEmail;
-      v.vehicleType = vehicleCategory;
-      v.vehicle_type = vehicleCategory;
-      v.makeModelColor = makeModelColor;
-      v.make_model_color = makeModelColor;
-      v.stickerYear = stickerYear;
-      v.sticker_year = stickerYear;
-      // VIP status stays server-confirmed until the update succeeds.
-      v.registrationStatus = registrationStatus;
-      v.registration_status = registrationStatus;
-      v.ownerPhoto = editOwnerPhotoDataUrl;
-      v.owner_photo = editOwnerPhotoDataUrl;
-      v.ownerPhotoUrl = editOwnerPhotoDataUrl;
-      v.vehiclePhoto = editVehiclePhotoDataUrl;
-      v.vehicle_photo = editVehiclePhotoDataUrl;
-      v.authorizedDrivers = authorizedDrivers;
-
-      closeEditModal();
-      renderVehiclesTable();
-      updateCounts();
-      renderDashboard();
-      showToast(`Saving changes for ${v.plateNumber}…`);
-
-      // Sync with InfinityFree backend API
-      if (window.ApiClient && v.id) {
-        ApiClient.updateVehicle(v.id, {
-          plateNumber: v.plateNumber,
-          plate_number: v.plateNumber,
-          vehicleType: v.vehicleType,
-          category: v.vehicleType && v.vehicleType.toLowerCase().includes('motorcycle') ? 'motorcycle' : (v.vehicleType && v.vehicleType.toLowerCase().includes('bicycle') ? 'non-plated' : 'plated'),
-          makeModelColor: v.makeModelColor,
-          ownerName: v.ownerName,
-          ownerRole: v.ownerRole,
-          department: v.department,
-          ownerIdNumber: v.ownerIdNumber,
-          ownerPhone: v.ownerPhone,
-          ownerEmail: v.ownerEmail,
-          stickerYear: v.stickerYear,
-          ...(passDateChanged ? { passValidUntil: newPassDate } : {}),
-          passClass: requestedVip ? 'VIP' : 'Standard',
-          registrationStatus: v.registrationStatus,
-          ownerPhoto: v.ownerPhoto,
-          vehiclePhoto: v.vehiclePhoto,
-          authorizedDrivers: v.authorizedDrivers
-        }).then((saved) => {
-          const wasUnpaid = v.paymentStatus === 'Unpaid';
-          if (saved) applyServerPass(v, saved);
-          renderVehiclesTable();
-          updateCounts();
-          renderDashboard();
-          if (!wasUnpaid && v.paymentStatus === 'Unpaid') {
-            // The edit moved the vehicle into a higher fee class: the difference is due before it can enter again
-            showToast(`Changes saved. ${v.plateNumber} now owes ₱${Number(v.feeAmount).toLocaleString('en-PH')} (fee difference) and cannot enter until it is paid at the Cashier or online.`, 'warning');
-            document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
-          } else {
-            showToast(`Changes saved for ${v.plateNumber}.`);
-          }
-          console.log('[App] Vehicle updated on server:', v.plateNumber);
-        }).catch(err => {
-          console.warn('[App] Update API sync notice:', err.message);
-          Object.assign(v, beforeSave);
-          renderVehiclesTable();
-          updateCounts();
-          renderDashboard();
-          showToast(`Changes were not saved: ${err.message}`);
+      const payload = {
+        plateNumber, plate_number: plateNumber, vehicleType: vehicleCategory,
+        category: vehicleCategory.toLowerCase().includes('motorcycle') ? 'motorcycle' : (vehicleCategory.toLowerCase().includes('bicycle') ? 'non-plated' : 'plated'),
+        makeModelColor, ownerName: ownerFullName, ownerRole, department,
+        ownerIdNumber, ownerPhone, ownerEmail, stickerYear,
+        ...(passDateChanged ? { passValidUntil: newPassDate } : {}),
+        passClass: requestedVip ? 'VIP' : 'Standard', registrationStatus,
+        ownerPhoto: editOwnerPhotoDataUrl, vehiclePhoto: editVehiclePhotoDataUrl,
+        authorizedDrivers
+      };
+      if (saveButton) saveButton.disabled = true;
+      let savedOnServer = false;
+      try {
+        const wasUnpaid = v.paymentStatus === 'Unpaid';
+        const saved = await ApiClient.updateVehicle(v.id, payload);
+        savedOnServer = true;
+        Object.assign(v, {
+          plateNumber, plate_number: plateNumber, ownerName: ownerFullName, owner_name: ownerFullName,
+          ownerRole, owner_role: ownerRole, ownerIdNumber, owner_id_number: ownerIdNumber,
+          department, ownerPhone, owner_phone: ownerPhone, ownerEmail, owner_email: ownerEmail,
+          vehicleType: vehicleCategory, vehicle_type: vehicleCategory,
+          makeModelColor, make_model_color: makeModelColor, stickerYear, sticker_year: stickerYear,
+          registrationStatus, registration_status: registrationStatus,
+          ownerPhoto: editOwnerPhotoDataUrl, owner_photo: editOwnerPhotoDataUrl, ownerPhotoUrl: editOwnerPhotoDataUrl,
+          vehiclePhoto: editVehiclePhotoDataUrl, vehicle_photo: editVehiclePhotoDataUrl, authorizedDrivers
         });
+        if (saved) applyServerPass(v, saved);
+        closeEditModal();
+        renderVehiclesTable(); updateCounts(); renderDashboard();
+        if (!wasUnpaid && v.paymentStatus === 'Unpaid') {
+          showToast(`Changes saved. ${v.plateNumber} now owes ₱${Number(v.feeAmount).toLocaleString('en-PH')} (fee difference) and cannot enter until it is paid at the Cashier or online.`, 'warning');
+          document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
+        } else {
+          showToast(`Changes saved for ${v.plateNumber}.`, 'success');
+        }
+      } catch (err) {
+        showToast(savedOnServer
+          ? 'Changes were saved, but the fleet display could not update. Refresh before editing again.'
+          : `Changes were not saved: ${err.message}`, 'error');
+      } finally {
+        if (saveButton) saveButton.disabled = false;
       }
     });
   }
@@ -4219,24 +4146,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Handle Form Submission
   if (vehicleForm) {
-    vehicleForm.addEventListener('submit', (e) => {
+    vehicleForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const submitButton = document.getElementById('submitVehicleBtn');
+      if (submitButton?.disabled) return;
 
       const plateNumber = plateInput.value.trim().toUpperCase();
 
       // Check duplicate plate
       if (state.vehicles.some(v => v.plateNumber === plateNumber)) {
-        showToast(`Error: Plate ${plateNumber} is already registered!`);
+        plateValidationMsg.textContent = `Plate ${plateNumber} is already registered.`;
+        plateValidationMsg.classList.remove('hidden');
         plateInput.focus();
-        return;
-      }
-
-      // One vehicle per ID number (the server enforces this too)
-      const enteredOwnerId = document.getElementById('ownerIdNumber').value.trim().toUpperCase();
-      const ownerTaken = enteredOwnerId && state.vehicles.find(v => String(v.ownerIdNumber || v.owner_id_number || '').trim().toUpperCase() === enteredOwnerId);
-      if (ownerTaken) {
-        showToast(`ID ${enteredOwnerId} already has a registered vehicle (${ownerTaken.plateNumber}). Only one vehicle can be registered per ID number.`, 'warning');
-        document.getElementById('ownerIdNumber').focus();
         return;
       }
 
@@ -4312,17 +4233,10 @@ document.addEventListener('DOMContentLoaded', () => {
         authorizedDrivers
       };
 
-      // Add to Registered Fleet (gate passages are only recorded when vehicle actually enters at a gate)
-      state.vehicles.unshift(newVehicle);
-
-      showToast(`Vehicle ${plateNumber} enrolled successfully.`);
-      updateCounts();
-      renderDashboard();
-      renderFullAuditTable();
-
-      // Synchronize with InfinityFree Backend API
-      if (window.ApiClient) {
-        ApiClient.registerVehicle({
+      if (submitButton) submitButton.disabled = true;
+      let savedOnServer = false;
+      try {
+        const res = await ApiClient.registerVehicle({
           plateNumber,
           vehicleType: newVehicle.vehicleType,
           category: newVehicle.category,
@@ -4338,10 +4252,12 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhoto: ownerPhotoDataUrl,
           vehiclePhoto: vehiclePhotoDataUrl,
           authorizedDrivers
-        }).then(res => {
+        });
+          savedOnServer = true;
           if (res && res.id) newVehicle.id = res.id;
           if (res) applyServerPass(newVehicle, res);
-          console.log('[App] Vehicle enrolled on backend:', res);
+          state.vehicles.unshift(newVehicle);
+          updateCounts(); renderDashboard(); renderVehiclesTable(); renderFullAuditTable();
           if (res && res.paymentStatus === 'Unpaid') {
             newVehicle.paymentStatus = 'Unpaid';
             newVehicle.feeAmount = res.feeAmount;
@@ -4355,29 +4271,25 @@ document.addEventListener('DOMContentLoaded', () => {
           const acct = res && res.studentAccount;
           if (acct && acct.tempPassword && window.SPTempPassword) {
             SPTempPassword(`Student portal login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
+          } else if (acct?.error) {
+            showToast(`${plateNumber} was registered, but the owner login was not created. Issue it from the vehicle record.`, 'warning');
           }
-        }).catch(err => {
-          console.warn('[App] Registration was not saved:', err.message);
-          if (err.status >= 400 && err.status < 500) {
-            // The server refused it (e.g. the ID already has a vehicle): drop the optimistic local row
-            state.vehicles = state.vehicles.filter(x => x !== newVehicle);
-            updateCounts();
-            renderDashboard();
-            renderVehiclesTable();
-            showToast(`${plateNumber} was not registered: ${err.message}`, 'warning');
-          } else {
-            showToast(`Notice: Saved locally, server sync error: ${err.message}`);
-          }
-        });
+          vehicleForm.reset();
+          resetDriverFields(); resetOwnerPhoto(); resetVehiclePhoto();
+          plateValidationMsg.classList.add('hidden');
+          plateInput.classList.remove('border-ncst-crimson');
+      } catch (err) {
+        if (!savedOnServer && err.status === 409 && /plate.*already registered/i.test(err.message)) {
+          plateValidationMsg.textContent = err.message;
+          plateValidationMsg.classList.remove('hidden');
+          plateInput.focus();
+        }
+        showToast(savedOnServer
+          ? 'Vehicle was registered, but the fleet display could not update. Refresh before taking another action.'
+          : `Vehicle was not confirmed: ${err.message} Check the fleet before retrying.`, 'error');
+      } finally {
+        if (submitButton) submitButton.disabled = false;
       }
-
-      // Reset form
-      vehicleForm.reset();
-      resetDriverFields();
-      resetOwnerPhoto();
-      resetVehiclePhoto();
-      plateValidationMsg.classList.add('hidden');
-      plateInput.classList.remove('border-ncst-crimson');
 
     });
   }
@@ -5148,16 +5060,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!window.ApiClient) return;
     try {
       const needVehicles = !silent || forceVehicles || (Date.now() - lastVehiclesLoad) >= VEHICLES_REFRESH_MS;
-      const [vehicles, logs, incidents, visitors, onCampus] = await Promise.all([
+      const [vehicles, logs, incidents, visitors, onCampus, stats] = await Promise.all([
         needVehicles ? ApiClient.getVehicles().catch(error => { if (strict) throw error; return null; }) : Promise.resolve(null),
         ApiClient.getLogs().catch(error => { if (strict) throw error; return null; }),
         ApiClient.getIncidents().catch(error => { if (strict) throw error; return null; }),
         ApiClient.getVisitorPasses().catch(error => { if (strict) throw error; return null; }),
-        ApiClient.getOnCampus().catch(error => { if (strict) throw error; return null; })
+        ApiClient.getOnCampus().catch(error => { if (strict) throw error; return null; }),
+        ApiClient.getStats().catch(error => { if (strict) throw error; return null; })
       ]);
 
       if (mine !== coreLoadGeneration || (window.SPAuth && !SPAuth.isAuthenticated())) return;
-      let hasUpdate = false;
+      state.stats = stats;
+      let hasUpdate = !!stats;
       if (vehicles && Array.isArray(vehicles)) {
         state.vehicles = vehicles.map(v => normalizeVehicle(v));
         lastVehiclesLoad = Date.now();

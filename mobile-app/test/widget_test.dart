@@ -1,15 +1,46 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:systemforinteg/features/scanner/screens/qr_scanner_screen.dart';
+import 'package:systemforinteg/features/splash/screens/launch_screen.dart';
 import 'package:systemforinteg/main.dart';
 
 void main() {
-  testWidgets('NCST Gate Security App renders Login screen by default', (WidgetTester tester) async {
-    // 1. Launch App
+  Future<void> launchToLogin(WidgetTester tester) async {
     await tester.pumpWidget(const NcstGateSecurityApp());
-    await tester.pump();
+    expect(find.byType(LaunchScreen), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.byType(LaunchScreen), findsNothing);
+  }
 
-    // 2. Verify Login Screen elements
+  testWidgets('Branded splash animates into sign-in without a Flutter placeholder', (WidgetTester tester) async {
+    await tester.pumpWidget(const NcstGateSecurityApp());
+    expect(find.byType(LaunchScreen), findsOneWidget);
+    expect(find.text('NCST SECUREPARK'), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('SIGN IN TO GATE TERMINAL'), findsNothing);
+
+    await tester.pumpAndSettle();
+    expect(find.byType(LaunchScreen), findsNothing);
+    expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Launch screen fits a compact phone before and after animation', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const NcstGateSecurityApp());
+    expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('NCST Gate Security App renders Login screen after launch', (WidgetTester tester) async {
+    await launchToLogin(tester);
+
     expect(find.text('NCST SECUREPARK'), findsOneWidget);
     expect(find.text('Gate Security Terminal'), findsOneWidget);
     expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
@@ -24,8 +55,7 @@ void main() {
   });
 
   testWidgets('Signing in with empty fields is refused and stays on the Login screen', (WidgetTester tester) async {
-    await tester.pumpWidget(const NcstGateSecurityApp());
-    await tester.pump();
+    await launchToLogin(tester);
 
     await tester.tap(find.text('SIGN IN TO GATE TERMINAL'));
     await tester.pumpAndSettle();
@@ -74,8 +104,7 @@ void main() {
   });
 
   testWidgets('Guard 1 can open the shared IN / OUT scanner', (WidgetTester tester) async {
-    await tester.pumpWidget(const NcstGateSecurityApp());
-    await tester.pump();
+    await launchToLogin(tester);
 
     // 1. Initial State: On Login Screen
     expect(find.text('SIGN IN TO GATE TERMINAL'), findsOneWidget);
@@ -94,8 +123,7 @@ void main() {
   });
 
   testWidgets('Guard 2 can open the same IN / OUT scanner and visitor tools', (WidgetTester tester) async {
-    await tester.pumpWidget(const NcstGateSecurityApp());
-    await tester.pump();
+    await launchToLogin(tester);
 
     // 1. Type the exit guard's credentials
     await tester.enterText(find.byType(TextFormField).at(0), 'guard2');

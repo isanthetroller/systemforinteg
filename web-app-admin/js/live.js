@@ -7,7 +7,7 @@
     let el = document.getElementById('liveSyncStatus');
     if (!el) { el = document.createElement('div'); el.id = 'liveSyncStatus'; el.setAttribute('role','status'); el.style.cssText='position:fixed;bottom:12px;right:16px;z-index:60;padding:8px 12px;border-radius:8px;background:#fff5e8;color:#854d0e;font-size:12px;box-shadow:0 2px 8px #0002'; document.body.append(el); }
     el.hidden = state === 'live';
-    el.textContent = state === 'offline' ? 'Connection lost. Showing earlier information.' : state === 'changed' ? 'This record changed. Check the latest information before saving.' : 'Updating information…';
+    el.textContent = state === 'offline' ? 'Live updates are unavailable. Displayed information may be out of date. Trying again…' : state === 'changed' ? 'This record changed. Check the latest information before saving.' : 'Updating information…';
   };
   async function tick() {
     clearTimeout(timer);
@@ -43,5 +43,6 @@
   document.addEventListener('sp:app-ready', () => SPAuth.whenAuthenticated(() => SPLive.start()));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) SPLive.wake(); else clearTimeout(timer); });
   window.addEventListener('online', () => SPLive.wake());
+  window.addEventListener('sp:cached-data', () => status('offline'));
   window.addEventListener('sp:auth-required', () => { generation++; clearTimeout(timer); revisions = null; });
 })();
