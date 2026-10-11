@@ -1,9 +1,9 @@
 # SecurePark session change report
 
-**Date:** 11 October 2026 (Asia/Manila)  
-**Repository:** https://github.com/isanthetroller/systemforinteg  
-**Delivery branch:** `feature/dashboard-ui-updates-20261011`  
-**Test deployment:** https://ncstparking-test.rf.gd/
+- **Date:** 11 October 2026 (Asia/Manila)
+- **Repository:** https://github.com/isanthetroller/systemforinteg
+- **Delivery branch:** `feature/dashboard-ui-updates-20261011`
+- **Test deployment:** https://ncstparking-test.rf.gd/
 
 ## 1. Scope and reading guide
 
