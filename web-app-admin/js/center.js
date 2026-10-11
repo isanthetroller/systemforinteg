@@ -166,6 +166,7 @@
 
   /* ---------------------------------------------------------------- Settings */
   const HELP = {
+    event_gate_mode: 'Normal: Gate 1 entry and Gate 2 exit. Event: entry and exit at both gates. A reason is required when changing mode.',
     parking_capacity: 'The gate and dashboard warn from 90% full. 0 means no limit.',
     renewal_window_days: 'Owners and the cashier can renew a pass this many days before it expires.',
     expiry_warning_days: 'Owners get an e-mail and a portal notice this many days before the pass expires.',
@@ -181,8 +182,9 @@
         <div class="flex flex-col sm:flex-row sm:items-center gap-2 px-4 py-3">
           <div class="flex-1 min-w-0"><label for="set_${esc(s.key)}" class="text-xs font-bold text-slate-800">${esc(s.label)}</label>
             <div class="text-[11px] text-slate-500">${esc(HELP[s.key] || '')} Default ${s.default}.</div></div>
-          <input id="set_${esc(s.key)}" name="${esc(s.key)}" type="number" min="${s.min}" max="${s.max}" step="1" value="${s.value}" class="${input} w-28 text-right">
+          ${s.key === 'event_gate_mode' ? `<select id="set_event_gate_mode" name="event_gate_mode" class="${input}"><option value="0" ${s.value === 0 ? 'selected' : ''}>Normal operation</option><option value="1" ${s.value === 1 ? 'selected' : ''}>Event: both directions at both gates</option></select>` : `<input id="set_${esc(s.key)}" name="${esc(s.key)}" type="number" min="${s.min}" max="${s.max}" step="1" value="${s.value}" class="${input} w-28 text-right">`}
         </div>`).join('')}
+        <div class="px-4 py-3"><label for="gateModeReason" class="text-xs font-bold">Reason for changing gate operation</label><input id="gateModeReason" name="reason" maxlength="500" class="${input} w-full" placeholder="Required when switching normal/event operation"></div>
         <div class="px-4 py-3 flex justify-end"><button type="submit" class="${navy}">Save settings</button></div></form>
       <div class="bg-white border border-slate-200 rounded-lg shadow-2xs px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2">
         <div class="flex-1 min-w-0"><div class="text-xs font-bold text-slate-800">E-mail to owners</div>
@@ -193,6 +195,10 @@
   }
 
   async function saveSettings(form) {
+    if (form.dataset.saving === 'true') return;
+    form.dataset.saving = 'true';
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
     const values = {};
     new FormData(form).forEach((v, k) => { values[k] = v; });
     try {
@@ -202,6 +208,7 @@
       load();
     } catch (err) {
       if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); }
+    finally { form.dataset.saving = 'false'; button.disabled = false; }
   }
 
   /* ---------------------------------------------------------------- Wiring */

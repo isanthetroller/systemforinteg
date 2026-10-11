@@ -36,6 +36,7 @@ function caseDetail($pdo, $key, $isAdmin) {
     $stmt->execute([normalizePlate($plate)]);
     $veh = $stmt->fetch();
     $summary['vehicle'] = $veh ? ['id' => (int)$veh['id'], 'status' => $veh['status'], 'isBanned' => (int)$veh['is_banned'] === 1] : null;
+    if ($veh) $summary['vehicle']['standing'] = vehicleStanding($pdo, findVehicleById($pdo, $veh['id']));
     if ($veh && !$summary['ownerPhone']) $summary['ownerPhone'] = $veh['owner_phone'];
     $summary['ownerKnown'] = (bool)$veh;
     $summary['approvalPending'] = $loaded['kind'] === 'violation' && (bool)pendingApproval($pdo, 'violation_dismiss', null, $summary['violationId']);
@@ -179,7 +180,7 @@ switch ($action) {
             sendResponse(500, null, 'Could not close the case.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));
         }
         auditLog($pdo, $staff, 'case.close', ['entityType' => 'case', 'plate' => $plate, 'detail' => "{$key} ({$case['title']}) closed: {$outcome}", 'reason' => $notes]);
-        $message = $lifted ? "Case closed. {$plate} can enter and leave campus again." : "Case closed. {$plate} still has another open case.";
+        $message = 'Case closed. ' . caseStandingMessage($pdo, $plate);
         break;
 
     default:

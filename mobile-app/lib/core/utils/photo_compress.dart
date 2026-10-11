@@ -10,8 +10,8 @@ class PhotoCompress {
   /// The largest result we send (the server limit is 600 KB).
   static const int maxBytes = 550000;
 
-  /// Re-encodes [bytes] as a JPEG no wider than [maxWidth]. Returns the original bytes when they are already small
-  /// enough and cannot be decoded, or null when the photo is too large and cannot be shrunk.
+  /// Re-encodes a valid image as a JPEG no wider than [maxWidth].
+  /// Returns null for unreadable images or photos that cannot meet the server limit.
   static Uint8List? shrinkJpeg(Uint8List bytes, {int maxWidth = 1024, int quality = 70}) {
     try {
       final decoded = img.decodeImage(bytes);
@@ -27,7 +27,7 @@ class PhotoCompress {
     } catch (e) {
       debugPrint('[PhotoCompress] could not shrink the photo: $e');
     }
-    return bytes.length <= maxBytes ? bytes : null;
+    return null;
   }
 
   /// "data:image/jpeg;base64,...." for sending in a JSON body.

@@ -104,5 +104,13 @@ EXPIRATION: 2029-01-01
       expect(IdOcrParser.extractPlateFromOcr('NC 12345'), equals('NC-12345'));
       expect(IdOcrParser.extractPlateFromOcr('123 ABC'), equals('123-ABC'));
     });
+
+    test('plate fallback refuses camera text that is not a plate', () {
+      expect(IdOcrParser.extractPlateFromPayload('PILIPINAS'), isEmpty);
+      expect(IdOcrParser.extractPlateFromPayload('No plate detected'), isEmpty);
+      expect(IdOcrParser.extractPlateFromPayload(''), isEmpty);
+      expect(IdOcrParser.extractPlateFromPayload('ABC-1234'), 'ABC-1234');
+      expect(IdOcrParser.extractPlateFromPayload('AB12C3'), 'AB12C3');
+    });
   });
 }

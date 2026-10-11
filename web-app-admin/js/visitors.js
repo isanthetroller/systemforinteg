@@ -53,7 +53,7 @@
       return '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300"><span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>Cancelled (still inside)</span>';
     }
     if (p.status === 'Revoked') {
-      const lbl = p.exitTime ? 'Cancelled (left campus)' : 'Cancelled';
+      const lbl = p.exitTime ? 'Completed' : 'Cancelled';
       return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>${lbl}</span>`;
     }
     if (p.status === 'Active' && p.isInside) {

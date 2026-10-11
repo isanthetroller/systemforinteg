@@ -167,9 +167,7 @@ function handleUpdateViolation($pdo, $admin) {
     $verb = $action === 'resolve' ? 'resolved' : 'dismissed';
     auditLog($pdo, $admin, $action === 'resolve' ? 'violation.resolve' : 'violation.dismiss', ['entityType' => 'violation', 'entityId' => (int)$violation['id'],
         'plate' => $plate, 'detail' => $violation['violation_type'] . ($action === 'dismiss' ? ' (no second administrator was available to approve)' : ''), 'reason' => $notes]);
-    $message = $outcome['holdLifted']
-        ? "Violation {$verb}. {$plate} can enter and leave campus again."
-        : "Violation {$verb}. {$plate} still has another pending violation.";
+    $message = "Violation {$verb}. " . caseStandingMessage($pdo, $plate);
 
     sendResponse(200, [
         'violation' => formatViolation(fetchViolation($pdo, $violation['id'])),

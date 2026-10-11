@@ -89,18 +89,25 @@ const ApiClient = (function() {
       headers['X-Auth-Token'] = token; // fallback for hosts that strip Authorization
     }
 
-    if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+    const requestOptions = { ...options };
+    if (requestOptions.body && typeof requestOptions.body === 'object' && !(requestOptions.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
-      options.body = JSON.stringify(options.body);
+      requestOptions.body = JSON.stringify(requestOptions.body);
     }
 
     let res, text;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), (options.method || 'GET').toUpperCase() === 'GET' ? 30000 : 60000);
     try {
-      res = await fetch(url, { ...options, headers, credentials: 'include' });
+      res = await fetch(url, { ...requestOptions, headers, credentials: 'include', signal: controller.signal });
       text = await res.text();
     } catch (err) {
       console.warn(`[ApiClient] Request to ${endpoint} failed:`, err.message);
-      throw err;
+      throw new Error(err.name === 'AbortError'
+        ? 'The request took too long. Check the latest information before trying again.'
+        : 'Could not reach the server. Check your connection and try again.');
+    } finally {
+      clearTimeout(timeout);
     }
 
     let json = null;
@@ -115,23 +122,27 @@ const ApiClient = (function() {
           return request(endpoint, options, retries - 1);
         }
       }
-      if (text.includes('<!DOCTYPE') || text.includes('<html')) {
-        throw new Error('API server returned HTML. Check InfinityFree DB connection or domain.');
-      }
-      // Say what came back (status and the first characters) so a server problem can be diagnosed from the message
-      const peek = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-      throw new Error(`Unexpected API response from ${endpoint} (HTTP ${res.status}${peek ? ': ' + peek : ', empty reply'})`);
+      throw new Error('The server is not responding correctly. Please try again later.');
+    }
+
+    if (!json || typeof json !== 'object' || typeof json.success !== 'boolean') {
+      throw new Error('The server sent an unexpected response. Please try again later.');
+    }
+    if (res.ok && !json.success) {
+      throw new Error('The server could not complete the request. Please try again.');
     }
 
     if (!res.ok) {
-      const err = new Error(json.message || `HTTP ${res.status}`);
+      const err = new Error(res.status >= 500
+        ? 'The service is temporarily unavailable. Please try again later.'
+        : (json.message || 'The request could not be completed.'));
       err.status = res.status;
       err.code = json.data && json.data.code ? json.data.code : null;
       err.data = json.data || null;
 
       if (res.status === 401 && !endpoint.startsWith('auth.php?action=login')) {
         clearToken();
-        window.dispatchEvent(new CustomEvent('sp:auth-required', { detail: { message: err.message } }));
+        window.dispatchEvent(new CustomEvent('sp:auth-required', { detail: { message: 'Your session has ended. Please sign in again.' } }));
       } else if (res.status === 403 && err.code === 'PASSWORD_CHANGE_REQUIRED') {
         window.dispatchEvent(new CustomEvent('sp:password-change-required'));
       }
@@ -307,20 +318,7 @@ const ApiClient = (function() {
     },
 
     // Metrics & KPIs
-    getStats: async () => {
-      try {
-        const res = await request('stats.php');
-        try { localStorage.setItem('sp_cache_stats', JSON.stringify(res.data)); } catch (_) {}
-        return res.data;
-      } catch (err) {
-        if (isAuthError(err)) throw err;
-        try {
-          const cached = localStorage.getItem('sp_cache_stats');
-          if (cached) return JSON.parse(cached);
-        } catch (_) {}
-        throw err;
-      }
-    },
+    getStats: async () => (await request('stats.php')).data,
 
     // Vehicle Directory
     getVehicles: async (params = {}) => {
@@ -337,6 +335,7 @@ const ApiClient = (function() {
             const cached = localStorage.getItem('sp_cache_vehicles');
             if (cached) {
               console.info('[ApiClient] Using cached vehicle fleet data.');
+              window.dispatchEvent(new CustomEvent('sp:cached-data'));
               return JSON.parse(cached);
             }
           } catch (_) {}
@@ -384,10 +383,12 @@ const ApiClient = (function() {
     },
 
     // Gate verification: { qrCode } or { plate }, gateType 'Ingress' | 'Egress'
-    verifyPass: async ({ qrCode = '', plate = '' }, gateType = 'Ingress') => {
+    getGatePolicy: async (checkpoint = '') => (await request('gate_policy.php?checkpoint=' + encodeURIComponent(checkpoint))).data,
+    getPublicSettings: async () => (await request('settings.php')).data,
+    verifyPass: async ({ qrCode = '', plate = '', checkpoint = '' }, gateType = 'Ingress') => {
       const res = await request('verify.php', {
         method: 'POST',
-        body: { qr_code: qrCode, plate: plate, gate_type: gateType }
+        body: { qr_code: qrCode, plate: plate, gate_type: gateType, checkpoint }
       });
       return res.data;
     },
@@ -471,6 +472,10 @@ const ApiClient = (function() {
     },
 
     // Gate Audit Logs
+    getGateRecords: async (params = {}) => {
+      const qs = new URLSearchParams({paginated: '1', ...params}).toString();
+      return (await request(`logs.php?${qs}`, {cache: 'no-store'})).data;
+    },
     getLogs: async (params = {}) => {
       const qs = new URLSearchParams(params).toString();
       try {
@@ -483,7 +488,10 @@ const ApiClient = (function() {
         if (!freshReadDepth && !qs && !isAuthError(err)) {
           try {
             const cached = localStorage.getItem('sp_cache_logs');
-            if (cached) return JSON.parse(cached);
+            if (cached) {
+              window.dispatchEvent(new CustomEvent('sp:cached-data'));
+              return JSON.parse(cached);
+            }
           } catch (_) {}
         }
         throw err;
@@ -511,7 +519,10 @@ const ApiClient = (function() {
         if (!freshReadDepth && !qs && !isAuthError(err)) {
           try {
             const cached = localStorage.getItem('sp_cache_incidents');
-            if (cached) return JSON.parse(cached);
+            if (cached) {
+              window.dispatchEvent(new CustomEvent('sp:cached-data'));
+              return JSON.parse(cached);
+            }
           } catch (_) {}
         }
         throw err;

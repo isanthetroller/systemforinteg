@@ -4,6 +4,7 @@ require_once __DIR__ . '/records.php';
 require_once __DIR__ . '/vehicles.php';
 require_once __DIR__ . '/releases.php';
 require_once __DIR__ . '/campus.php';
+require_once __DIR__ . '/gate_policy.php';
 
 function movementRevision($pdo, $plate) {
     $s = $pdo->prepare("SELECT COALESCE(MAX(`id`), 0) FROM `gate_logs` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `action` IN ('Entry Recorded', 'Exit Approved')");
@@ -21,7 +22,7 @@ function movementInside($row, $type, $pdo = null) {
         : !empty($row['entry_time']) && empty($row['exit_time']);
 }
 
-function issueMovementTicket($pdo, $actor, $row, $type, $lookupMethod = 'qr') {
+function issueMovementTicket($pdo, $actor, $row, $type, $lookupMethod = 'qr', $checkpoint = null, $clientRef = null) {
     $inside = movementInside($row, $type, $pdo);
     $snapshot = [
         'v' => 1, 'actor' => (int)$actor['id'], 'type' => $type, 'id' => (int)$row['id'],
@@ -29,8 +30,8 @@ function issueMovementTicket($pdo, $actor, $row, $type, $lookupMethod = 'qr') {
         'revision' => movementRevision($pdo, $row['plate_number']),
         'pass' => $type === 'vehicle' ? ($row['pass_id'] ?? '') : $row['pass_code'],
         'lookup' => $lookupMethod === 'manual' ? 'manual' : 'qr',
-        'checkpoint' => movementCheckpoint($actor), 'expires' => time() + 300,
-        'ref' => 'mv-' . bin2hex(random_bytes(20)),
+        'checkpoint' => gatePolicy($pdo, $actor, $checkpoint, $inside ? 'Egress' : 'Ingress')['checkpoint'], 'expires' => time() + 300,
+        'ref' => $clientRef ?? ('mv-' . bin2hex(random_bytes(20))),
     ];
     $encoded = rtrim(strtr(base64_encode(json_encode($snapshot)), '+/', '-_'), '=');
     $ticket = $encoded . '.' . hash_hmac('sha256', 'movement:' . $encoded, SP_QR_SECRET);
@@ -86,6 +87,7 @@ function confirmMovement($pdo, $actor, array $data) {
     }
     movementBegin($pdo);
     try {
+        lockGatePolicy($pdo);
         $table = $s['type'] === 'vehicle' ? 'vehicles' : 'visitor_passes';
         $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
         $q = $pdo->prepare("SELECT * FROM `{$table}` WHERE `id` = ?" . $lock);
@@ -98,6 +100,9 @@ function confirmMovement($pdo, $actor, array $data) {
             movementEnd($pdo, true);
             return movementResult($log, true, $row, $s['type'], $pdo);
         }
+        $policy = gatePolicy($pdo, $actor, $s['checkpoint'], $s['inside'] ? 'Egress' : 'Ingress');
+        if ($policy['checkpoint'] !== $s['checkpoint']) throw new MovementFailure(409, 'CHECKPOINT_CHANGED', 'Your assigned checkpoint changed. Scan again.');
+        if ($error = gateDirectionError($policy, $s['inside'] ? 'Egress' : 'Ingress')) throw new MovementFailure(403, 'GATE_DIRECTION_DENIED', $error);
         if ($s['expires'] < time()) throw new MovementFailure(409, 'SCAN_EXPIRED', 'This scan has expired. Scan the pass again.');
         if (!$row) throw new MovementFailure(404, 'NOT_FOUND', 'This record is no longer available.');
         $inside = movementInside($row, $s['type'], $pdo);
@@ -139,11 +144,8 @@ function confirmMovement($pdo, $actor, array $data) {
                 $relationship = $d['relationship'];
             }
         } else {
-            if ($row['status'] !== 'Active' || !empty($row['exit_time']) || $row['valid_date'] > $today || (!$inside && $row['valid_date'] !== $today)) {
-                throw new MovementFailure(403, 'VISITOR_PASS_INACTIVE', 'This visitor pass is not active for this movement.');
-            }
+            validateVisitorMovement($pdo, $row, $inside ? 'Egress' : 'Ingress', $data);
             $items = visitorPassItems($pdo, $row['id']);
-            if ($items && empty($data['items_verified'])) throw new MovementFailure(400, 'ITEMS_CHECK_REQUIRED', 'Check every declared item before confirming.');
             if ($items) $notes .= ' | Items checked ' . ($inside ? 'out: ' : 'in: ') . visitorItemsSummary($items);
             $driverName = $row['visitor_name'];
             $relationship = 'Visitor (Day Pass)';
@@ -182,6 +184,42 @@ function confirmMovement($pdo, $actor, array $data) {
         movementEnd($pdo, false);
         throw $e;
     }
+}
+
+/** Shared validation for all online visitor movement writers. */
+function validateVisitorMovement($pdo, $pass, $direction, array $data) {
+    $inside = !empty($pass['entry_time']) && empty($pass['exit_time']);
+    if (($direction === 'Egress') !== $inside) throw new MovementFailure(409, 'VISITOR_STATE_MISMATCH', $direction === 'Egress' ? 'Visitor has no active entry. Check the movement records.' : 'Visitor is already inside campus.');
+    $today = date('Y-m-d');
+    if ($pass['status'] !== 'Active' || !empty($pass['exit_time']) || $pass['valid_date'] > $today || (!$inside && $pass['valid_date'] !== $today)) {
+        throw new MovementFailure(403, 'VISITOR_PASS_INACTIVE', 'This visitor pass is not active for this movement.');
+    }
+    $q = $pdo->prepare("SELECT COUNT(*) FROM `security_incidents` WHERE `status` = 'Held' AND (REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? OR `reason` LIKE ? OR `notes` LIKE ?)");
+    $q->execute([normalizePlate($pass['plate_number']), '%' . $pass['pass_code'] . '%', '%' . $pass['pass_code'] . '%']);
+    if ($q->fetchColumn()) throw new MovementFailure(403, 'SECURITY_HOLD', 'This visitor has an unresolved security hold. Contact an administrator.');
+    if (visitorPassItems($pdo, $pass['id']) && empty($data['items_verified'])) throw new MovementFailure(400, 'ITEMS_CHECK_REQUIRED', 'Check every declared item before confirming.');
+}
+
+/** Legacy transport now uses the same transaction and checks as the signed scanner. */
+function confirmVisitorCheckout($pdo, $actor, array $data) {
+    $code = trim((string)($data['passId'] ?? $data['pass_code'] ?? ''));
+    $plate = trim((string)($data['plateNumber'] ?? $data['plate'] ?? ''));
+    if ($code === '' && $plate === '') throw new MovementFailure(400, 'PASS_REQUIRED', 'Provide a visitor pass or plate.');
+    $q = $pdo->prepare($code !== '' ? "SELECT * FROM `visitor_passes` WHERE `pass_code` = ? LIMIT 1"
+        : "SELECT * FROM `visitor_passes` WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? ORDER BY `id` DESC LIMIT 1");
+    $q->execute([$code !== '' ? $code : normalizePlate($plate)]);
+    $pass = $q->fetch();
+    if (!$pass) throw new MovementFailure(404, 'NOT_FOUND', 'Visitor pass not found.');
+    if ($plate !== '' && normalizePlate($plate) !== normalizePlate($pass['plate_number'])) throw new MovementFailure(400, 'PLATE_MISMATCH', 'The plate does not match this visitor pass.');
+    if (empty($pass['entry_time'])) throw new MovementFailure(409, 'VISITOR_STATE_MISMATCH', 'Visitor has no recorded entry. Check the movement records.');
+    $ticket = issueMovementTicket($pdo, $actor, $pass, 'visitor', 'manual', $data['checkpoint'] ?? $data['gatePoint'] ?? 'Gate 2', 'visitor-exit-' . $pass['id']);
+    if (!empty($pass['exit_time'])) {
+        $q = $pdo->prepare("SELECT `id` FROM `gate_logs` WHERE `client_ref` = ?");
+        $q->execute(['visitor-exit-' . $pass['id']]);
+        if (!$q->fetchColumn()) throw new MovementFailure(409, 'VISITOR_ALREADY_EXITED', 'This visitor already exited. Review its existing gate record.');
+    }
+    $result = confirmMovement($pdo, $actor, ['ticket' => $ticket['ticket'], 'items_verified' => $data['items_verified'] ?? false]);
+    return $result + ['passId' => $pass['pass_code'], 'exitTime' => $result['loggedAt'], 'status' => 'Revoked'];
 }
 
 function movementResult($log, $duplicate, $row = null, $type = 'vehicle', $pdo = null) {

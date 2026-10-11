@@ -31,6 +31,7 @@ require_once __DIR__ . '/../lib/campus.php';
 require_once __DIR__ . '/../lib/releases.php';
 require_once __DIR__ . '/../lib/capacity.php';
 require_once __DIR__ . '/../lib/cases.php';
+require_once __DIR__ . '/../lib/gate_policy.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendResponse(405, null, 'Method not allowed');
@@ -357,7 +358,14 @@ if ($vehicle) {
    5. Side effects: log every rejection; open incidents for forged / revoked passes
    -------------------------------------------------------------------------- */
 $autoLogged = false;
-if (!$movementPrepare && !$accepted && $result !== 'NOT_FOUND') {
+$policy = gatePolicy($pdo, $actor, $data['checkpoint'] ?? null, $gateType);
+$gateError = gateDirectionError($policy, $gateType);
+if ($gateError && $accepted) {
+    $accepted = false;
+    $result = 'GATE_DIRECTION_DENIED';
+    $reasonDetail = $gateError;
+}
+if (!$movementPrepare && !$gateError && !$accepted && $result !== 'NOT_FOUND') {
     $plateForLog = $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $claimedPlate);
     $ownerName = $vehicle['owner_name'] ?? ($visitor['visitor_name'] ?? null);
     $vehicleType = $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : null);
@@ -371,7 +379,7 @@ if (!$movementPrepare && !$accepted && $result !== 'NOT_FOUND') {
             'driverName' => 'Unverified (pass rejected)',
             'driverRelationship' => 'Unknown',
             'reason' => 'Revoked / Forged QR',
-            'gatePoint' => defaultGatePoint($gateType),
+            'gatePoint' => $policy['checkpoint'],
             'notes' => "{$result}: {$reasonDetail}",
             'notifyOwner' => true,
         ], 10);
@@ -421,6 +429,7 @@ sendResponse(200, [
     'reason' => $reasonDetail,
     'warnings' => array_values(array_unique($warnings)),
     'gateType' => $gateType,
+    'gatePolicy' => $policy,
     'passType' => $passType,
     'autoLogged' => $autoLogged,
     'incident' => $incident,
@@ -430,7 +439,7 @@ sendResponse(200, [
     'case' => ($vehicle && $result === 'BANNED') ? caseOpenForPlate($pdo, $vehicle['plate_number']) : null,
     'currentlyInside' => $currentlyInside,
     'movement' => $movementPrepare && $accepted && ($vehicle || $visitor)
-        ? issueMovementTicket($pdo, $actor, $vehicle ?: $visitor, $vehicle ? 'vehicle' : 'visitor', ($data['lookup_method'] ?? '') === 'manual' || $passType === 'manual' ? 'manual' : 'qr') : null,
+        ? issueMovementTicket($pdo, $actor, $vehicle ?: $visitor, $vehicle ? 'vehicle' : 'visitor', ($data['lookup_method'] ?? '') === 'manual' || $passType === 'manual' ? 'manual' : 'qr', $policy['checkpoint']) : null,
     // Where it is and who to call: shown to the guard when a vehicle that is already inside is scanned again
     'onCampus' => ($vehicle && $currentlyInside) ? onCampusDetails($pdo, $vehicle, $now) : null,
     'vehicle' => $vehicle ? vehicleForOutput($pdo, $vehicle, false) : null,

@@ -58,16 +58,11 @@
     body.classList.toggle('role-admin', user.role === 'admin');
     body.classList.toggle('role-guard', user.role !== 'admin');
 
-    const isGuard2 = user.username === 'guard2' ||
-      (user.fullName && user.fullName.toLowerCase().includes('guard 2')) ||
-      (user.gateAssigned && (user.gateAssigned.includes('2') || user.gateAssigned.toLowerCase().includes('exit')));
-    body.classList.toggle('role-guard2', !!isGuard2);
-
     if ($('sidebarUserName')) $('sidebarUserName').textContent = user.fullName;
     if ($('sidebarUserInitials')) $('sidebarUserInitials').textContent = initials(user.fullName);
     if ($('sidebarUserRole')) {
       const gate = user.gateAssigned ? ` • ${user.gateAssigned.replace(/Ingress/g, 'Entry').replace(/Egress/g, 'Exit')}` : '';
-      const customRole = isGuard2 ? 'Gate 2 Guard (Exit)' : roleLabel(user.role);
+      const customRole = roleLabel(user.role);
       $('sidebarUserRole').textContent = `${customRole}${gate}`;
     }
   }

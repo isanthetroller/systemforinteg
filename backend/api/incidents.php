@@ -9,6 +9,7 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/vehicles.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -137,9 +138,7 @@ function handleCreateIncident($pdo, $actor) {
             $pdo->prepare("UPDATE `security_incidents` SET `client_ref` = ? WHERE `id` = ?")->execute([$clientRef, $newId]);
         }
 
-        // Update vehicle status to Blocked / Alert
-        $upd = $pdo->prepare("UPDATE `vehicles` SET `status` = 'Blocked / Alert' WHERE `plate_number` = ?");
-        $upd->execute([$plateNumber]);
+        // Security standing is represented by the incident; physical presence is unchanged.
 
         // The registered owner is told (portal notice + e-mail); an unregistered plate has no owner to tell
         noticeVehicleBlocked($pdo, $plateNumber, $reason, $gatePoint, $caseNumber, (int)$newId);
@@ -152,8 +151,8 @@ function handleCreateIncident($pdo, $actor) {
             'plateNumber' => $plateNumber,
             'status' => 'Held'
         ], "Vehicle {$plateNumber} flagged and held under case {$caseNumber}");
-    } catch (Exception $e) {
-        $pdo->rollBack();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         sendResponse(500, null, "Failed to create incident: " . $e->getMessage());
     }
 }
@@ -179,7 +178,7 @@ function handleResolveIncident($pdo, $admin) {
     $linked->execute([$id]);
     if ($linkedId = $linked->fetchColumn()) {
         sendResponse(409, ['code' => 'VIOLATION_PENDING', 'violationId' => (int)$linkedId],
-            "This case is tied to violation #{$linkedId}. Resolve it in Violations & Penalties (resolution notes required).");
+            "This case is tied to violation #{$linkedId}. Open the linked case in Cases and record its resolution.");
     }
     $resolutionNotes = isset($data['notes']) ? trim((string)$data['notes']) : '';
     $resolutionEntry = ' [Resolved by ' . actorLabel($admin) . ' on ' . date('Y-m-d H:i') . ($resolutionNotes !== '' ? ": {$resolutionNotes}" : '') . ']';
@@ -189,28 +188,14 @@ function handleResolveIncident($pdo, $admin) {
         $upd = $pdo->prepare("UPDATE `security_incidents` SET `status` = 'Resolved', `resolved_at` = NOW(), `notes` = ? WHERE `id` = ?");
         $upd->execute([($row['notes'] ?? '') . $resolutionEntry, $id]);
 
-        // If no other held incidents for this plate, restore vehicle status based on actual gate custody
-        $check = $pdo->prepare("SELECT id FROM `security_incidents` WHERE `plate_number` = ? AND `status` = 'Held'");
-        $check->execute([$plate]);
-        if (!$check->fetch()) {
-            $normPlate = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)$plate));
-            $logStmt = $pdo->prepare("SELECT `action` FROM `gate_logs` 
-                WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? 
-                  AND `action` IN ('Entry Recorded', 'Exit Approved')
-                ORDER BY `id` DESC LIMIT 1");
-            $logStmt->execute([$normPlate]);
-            $lastAction = $logStmt->fetchColumn();
+        $vehicle = findVehicleByPlate($pdo, $plate);
+        if ($vehicle) restoreVehiclePresence($pdo, $vehicle);
 
-            // Only mark Outside if exit was approved or no entry was recorded; otherwise vehicle remains Inside Campus
-            $restoredStatus = ($lastAction === 'Entry Recorded') ? 'Inside Campus' : 'Outside';
-            $rest = $pdo->prepare("UPDATE `vehicles` SET `status` = ? WHERE `plate_number` = ? AND `status` = 'Blocked / Alert'");
-            $rest->execute([$restoredStatus, $plate]);
-        }
-
+        $message = 'Incident case resolved. ' . caseStandingMessage($pdo, $plate);
         $pdo->commit();
-        sendResponse(200, ['id' => $id, 'status' => 'Resolved'], "Incident case resolved");
-    } catch (Exception $e) {
-        $pdo->rollBack();
+        sendResponse(200, ['id' => $id, 'status' => 'Resolved'], $message);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         sendResponse(500, null, "Failed to resolve incident: " . $e->getMessage());
     }
 }

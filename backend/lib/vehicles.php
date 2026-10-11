@@ -4,6 +4,7 @@
  */
 
 require_once __DIR__ . '/qr.php';
+require_once __DIR__ . '/standing.php';
 
 /**
  * VIP vehicles (permanent passes for e.g. the school president) are exempt from violations,
@@ -194,6 +195,7 @@ function vehicleForOutput($pdo, $row, $includeQr = false) {
     $row = ensurePassIdentity($pdo, $row);
     $row['authorizedDrivers'] = getDriversForVehicle($pdo, $row['id']);
     $out = formatVehicleRow($row);
+    $out['standing'] = vehicleStanding($pdo, $row);
     // No QR exists for a vehicle whose registration fee is unpaid; payment issues a fresh pass id
     if ($includeQr) {
         $out['qrPayload'] = (($row['payment_status'] ?? 'Paid') !== 'Unpaid' && (int)($row['is_retired'] ?? 0) === 0) ? vehicleQrPayload($row) : null;

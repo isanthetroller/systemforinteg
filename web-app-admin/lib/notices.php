@@ -201,7 +201,7 @@ function noticeEmailBodies($notice, $vehicle) {
             'Do not try to take the vehicle through the gate again until it is cleared. The guard will stop it and it will only delay you.',
             'Go to the Campus Security Office as soon as you can. Bring a valid school ID' . ($case !== '' ? " and tell the officer your case number ({$case})" : ' and tell the officer your plate number') . '.',
             'The officer will explain what happened and may ask you questions. If you cannot come in person, answer the call or message from the Security Office.',
-            'If a clearance form is needed, sign it at the office. Once an administrator closes the case, your vehicle can enter and leave campus again.',
+            'If a clearance form is needed, sign it at the office. After case closure, check your current pass and any remaining restrictions before passage.',
             'If the vehicle is inside campus, ask the officer how it will be released (an administrator can allow one exit in an emergency).',
         ];
         if ($portal !== '') $steps[] = "You can follow the progress of your case at any time in the student portal (Cases tab): {$portal}";

@@ -804,11 +804,12 @@ def test_visitor_items_and_on_campus(admin):
     code, res = call('GET', 'oncampus.php', token=guard)
     check('visitor leaves the on-campus list after exit', not any(x['plateNumber'] == 'EVT4040' for x in res['data']['visitors']), res['data']['visitors'])
 
-    # Mobile scanner cannot tick the box: allowed, but the log says items were not checked
+    # Scanner credentials must not bypass required item verification
     code, res = call('POST', 'visitors.php', dict(base, plate='EVT 4041', items=[{'name': 'Tables', 'quantity': 10}]), guard)
     code, res = call('POST', 'logs.php', {'plateNumber': 'EVT 4041', 'driverName': 'Driver', 'action': 'Entry Recorded'}, headers=SCANNER)
-    check('mobile entry logs items as not checked', code == 201 and 'not checked by mobile scanner' in res['data']['notes'], res)
-    check('mobile log attributed to Mobile Scanner', res['data'].get('guardName', '').startswith('Mobile Scanner'), res)
+    check('scanner entry without item verification refused', code == 400, res)
+    code, res = call('GET', 'oncampus.php', token=guard)
+    check('refused unchecked entry does not change presence', not any(x['plateNumber'] == 'EVT4041' for x in res['data']['visitors']), res)
 
     code, _ = call('GET', 'oncampus.php')
     check('on-campus list requires sign-in -> 401', code == 401, code)
@@ -910,11 +911,11 @@ def test_scheduled_and_revoked_passes(admin):
           v.get('accepted') is False and v.get('result') == 'REVOKED' and v.get('incident'), v)
     code, res = call('POST', 'logs.php', {'plate': 'SCH 5001', 'action': 'Exit Approved', 'gate_type': 'Egress',
                                           'visitor_pass_id': today_pass['id']}, guard)
-    check('exit is logged', code == 201 and res['data']['status'] == 'Exited', res)
+    check('direct log cannot bypass revoked visitor hold', code == 403, res)
     code, res = call('GET', f'visitors.php?id={today_pass["id"]}', token=guard)
-    check('the pass stays Revoked after the exit', res['data']['status'] == 'Revoked' and res['data']['exitTime'], res['data'])
+    check('refused checkout preserves revoked inside pass', res['data']['status'] == 'Revoked' and not res['data']['exitTime'], res['data'])
     code, res = call('GET', 'oncampus.php', token=guard)
-    check('visitor leaves the campus list after exit', not any(x['plateNumber'] == 'SCH5001' for x in res['data']['visitors']), res['data']['visitors'])
+    check('refused checkout keeps visitor in campus list', any(x['plateNumber'] == 'SCH5001' for x in res['data']['visitors']), res['data']['visitors'])
 
     # --- a vehicle's state is "Outside", and the retired setting is gone
     code, res = call('GET', 'settings.php')
@@ -2830,6 +2831,7 @@ def main():
         os.remove(SQLITE_DB)
         print(f'Deleted local SQLite DB: {SQLITE_DB}')
     admin = test_auth()
+    assert call('PUT', 'settings.php', {'event_gate_mode': 1, 'reason': 'Broad fixture tests both directions with shared guards'}, admin)[0] == 200
     test_staff_accounts(admin)
     test_lockout()
     test_mobile_compat()

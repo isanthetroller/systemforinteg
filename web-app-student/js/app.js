@@ -147,6 +147,11 @@
       await enterApp();
     } catch (err) {
       if (err.code === 'PASSWORD_CHANGE_REQUIRED') return showScreen('screenPassword');
+      if (StudentApi.hasToken() && err.status !== 401) {
+        showScreen('screenApp');
+        showInitialLoadError(err);
+        return;
+      }
       showScreen('screenLogin');
     }
   }
@@ -237,6 +242,7 @@
       if (!confirmed) return;
     }
     stopPolling();
+    if (paymentCheckTimer) clearTimeout(paymentCheckTimer);
     await StudentApi.logout();
     data.me = null;
     data.vehicles = [];
@@ -248,18 +254,42 @@
   }
 
   /* ---------------- app ---------------- */
+  function showInitialLoadError(err) {
+    selectTab('tabPass');
+    const tab = $('tabPass');
+    tab.replaceChildren();
+    const card = document.createElement('div');
+    card.className = 'card empty';
+    card.setAttribute('role', 'alert');
+    const message = document.createElement('p');
+    message.textContent = `Your information could not load. ${err.message || 'Please try again.'}`;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-primary';
+    retry.textContent = 'Try again';
+    retry.addEventListener('click', () => enterApp());
+    card.append(message, retry);
+    tab.append(card);
+  }
+
   async function enterApp() {
     showScreen('screenApp');
+    selectTab('tabPass');
     $('tabPass').innerHTML = '<div class="card empty">Loading your pass&hellip;</div>';
-    const [me, vehicles, violations, activity, alerts, payments, notices, cases] = await Promise.all([
-      StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices(), StudentApi.cases()
-    ]);
-    Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices, cases });
-    data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
-    $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
-    renderAll();
-    startPolling();
-    handlePaymentReturn();
+    try {
+      const [me, vehicles, violations, activity, alerts, payments, notices, cases] = await Promise.all([
+        StudentApi.me(), StudentApi.vehicles(), StudentApi.violations(), StudentApi.activity(), StudentApi.alerts(), StudentApi.payments(), StudentApi.notices(), StudentApi.cases()
+      ]);
+      Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices, cases });
+      data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
+      $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
+      renderAll(); startPolling(); handlePaymentReturn();
+      return true;
+    } catch (err) {
+      if (err.status === 401 || !StudentApi.hasToken()) return false;
+      showInitialLoadError(err);
+      return false;
+    }
   }
 
   function renderAll() {
@@ -281,6 +311,8 @@
     pollTimer = setInterval(refresh, POLL_MS);
   }
 
+  window.addEventListener('online', () => refresh());
+
   function stopPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
@@ -296,7 +328,7 @@
       document.body.append(banner);
     }
     banner.hidden = state === 'live';
-    banner.textContent = 'Connection lost. Showing earlier information. Trying again…';
+    banner.textContent = 'Live updates are unavailable. Showing earlier information. Trying again…';
   }
   let refreshBusy = false, revisions = null;
   async function refresh() {
@@ -508,18 +540,22 @@
   }
 
   /* Back from the PayMongo checkout (?payment=success|cancelled&p=<id>) */
+  let paymentCheckTimer = null;
+  let paymentPendingShown = false;
   async function handlePaymentReturn() {
     const params = new URLSearchParams(location.search);
     const outcome = params.get('payment');
     if (!outcome) return;
     const id = params.get('p');
-    history.replaceState(null, '', location.pathname);
     selectTab('tabPass');
     if (outcome !== 'success' || !id) {
+      history.replaceState(null, '', location.pathname);
+      paymentPendingShown = false;
       toast('Payment was cancelled. You can pay again anytime.');
       return;
     }
-    toast('Confirming your payment\u2026');
+    if (!paymentCheckTimer) toast('Confirming your payment\u2026');
+    paymentCheckTimer = null;
     let payment = null;
     for (let i = 0; i < 8; i++) {
       try { payment = await StudentApi.paymentStatus(id); } catch (_) { break; }
@@ -532,12 +568,27 @@
       const paidIndex = payment ? vehicles.findIndex(x => x.id === payment.vehicleId) : -1;
       if (paidIndex >= 0) data.selected = paidIndex; // land on the vehicle that was just paid for
       renderAll();
-    } catch (_) { /* the next poll refreshes */ }
+    } catch (_) { syncStatus('offline'); }
     if (payment && payment.status === 'Paid' && payment.purpose === 'Renewal') {
+      history.replaceState(null, '', location.pathname);
+      paymentPendingShown = false;
       const renewed = (data.vehicles || []).find(x => x.id === payment.vehicleId);
       toast(`Renewal paid (${payment.receiptNumber}). Your new pass is valid until ${fmtDate(renewed && renewed.passValidUntil)}.`, 'success');
-    } else if (payment && payment.status === 'Paid') toast(`Payment received (${payment.receiptNumber}). Your pass is ready.`, 'success');
-    else toast('We have not received the payment yet. If you paid, your pass will appear shortly.');
+    } else if (payment && payment.status === 'Paid') {
+      history.replaceState(null, '', location.pathname);
+      paymentPendingShown = false;
+      toast(`Payment received (${payment.receiptNumber}). Your pass is ready.`, 'success');
+    } else if (payment && payment.status === 'Cancelled') {
+      history.replaceState(null, '', location.pathname);
+      paymentPendingShown = false;
+      toast('This checkout was cancelled. You can start a new payment when ready.');
+    } else {
+      if (!paymentPendingShown) toast('Payment confirmation is still pending. We will check again automatically.');
+      paymentPendingShown = true;
+      paymentCheckTimer = setTimeout(() => {
+        if (StudentApi.hasToken()) handlePaymentReturn();
+      }, 15000);
+    }
   }
 
   function openZoom(v) {

@@ -28,6 +28,15 @@ switch ($method) {
 }
 
 function handleGetLogs($pdo) {
+    if (isset($_GET['paginated'])) {
+        if ($_GET['paginated'] !== '1') sendResponse(400, null, 'Invalid paginated filter.');
+        require_once __DIR__ . '/../lib/gate_records.php';
+        try { readGateRecords($pdo); }
+        catch (Throwable $error) {
+            error_log('Gate history read failed: ' . $error->getMessage());
+            sendResponse(503, null, 'Gate records are temporarily unavailable. Please retry.');
+        }
+    }
     $plate = isset($_GET['plate']) ? trim($_GET['plate']) : '';
     $action = isset($_GET['action']) ? trim($_GET['action']) : '';
     $limit = isset($_GET['limit']) ? min((int)$_GET['limit'], 200) : 100;
@@ -269,7 +278,9 @@ function handleCreateLog($pdo, $actor) {
     } else {
         $status = $gateType === 'Egress' ? 'Inside Campus' : 'Outside';
     }
-    $gatePoint = trim((string)($data['gatePoint'] ?? '')) ?: defaultGatePoint($gateType);
+    $policy = gatePolicy($pdo, $actor, $data['checkpoint'] ?? $data['gatePoint'] ?? null, $gateType);
+    if ($isApproval && ($error = gateDirectionError($policy, $gateType))) sendResponse(403, ['code' => 'GATE_DIRECTION_DENIED'], $error);
+    $gatePoint = $policy['checkpoint'] ?: defaultGatePoint($gateType);
     $notes = trim((string)($data['notes'] ?? ''));
     if ($itemsNote !== '') {
         $notes = trim($notes . ' | ' . $itemsNote, ' |');
@@ -286,6 +297,12 @@ function handleCreateLog($pdo, $actor) {
 
     movementBegin($pdo);
     try {
+        lockGatePolicy($pdo);
+        $policy = gatePolicy($pdo, $actor, $data['checkpoint'] ?? $data['gatePoint'] ?? null, $gateType);
+        if ($isApproval && ($error = gateDirectionError($policy, $gateType))) {
+            movementEnd($pdo, false);
+            sendResponse(403, ['code' => 'GATE_DIRECTION_DENIED'], $error);
+        }
         if ($isApproval && $vehicle) {
             $lock = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? ' FOR UPDATE' : '';
             $fresh = $pdo->prepare("SELECT * FROM `vehicles` WHERE `id` = ?" . $lock);
@@ -315,6 +332,7 @@ function handleCreateLog($pdo, $actor) {
                 sendResponse(409, ['code' => 'STALE_SCAN'], 'Another transaction changed this visitor pass. Scan it again before confirming.');
             }
         }
+        if ($isApproval && !$vehicle && $visitor) validateVisitorMovement($pdo, $visitor, $gateType, $data);
         $logId = recordGateLog($pdo, $actor, [
             'plate' => $vehicle['plate_number'] ?? ($visitor['plate_number'] ?? $plateNumber),
             'vehicleType' => $vehicle['vehicle_type'] ?? ($visitor ? 'Visitor Vehicle' : ($data['vehicleType'] ?? null)),
@@ -353,6 +371,9 @@ function handleCreateLog($pdo, $actor) {
             consumeExitRelease($pdo, $usedRelease, gateActorLabel($actor));
         }
         movementEnd($pdo, true);
+    } catch (MovementFailure $e) {
+        movementEnd($pdo, false);
+        sendResponse($e->httpStatus, ['code' => $e->errorCode], $e->getMessage());
     } catch (Exception $e) {
         movementEnd($pdo, false);
         sendResponse(500, null, 'Failed to record gate log.' . (SP_DEBUG ? ' ' . $e->getMessage() : ''));

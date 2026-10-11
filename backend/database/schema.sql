@@ -474,6 +474,7 @@ CREATE TABLE `case_events` (
 -- Default policy values (each can be changed in Admin Center > Settings)
 -- ------------------------------------------------------------------------------
 INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`) VALUES
+  ('event_gate_mode', '0', '0: Gate 1 entry and Gate 2 exit; 1: entry and exit at both gates'),
   ('parking_capacity', '0', 'Vehicles the campus can hold at once (0 = not limited)'),
   ('renewal_window_days', '60', 'Passes can be renewed this many days before they expire'),
   ('expiry_warning_days', '30', 'Owners get an expiry notice this many days before the pass expires'),

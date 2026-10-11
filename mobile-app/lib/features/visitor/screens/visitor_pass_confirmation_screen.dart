@@ -710,32 +710,10 @@ class _VisitorPassConfirmationState
                     ],
                   ),
                   const SizedBox(height: 12),
-                  // Secondary Print Receipt option
-                  TextButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Pass receipt shared / sent to campus print queue.',
-                          ),
-                          backgroundColor: NcstColors.navy,
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                    icon: const Icon(
-                      Icons.print_outlined,
-                      size: 16,
-                      color: NcstColors.slate600,
-                    ),
-                    label: const Text(
-                      'Print Physical Decal / Ticket',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: NcstColors.slate600,
-                      ),
-                    ),
+                  const Text(
+                    'Display or save this QR pass. Printing is not available.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: NcstColors.slate600),
                   ),
                 ],
               ),

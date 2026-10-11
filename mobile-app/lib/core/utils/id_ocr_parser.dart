@@ -349,6 +349,22 @@ class IdOcrParser {
     return '';
   }
 
+  /// Accepts a plate from OCR or a compact scanned payload, never arbitrary
+  /// camera text such as an ID header or a warning printed near the plate.
+  static String extractPlateFromPayload(String raw) {
+    final recognized = extractPlateFromOcr(raw);
+    if (recognized.isNotEmpty) return recognized;
+    final candidate = raw.trim().toUpperCase();
+    if (!RegExp(r'^[A-Z0-9\s-]{4,10}$').hasMatch(candidate)) return '';
+    final compact = candidate.replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    if (compact.length < 4 || compact.length > 8 ||
+        !RegExp(r'[A-Z]').hasMatch(compact) ||
+        !RegExp(r'[0-9]').hasMatch(compact)) {
+      return '';
+    }
+    return compact;
+  }
+
   /// Cleans punctuation and capitalizes properly in Title Case.
 
   /// Handles particles like "Dela", "Del", "San", etc. correctly.

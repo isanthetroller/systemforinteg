@@ -18,6 +18,7 @@
  */
 
 require_once __DIR__ . '/records.php';
+require_once __DIR__ . '/standing.php';
 
 function violationPresetTypes() {
     return [
@@ -128,8 +129,8 @@ function pendingViolationCount($pdo, $vehicleId) {
  * Lifts the hold and restores the registration.
  */
 function liftHold($pdo, $vehicleId) {
-    $pdo->prepare("UPDATE `vehicles` SET `is_banned` = 0, `registration_status` = 'Active',
-        `status` = CASE WHEN `status` = 'Blocked / Alert' THEN 'Outside' ELSE `status` END WHERE `id` = ?")
+    restoreVehiclePresence($pdo, refetchVehicle($pdo, $vehicleId));
+    $pdo->prepare("UPDATE `vehicles` SET `is_banned` = 0, `registration_status` = 'Active' WHERE `id` = ?")
         ->execute([$vehicleId]);
 }
 
@@ -142,7 +143,7 @@ function resolveViolation($pdo, $admin, $violation, $notes) {
     $lifted = false;
     if (pendingViolationCount($pdo, $violation['vehicle_id']) === 0) {
         liftHold($pdo, $violation['vehicle_id']);
-        $lifted = true;
+        $lifted = !vehicleStanding($pdo, refetchVehicle($pdo, $violation['vehicle_id']))['onHold'];
     }
     return ['holdLifted' => $lifted];
 }
@@ -156,7 +157,7 @@ function dismissViolation($pdo, $admin, $violation, $notes) {
     $lifted = false;
     if (pendingViolationCount($pdo, $violation['vehicle_id']) === 0) {
         liftHold($pdo, $violation['vehicle_id']);
-        $lifted = true;
+        $lifted = !vehicleStanding($pdo, refetchVehicle($pdo, $violation['vehicle_id']))['onHold'];
     }
     return ['holdLifted' => $lifted];
 }

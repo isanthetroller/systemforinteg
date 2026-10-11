@@ -86,6 +86,7 @@
     const card = $('occupancyCard');
     if (!card || !o) return;
     const unlimited = !o.capacity;
+    card.dataset.level = unlimited ? 'unset' : o.level;
     $('occupancyInside').textContent = o.inside;
     $('occupancyOf').textContent = unlimited ? 'No capacity set' : `of ${o.capacity} spaces`;
     const bar = $('occupancyBar');
@@ -116,9 +117,13 @@
      Exit release and retire (called from the vehicle drawer)
      ------------------------------------------------------------------------ */
   async function releaseExit(v) {
+    let settings;
+    try { settings = await ApiClient.getPublicSettings(); }
+    catch (err) { SP.showToast('Could not load release policy. Reconnect and retry.', 'error'); return false; }
+    const minutes = Number(settings.exit_release_minutes);
     const reason = await ask({
       title: `Release one exit for ${v.plateNumber}`,
-      html: `<div style="text-align:left;font-size:13px;line-height:1.6">${esc(v.plateNumber)} has an unresolved violation. This lets it <strong>leave once</strong>, within the next 30 minutes. It stays on hold and cannot come back in until the violation is resolved.</div>`,
+      html: `<div style="text-align:left;font-size:13px;line-height:1.6">${esc(v.plateNumber)} has a security hold. This lets it <strong>leave once</strong>, within ${minutes} minutes after approval. It stays on hold and cannot come back in until its restrictions are resolved.</div>`,
       label: 'Reason (saved in the activity log)',
       placeholder: 'e.g. Family emergency, driver must leave now',
       confirmText: 'Release one exit',

@@ -15,6 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 requireStaff($pdo);
 
 try {
+    $dayStart = date('Y-m-d', spNow()) . ' 00:00:00';
+    $dayEnd = date('Y-m-d', strtotime('+1 day', strtotime($dayStart))) . ' 00:00:00';
     // 1. Vehicles & Visitors Currently Inside Campus (with parking capacity)
     $occupancy = campusOccupancy($pdo);
     $insideVehicles = $occupancy['insideVehicles'];
@@ -26,11 +28,15 @@ try {
     $blockedCount = (int)$stmtBlocked->fetch()['cnt'];
 
     // 3. Today's Gate Entries
-    $stmtEntries = $pdo->query("
+    $stmtEntries = $pdo->prepare("
         SELECT COUNT(*) AS cnt FROM `gate_logs` 
-        WHERE `action` = 'Entry Recorded' AND DATE(`logged_at`) = CURDATE()
+        WHERE `action` = 'Entry Recorded' AND `logged_at` >= ? AND `logged_at` < ?
     ");
+    $stmtEntries->execute([$dayStart, $dayEnd]);
     $todayEntries = (int)$stmtEntries->fetch()['cnt'];
+    $stmtDenied = $pdo->prepare("SELECT COUNT(*) FROM `gate_logs` WHERE `action` IN ('Entry Denied', 'Exit Denied') AND `logged_at` >= ? AND `logged_at` < ?");
+    $stmtDenied->execute([$dayStart, $dayEnd]);
+    $todayDenied = (int)$stmtDenied->fetchColumn();
 
     // 4. Total Registered Fleet
     $stmtFleet = $pdo->query("SELECT COUNT(*) AS cnt FROM `vehicles`");
@@ -67,6 +73,9 @@ try {
         'occupancy' => $occupancy,
         'blocked' => $blockedCount,
         'todayEntries' => $todayEntries,
+        'todayDenied' => $todayDenied,
+        'asOf' => date('c', spNow()),
+        'day' => substr($dayStart, 0, 10),
         'registeredFleet' => $fleetCount,
         'hourly' => $hourlyData,
         'byGate' => $gateData

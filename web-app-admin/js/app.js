@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     incidents: [...INITIAL_DATA.incidents],
     visitors: [],
     onCampus: null,
+    stats: null,
     gateFlowTab: 'inside',
     currentView: 'dashboardView',
     vehicleFilter: {
@@ -29,9 +30,12 @@ document.addEventListener('DOMContentLoaded', () => {
       eventType: 'All',
       gate: 'All',
       dateRange: 'All',
+      dateFrom: '', dateTo: '', timeFrom: '', timeTo: '',
+      officer: '', source: 'All', sort: 'newest',
       page: 1,
-      pageSize: 10
+      pageSize: 25
     },
+    auditResults: null,
     driverCounter: 1
   };
 
@@ -150,6 +154,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const auditEventTypeFilter = document.getElementById('auditEventTypeFilter');
   const auditGateFilter = document.getElementById('auditGateFilter');
   const auditDateFilter = document.getElementById('auditDateFilter');
+  const auditDateFrom = document.getElementById('auditDateFrom');
+  const auditDateTo = document.getElementById('auditDateTo');
+  const auditTimeFrom = document.getElementById('auditTimeFrom');
+  const auditTimeTo = document.getElementById('auditTimeTo');
+  const auditOfficerFilter = document.getElementById('auditOfficerFilter');
+  const auditSourceFilter = document.getElementById('auditSourceFilter');
+  const auditSortFilter = document.getElementById('auditSortFilter');
+  const auditPageSize = document.getElementById('auditPageSize');
+  const auditFilterMessage = document.getElementById('auditFilterMessage');
+  const auditFilterRetryBtn = document.getElementById('auditFilterRetryBtn');
   const auditResetFiltersBtn = document.getElementById('auditResetFiltersBtn');
 
   // Registration Form
@@ -286,7 +300,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!views[targetViewId]) return;
     // Views hidden for the current role cannot be opened
     if (views[targetViewId].classList.contains('admin-only') && window.SPAuth && !SPAuth.hasRole('admin')) return;
-    if (document.body.classList.contains('role-guard2') && (targetViewId === 'visitorsView' || targetViewId === 'accountView')) return;
 
     state.currentView = targetViewId;
 
@@ -330,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (targetViewId === 'flaggedView') {
       renderIncidentsTable();
     } else if (targetViewId === 'auditView') {
-      renderFullAuditTable();
+      loadGateRecords();
     } else if (targetViewId === 'accountView') {
       generateQrPass(false);
     }
@@ -413,17 +426,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const entranceLogs = state.auditLogs.filter(l => l.action === 'Entry Recorded' || l.action === 'Entry Denied' || l.gateType === 'Entry' || l.gateType === 'Ingress' || (l.action && l.action.toLowerCase().includes('entry')));
     const exitLogs = state.auditLogs.filter(l => l.action === 'Exit Approved' || l.action === 'Exit Denied' || l.gateType === 'Exit' || l.gateType === 'Egress' || (l.action && l.action.toLowerCase().includes('exit')));
 
-    if (kpiInside) kpiInside.textContent = insideCount;
-    if (kpiBlocked) kpiBlocked.textContent = blockedCount;
-    if (kpiTotalLogs) kpiTotalLogs.textContent = todaysGateLogs().filter(log => entryPassage(log) && !deniedPassage(log)).length;
-    if (kpiRegistered) kpiRegistered.textContent = state.vehicles.length;
+    if (kpiInside) kpiInside.textContent = state.stats?.inside ?? '—';
+    if (kpiBlocked) {
+      kpiBlocked.textContent = state.stats?.blocked ?? '—';
+      kpiBlocked.closest('.sp-kpis > div')?.setAttribute('data-attention', String(Number(state.stats?.blocked) > 0));
+    }
+    if (kpiTotalLogs) kpiTotalLogs.textContent = state.stats?.todayEntries ?? '—';
+    if (kpiRegistered) kpiRegistered.textContent = state.stats?.registeredFleet ?? '—';
+    [kpiInside, kpiBlocked, kpiTotalLogs, kpiRegistered].forEach(el => { if (el) el.title = state.stats ? `Server totals as of ${state.stats.asOf || 'last refresh'}` : 'Current totals unavailable'; });
 
     if (onCampusSidebarCount) onCampusSidebarCount.textContent = insideCount;
     if (tabCountInside) tabCountInside.textContent = insideCount;
     if (tabCountEntrance) tabCountEntrance.textContent = entranceLogs.length;
     if (tabCountExit) {
       tabCountExit.textContent = exitLogs.length;
-      const hasBlockedExit = exitLogs.some(l => l.action === 'Exit Denied' || (l.notes && l.notes.toLowerCase().includes('exit denied')));
+      const hasBlockedExit = state.vehicles.some(v => v.standing?.isInside && v.standing?.onHold);
       if (hasBlockedExit) {
         tabCountExit.className = "px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-ncst-crimsonLight text-ncst-crimson border border-ncst-crimson/30";
       } else {
@@ -455,6 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ==========================================================================
      3. Dashboard Controller & Analytics
      ========================================================================== */
+  const dashboardPalette = { entry:'#15803d', exit:'#1d4ed8', registered:'#253475', visitor:'#7c3aed', empty:'#edf0f6' };
   // Configure Chart.js global typography and branding defaults if available
   if (typeof Chart !== 'undefined') {
     Chart.defaults.font.family = '"Plus Jakarta Sans", system-ui, sans-serif';
@@ -503,7 +521,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3.1 Today's successful traffic, with denied attempts kept separate.
   function renderActivityTrendChart(mode = trendViewMode) {
-    if (typeof Chart === 'undefined' || !gateActivityChartCanvas) return;
+    if (typeof Chart === 'undefined' || !gateActivityChartCanvas?.isConnected) return;
+    if (charts.activityTrend && (!charts.activityTrend.canvas || !charts.activityTrend.ctx)) charts.activityTrend = null;
     const logs = todaysGateLogs();
     const labels = mode === 'hourly'
       ? Array.from({length:24}, (_, h) => `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`)
@@ -521,14 +540,15 @@ document.addEventListener('DOMContentLoaded', () => {
       dashboardDenied: logs.filter(deniedPassage).length
     };
     Object.entries(totals).forEach(([id, value]) => { const element = document.getElementById(id); if (element) element.textContent = value; });
+    document.getElementById('dashboardDenied')?.setAttribute('data-attention', String(totals.dashboardDenied > 0));
     gateActivityChartCanvas.setAttribute('aria-label', `${mode === 'hourly' ? 'Hourly' : 'By gate'} activity today: ${totals.dashboardEntries} approved entries, ${totals.dashboardExits} approved exits, ${totals.dashboardDenied} denied attempts.`);
     activityTrendHourlyBtn?.setAttribute('aria-pressed', String(mode === 'hourly'));
     activityTrendGateBtn?.setAttribute('aria-pressed', String(mode !== 'hourly'));
     const data = {
       labels,
       datasets: [
-        {label:'Entries', data:entries, borderColor:'#253475', backgroundColor:mode === 'hourly' ? '#25347514' : '#253475', fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointRadius:2, pointHoverRadius:5, borderRadius:6, maxBarThickness:42},
-        {label:'Exits', data:exits, borderColor:'#8294c5', backgroundColor:mode === 'hourly' ? '#8294c51a' : '#8294c5', fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointRadius:2, pointHoverRadius:5, borderRadius:6, maxBarThickness:42}
+        {label:'Entries', data:entries, borderColor:dashboardPalette.entry, backgroundColor:mode === 'hourly' ? dashboardPalette.entry+'14' : dashboardPalette.entry, fill:mode === 'hourly', tension:.35, borderWidth:2.5, pointStyle:'circle', pointRadius:3, pointHoverRadius:5, borderRadius:6, maxBarThickness:42},
+        {label:'Exits', data:exits, borderColor:dashboardPalette.exit, backgroundColor:mode === 'hourly' ? dashboardPalette.exit+'14' : dashboardPalette.exit, fill:mode === 'hourly', tension:.35, borderWidth:2.5, borderDash:mode === 'hourly' ? [6,4] : [], pointStyle:'rectRot', pointRadius:3, pointHoverRadius:5, borderRadius:6, maxBarThickness:42}
       ]
     };
     const type = mode === 'hourly' ? 'line' : 'bar';
@@ -556,7 +576,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3.2 Occupancy uses mutually exclusive registered / visitor counts.
   function renderGateStatusChart() {
-    if (typeof Chart === 'undefined' || !gateStatusChartCanvas) return;
+    if (typeof Chart === 'undefined' || !gateStatusChartCanvas?.isConnected) return;
+    if (charts.gateStatus && (!charts.gateStatus.canvas || !charts.gateStatus.ctx)) charts.gateStatus = null;
     const registered = Number(state.onCampus?.counts?.registered ?? state.vehicles.filter(v => (v.status || '').toLowerCase().includes('inside')).length);
     const visitors = Number(state.onCampus?.counts?.visitors ?? (state.visitors || []).filter(v => v.entryTime && !v.exitTime && /active|inside/i.test(v.status || '')).length);
     const total = registered + visitors;
@@ -565,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (legendBlockedCount) legendBlockedCount.textContent = total;
     if (donutCenterTotal) donutCenterTotal.textContent = total;
     gateStatusChartCanvas.setAttribute('aria-label', `Campus occupancy: ${registered} registered vehicles and ${visitors} visitors, ${total} total.`);
-    const data = {labels:total ? ['Registered vehicles', 'Visitor vehicles'] : ['No vehicles on campus'],datasets:[{data:total ? [registered,visitors] : [1],backgroundColor:total ? ['#253475','#a8b6d9'] : ['#edf0f6'],borderWidth:4,borderColor:'#fff',hoverOffset:total ? 5 : 0}]};
+    const data = {labels:total ? ['Registered vehicles', 'Visitor vehicles'] : ['No vehicles on campus'],datasets:[{data:total ? [registered,visitors] : [1],backgroundColor:total ? [dashboardPalette.registered,dashboardPalette.visitor] : [dashboardPalette.empty],borderWidth:4,borderColor:'#fff',hoverOffset:total ? 5 : 0}]};
     if (charts.gateStatus) { charts.gateStatus.data = data; charts.gateStatus.update('none'); return; }
     charts.gateStatus = new Chart(gateStatusChartCanvas, {
       type:'doughnut',data,
@@ -575,12 +596,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3.3 Registered Fleet Types Composition Bar Chart
   function renderFleetTypesChart() {
-    if (typeof Chart === 'undefined' || !fleetTypesChartCanvas) return;
+    if (typeof Chart === 'undefined' || !fleetTypesChartCanvas?.isConnected) return;
 
-    if (charts.fleetTypes) {
-      charts.fleetTypes.destroy();
-      charts.fleetTypes = null;
-    }
+    if (charts.fleetTypes && (!charts.fleetTypes.canvas || !charts.fleetTypes.ctx)) charts.fleetTypes = null;
 
     const count4W = state.vehicles.filter(v => v.vehicleType && v.vehicleType.toLowerCase().includes('4-wheel')).length;
     const countMoto = state.vehicles.filter(v => v.vehicleType && v.vehicleType.toLowerCase().includes('motorcycle')).length;
@@ -589,6 +607,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (fleetTotalBadge) fleetTotalBadge.textContent = state.vehicles.length;
 
+    if (charts.fleetTypes) {
+      charts.fleetTypes.data.datasets[0].data = [count4W, countMoto, countBike, countFleet];
+      charts.fleetTypes.update('none');
+      return;
+    }
     charts.fleetTypes = new Chart(fleetTypesChartCanvas, {
       type: 'bar',
       data: {
@@ -596,7 +619,7 @@ document.addEventListener('DOMContentLoaded', () => {
         datasets: [{
           label: 'Vehicles',
           data: [count4W, countMoto, countBike, countFleet],
-          backgroundColor: ['#253475', '#6478b5', '#a8b6d9', '#172747'],
+          backgroundColor: dashboardPalette.registered,
           borderRadius: 4,
           barThickness: 24
         }]
@@ -814,22 +837,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
     }
 
-    // 2. Check recent Exit Denied in auditLogs
-    const deniedExit = (state.auditLogs || []).find(l => 
-      (l.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm &&
-      (l.action === 'Exit Denied' || (l.action && l.action.toLowerCase().includes('exit') && l.action.toLowerCase().includes('denied')))
-    );
-    if (deniedExit) {
-      return {
-        type: 'exit_denied',
-        badge: 'EXIT BLOCKED',
-        reason: deniedExit.notes || 'Exit Denied at gate verification',
-        gatePoint: deniedExit.gatePoint,
-        id: deniedExit.id,
-        guard: deniedExit.guardName
-      };
-    }
-
+    // Current holds come from cases/standing; historical denials are not current restrictions.
     // 3. Check vehicle record standing
     const veh = (state.vehicles || []).find(v => 
       (v.plateNumber || '').replace(/[-\s]/g, '').toUpperCase() === norm
@@ -1887,6 +1895,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function toggleVehicleRegistrationStatus(vehicle) {
+    if (vehicle._statusPending) return;
     if (vehicle.isBanned) {
       if (window.SPAlert) {
         SPAlert.warning({
@@ -1912,16 +1921,23 @@ document.addEventListener('DOMContentLoaded', () => {
       : confirm(`Are you sure you want to change pass status of ${vehicle.plateNumber} to ${nextStatus}?`);
 
     if (confirmed) {
-      vehicle.registrationStatus = nextStatus;
-      renderVehiclesTable();
-      updateCounts();
-      renderDashboard();
-      showToast(`Pass for ${vehicle.plateNumber} is now ${actionDesc}.`, 'success');
-
-      if (window.ApiClient && vehicle.id) {
-        ApiClient.toggleVehicleStatus(vehicle.id).catch(err => {
-          console.warn('[App] API status sync notice:', err.message);
-        });
+      vehicle._statusPending = true;
+      let savedOnServer = false;
+      try {
+        const saved = await ApiClient.toggleVehicleStatus(vehicle.id);
+        savedOnServer = true;
+        if (saved) applyServerPass(vehicle, saved);
+        vehicle.registrationStatus = saved?.registrationStatus || saved?.registration_status || nextStatus;
+        renderVehiclesTable();
+        updateCounts();
+        renderDashboard();
+        showToast(`Pass for ${vehicle.plateNumber} is now ${actionDesc}.`, 'success');
+      } catch (err) {
+        showToast(savedOnServer
+          ? 'Pass status changed, but the fleet display could not update. Refresh the fleet before another action.'
+          : `Pass status was not changed: ${err.message}`, 'error');
+      } finally {
+        vehicle._statusPending = false;
       }
     }
   }
@@ -2056,7 +2072,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </button>
             ${isHeld ? `
               <button type="button" class="resolve-btn admin-only px-2.5 py-1 rounded text-xs font-semibold text-ncst-greenDark bg-ncst-greenLight border border-ncst-green/30 hover:bg-ncst-greenLight/80 shadow-xs transition-colors">
-                Clear & Unblock
+                Review case
               </button>
             ` : ''}
           </div>
@@ -2079,46 +2095,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('incidentStatusFilter')?.addEventListener('change', renderIncidentsTable);
 
   async function resolveIncident(inc) {
-    const notes = await SPAlert.prompt({
-      title: 'Clear & Unblock Vehicle?',
-      html: `<div style="text-align:left"><div><strong>${escapeHtml(inc.plateNumber)}</strong> &middot; <span style="font-family:'JetBrains Mono',monospace">${escapeHtml(inc.caseNumber)}</span></div>
-        <div>Reason: ${escapeHtml(inc.reason)}</div></div>
-        <div style="margin-top:0.5rem">Releasing the hold lets this vehicle through the gate again. Your statement is saved in the audit trail.</div>`,
-      label: 'Resolution statement',
-      value: 'Identity and authorization confirmed with registered owner.',
-      confirmText: 'Clear & Unblock',
-      requiredMessage: 'A resolution statement is required.'
-    });
-    if (notes === null) return;
-
-    // The server decides first: a ban tied to a pending violation can only be lifted in Violations & Penalties
-    if (window.ApiClient && inc.id) {
-      try {
-        await ApiClient.resolveIncident(inc.id, notes);
-      } catch (err) {
-        if (err.code === 'VIOLATION_PENDING') {
-          await SPAlert.warning({ title: 'Resolve the violation first', text: err.message, confirmText: 'Understood' });
-        } else {
-          await SPAlert.error({ title: 'Could not clear the hold', text: err.message || 'The server did not accept the resolution. Please try again.' });
-        }
-        return;
-      }
-    }
-
-    const resolverLabel = (window.SPAuth && SPAuth.label()) || 'Security Administrator';
-    inc.status = 'Resolved';
-    inc.notes = (inc.notes || '') + ` [Resolved by ${resolverLabel}: ${notes}]`;
     closeDrawer();
-    renderIncidentsTable();
-    renderDashboard();
-    // Vehicles, logs and cases exactly as the server now has them (no guessed local state)
-    loadInitialDataFromApi(true, true);
-
-    SPAlert.success({
-      title: 'Vehicle Unblocked',
-      text: `${inc.plateNumber} was cleared and the gate hold was released.`,
-      timer: 2600
-    });
+    try {
+    if (window.SPCases) {
+      const rows = await ApiClient.getCases({ plate: inc.plateNumber, status: 'all' });
+      const linked = rows.cases.find(c => Number(c.incidentId) === Number(inc.id));
+      if (linked) return SPCases.open(linked.key);
+    }
+    SP.showToast('Open Cases and review the related record before resolving it.', 'warning');
+    } catch (err) { SP.showToast(err.message || 'Could not load the case. Please retry.', 'error'); }
   }
 
   /* ==========================================================================
@@ -2156,81 +2141,79 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
+  let auditLoadGeneration = 0, auditLoadTimer, auditLoading = false, auditError = '', auditExporting = false;
+  function manilaDay(offset = 0) {
+    const parts = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Manila', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date());
+    const value = key => parts.find(part => part.type === key).value;
+    const day = new Date(`${value('year')}-${value('month')}-${value('day')}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() + offset);
+    return day.toISOString().slice(0,10);
+  }
+  function gateRecordParams() {
+    const f = state.auditFilter;
+    // Resolve relative dates on every refresh, including midnight in Manila.
+    let from = f.dateFrom, to = f.dateTo;
+    if (f.dateRange !== 'Custom') {
+      from = ''; to = '';
+      if (f.dateRange === 'Today') from = to = manilaDay();
+      if (f.dateRange === 'Yesterday') from = to = manilaDay(-1);
+      if (f.dateRange === 'Last7Days') {from = manilaDay(-6); to = manilaDay();}
+      if (f.dateRange === 'Last30Days') {from = manilaDay(-29); to = manilaDay();}
+      if (f.dateRange === 'ThisMonth') {from = manilaDay().slice(0,8)+'01'; to = manilaDay();}
+      if (auditDateFrom) auditDateFrom.value = from;
+      if (auditDateTo) auditDateTo.value = to;
+    }
+    return {q:f.search.trim(), status:f.status, event:f.eventType, gate:f.gate,
+      from, to, time_from:f.timeFrom, time_to:f.timeTo, officer:f.officer, source:f.source,
+      sort:f.sort, page:f.page, limit:f.pageSize};
+  }
+  async function loadGateRecords() {
+    clearTimeout(auditLoadTimer);
+    const mine = ++auditLoadGeneration;
+    const params = gateRecordParams();
+    auditError = '';
+    if (params.from && params.to && params.from > params.to) {
+      auditError = 'Start date must be on or before end date.';
+      auditLoading = false; state.auditResults = null; renderFullAuditTable(); return;
+    }
+    if (!window.ApiClient || (window.SPAuth && !SPAuth.isAuthenticated())) return;
+    auditLoading = true; state.auditResults = null; renderFullAuditTable();
+    try {
+      const data = await ApiClient.getGateRecords(params);
+      if (mine !== auditLoadGeneration) return;
+      if (!data || !Array.isArray(data.rows) || !Number.isInteger(data.total) || !data.summary) throw new Error('The server returned incomplete gate records.');
+      state.auditResults = data; state.auditFilter.page = data.page;
+      if (auditOfficerFilter) {
+        auditOfficerFilter.replaceChildren(new Option('All officers',''));
+        const officers = [...new Set([...(data.officers || []), ...(state.auditFilter.officer ? [state.auditFilter.officer] : [])])];
+        officers.forEach(name => auditOfficerFilter.add(new Option(name,name)));
+        auditOfficerFilter.value = state.auditFilter.officer;
+      }
+    } catch (error) {
+      if (mine !== auditLoadGeneration) return;
+      auditError = error.message || 'Gate records could not be loaded. Try again.';
+    } finally {
+      if (mine === auditLoadGeneration) {auditLoading = false; renderFullAuditTable();}
+    }
+  }
+  function requestGateRecords(delay = 0) {
+    clearTimeout(auditLoadTimer);
+    // Invalidate an older reply as soon as a filter changes, before debounce expires.
+    ++auditLoadGeneration;
+    state.auditFilter.page = 1; state.auditResults = null; auditError = ''; auditLoading = true;
+    renderFullAuditTable();
+    auditLoadTimer = setTimeout(loadGateRecords,delay);
+  }
   function getFilteredAuditLogs() {
-    return state.auditLogs.filter(log => {
-      const q = (state.auditFilter.search || '').toLowerCase().trim();
-      const matchesSearch = !q ||
-        (log.plateNumber && log.plateNumber.toLowerCase().includes(q)) ||
-        (log.ownerName && log.ownerName.toLowerCase().includes(q)) ||
-        (log.driverName && log.driverName.toLowerCase().includes(q)) ||
-        (log.gatePoint && log.gatePoint.toLowerCase().includes(q)) ||
-        (log.guardName && log.guardName.toLowerCase().includes(q)) ||
-        (log.action && log.action.toLowerCase().includes(q)) ||
-        (log.status && log.status.toLowerCase().includes(q)) ||
-        (log.vehicleType && log.vehicleType.toLowerCase().includes(q)) ||
-        (log.notes && log.notes.toLowerCase().includes(q)) ||
-        (String(log.id).includes(q));
-
-      // 1. Quick Pills Status Filter
-      let matchesStatus = true;
-      if (state.auditFilter.status === 'Inside') {
-        matchesStatus = log.status === 'Inside Campus';
-      } else if (state.auditFilter.status === 'Exited') {
-        matchesStatus = log.status === 'Exited';
-      } else if (state.auditFilter.status === 'Blocked') {
-        matchesStatus = log.status === 'Blocked / Alert' || /denied|hold|flag/i.test(log.action || '');
-      }
-
-      // 2. Event Type Filter
-      let matchesEventType = true;
-      const act = (log.action || '').toLowerCase();
-      if (state.auditFilter.eventType === 'Entry') {
-        matchesEventType = (act.includes('entry') || act.includes('ingress')) && !act.includes('denied');
-      } else if (state.auditFilter.eventType === 'ExitApproved') {
-        matchesEventType = (act.includes('exit') || act.includes('egress')) && !act.includes('denied');
-      } else if (state.auditFilter.eventType === 'ExitDenied') {
-        matchesEventType = act.includes('exit') && act.includes('denied');
-      } else if (state.auditFilter.eventType === 'EntryDenied') {
-        matchesEventType = act.includes('entry') && act.includes('denied');
-      } else if (state.auditFilter.eventType === 'SecurityHold') {
-        matchesEventType = act.includes('hold') || act.includes('flag') || act.includes('alert') || log.status === 'Blocked / Alert';
-      }
-
-      // 3. Gate Filter
-      let matchesGate = true;
-      if (state.auditFilter.gate !== 'All') {
-        matchesGate = Boolean(log.gatePoint && log.gatePoint.toLowerCase().includes(state.auditFilter.gate.toLowerCase()));
-      }
-
-      // 4. Date Range Filter
-      let matchesDate = true;
-      if (state.auditFilter.dateRange !== 'All') {
-        const logDate = getLogDate(log);
-        if (logDate) {
-          const now = new Date();
-          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-          const logTime = logDate.getTime();
-          if (state.auditFilter.dateRange === 'Today') {
-            matchesDate = logTime >= todayStart;
-          } else if (state.auditFilter.dateRange === 'Yesterday') {
-            const yesterdayStart = todayStart - 86400000;
-            matchesDate = logTime >= yesterdayStart && logTime < todayStart;
-          } else if (state.auditFilter.dateRange === 'Last7Days') {
-            const weekStart = todayStart - (7 * 86400000);
-            matchesDate = logTime >= weekStart;
-          }
-        }
-      }
-
-      return matchesSearch && matchesStatus && matchesEventType && matchesGate && matchesDate;
-    });
+    return state.auditResults?.rows || [];
   }
 
   function updateAuditSummaryStats() {
-    const total = state.auditLogs.length;
-    const insideCount = state.auditLogs.filter(l => entryPassage(l) && !deniedPassage(l)).length;
-    const exitedCount = state.auditLogs.filter(l => /exit|egress/i.test(l.action || '') && !deniedPassage(l)).length;
-    const blockedCount = state.auditLogs.filter(l => l.status === 'Blocked / Alert' || /denied|hold|flag/i.test(l.action || '')).length;
+    const summary = state.auditResults?.summary || {};
+    const total = summary.total || 0;
+    const insideCount = summary.entries || 0;
+    const exitedCount = summary.exits || 0;
+    const blockedCount = summary.security || 0;
 
     if (auditSummaryTotal) auditSummaryTotal.textContent = total;
     if (auditSummaryInside) auditSummaryInside.textContent = insideCount;
@@ -2252,8 +2235,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (auditPillCountAll) auditPillCountAll.textContent = `(${total})`;
-    if (auditPillCountInside) auditPillCountInside.textContent = `(${state.auditLogs.filter(log => log.status === 'Inside Campus').length})`;
-    if (auditPillCountExited) auditPillCountExited.textContent = `(${state.auditLogs.filter(log => log.status === 'Exited').length})`;
+    if (auditPillCountInside) auditPillCountInside.textContent = `(${summary.inside || 0})`;
+    if (auditPillCountExited) auditPillCountExited.textContent = `(${summary.exited || 0})`;
     if (auditPillCountBlocked) auditPillCountBlocked.textContent = `(${blockedCount})`;
   }
 
@@ -2268,14 +2251,15 @@ document.addEventListener('DOMContentLoaded', () => {
       state.auditFilter.status !== 'All' ||
       state.auditFilter.eventType !== 'All' ||
       state.auditFilter.gate !== 'All' ||
-      state.auditFilter.dateRange !== 'All'
+      state.auditFilter.dateRange !== 'All' || state.auditFilter.dateFrom || state.auditFilter.dateTo ||
+      state.auditFilter.timeFrom || state.auditFilter.timeTo || state.auditFilter.officer || state.auditFilter.source !== 'All' || state.auditFilter.sort !== 'newest'
     );
     if (auditResetFiltersBtn) {
       auditResetFiltersBtn.classList.toggle('hidden', !isFiltered);
     }
 
     const filtered = getFilteredAuditLogs();
-    const total = filtered.length;
+    const total = state.auditResults?.total || 0;
     const pageSize = state.auditFilter.pageSize;
     const totalPages = Math.ceil(total / pageSize) || 1;
 
@@ -2284,7 +2268,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.auditFilter.page < 1) state.auditFilter.page = 1;
 
     const startIdx = (state.auditFilter.page - 1) * pageSize;
-    const pagedLogs = filtered.slice(startIdx, startIdx + pageSize);
+    const pagedLogs = filtered;
 
     // Update Pagination UI
     if (auditPaginationInfo) {
@@ -2296,8 +2280,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (auditPrevBtn) auditPrevBtn.disabled = state.auditFilter.page <= 1;
-    if (auditNextBtn) auditNextBtn.disabled = state.auditFilter.page >= totalPages;
+    if (auditPrevBtn) auditPrevBtn.disabled = auditLoading || !!auditError || state.auditFilter.page <= 1;
+    if (auditNextBtn) auditNextBtn.disabled = auditLoading || !!auditError || state.auditFilter.page >= totalPages;
+    if (exportCsvBtn) exportCsvBtn.disabled = auditLoading || auditExporting || !!auditError || !total;
+    if (auditFilterMessage) auditFilterMessage.textContent = auditLoading ? 'Loading matching gate records…' : auditError || `${total} matching record${total === 1 ? '' : 's'} across the full gate history.`;
+    if (auditFilterRetryBtn) auditFilterRetryBtn.classList.toggle('hidden', !auditError || auditError.startsWith('Start date'));
+    fullAuditTableBody.closest('table').setAttribute('aria-busy', String(auditLoading));
+    if (auditLoading || auditError) {
+      if (auditPaginationInfo) auditPaginationInfo.textContent = auditLoading ? 'Loading…' : 'Records unavailable';
+      fullAuditTableBody.innerHTML = `<tr><td colspan="8" class="py-12 text-center text-slate-500 text-xs">${auditLoading ? 'Loading gate records…' : 'Adjust the filters or retry to load gate records.'}</td></tr>`;
+      return;
+    }
 
     if (pagedLogs.length === 0) {
       fullAuditTableBody.innerHTML = `
@@ -2381,7 +2374,7 @@ document.addEventListener('DOMContentLoaded', () => {
         eventTitleClass = 'font-bold text-amber-800';
       }
 
-      const campusStateSubtext = log.status === 'Inside Campus' ? 'Currently on campus' : (log.status === 'Exited' ? 'Departed campus' : (log.status || 'Movement logged'));
+      const campusStateSubtext = log.status === 'Inside Campus' ? 'Inside after this event' : (log.status === 'Exited' ? 'Outside after this event' : (log.status || 'Movement logged'));
 
       // 4. Vehicle Column
       const plateHtml = `
@@ -2479,7 +2472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fullAuditSearchInput.addEventListener('input', (e) => {
       state.auditFilter.search = e.target.value;
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords(250);
     });
   }
 
@@ -2494,7 +2487,7 @@ document.addEventListener('DOMContentLoaded', () => {
       pill.className = activeClass;
       state.auditFilter.status = pill.getAttribute('data-filter') || 'All';
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   });
 
@@ -2502,7 +2495,7 @@ document.addEventListener('DOMContentLoaded', () => {
     auditEventTypeFilter.addEventListener('change', (e) => {
       state.auditFilter.eventType = e.target.value;
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
@@ -2510,15 +2503,17 @@ document.addEventListener('DOMContentLoaded', () => {
     auditGateFilter.addEventListener('change', (e) => {
       state.auditFilter.gate = e.target.value;
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
   if (auditDateFilter) {
     auditDateFilter.addEventListener('change', (e) => {
       state.auditFilter.dateRange = e.target.value;
+      if (e.target.value !== 'Custom') {state.auditFilter.dateFrom = ''; state.auditFilter.dateTo = '';}
+      else {state.auditFilter.dateFrom = auditDateFrom.value; state.auditFilter.dateTo = auditDateTo.value;}
       state.auditFilter.page = 1;
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
@@ -2530,7 +2525,14 @@ document.addEventListener('DOMContentLoaded', () => {
       state.auditFilter.gate = 'All';
       state.auditFilter.dateRange = 'All';
       state.auditFilter.page = 1;
+      state.auditFilter.dateFrom = ''; state.auditFilter.dateTo = '';
+      state.auditFilter.timeFrom = ''; state.auditFilter.timeTo = '';
+      state.auditFilter.officer = ''; state.auditFilter.source = 'All';
+      state.auditFilter.sort = 'newest';
 
+      [auditDateFrom, auditDateTo, auditTimeFrom, auditTimeTo, auditOfficerFilter].forEach(el => {if (el) el.value = '';});
+      if (auditSourceFilter) auditSourceFilter.value = 'All';
+      if (auditSortFilter) auditSortFilter.value = 'newest';
       if (fullAuditSearchInput) fullAuditSearchInput.value = '';
       if (auditEventTypeFilter) auditEventTypeFilter.value = 'All';
       if (auditGateFilter) auditGateFilter.value = 'All';
@@ -2542,7 +2544,7 @@ document.addEventListener('DOMContentLoaded', () => {
         p.className = p.getAttribute('data-filter') === 'All' ? activeClass : inactiveClass;
       });
 
-      renderFullAuditTable();
+      requestGateRecords();
     });
   }
 
@@ -2550,17 +2552,17 @@ document.addEventListener('DOMContentLoaded', () => {
     auditPrevBtn.addEventListener('click', () => {
       if (state.auditFilter.page > 1) {
         state.auditFilter.page--;
-        renderFullAuditTable();
+        loadGateRecords();
       }
     });
   }
 
   if (auditNextBtn) {
     auditNextBtn.addEventListener('click', () => {
-      const totalPages = Math.ceil(getFilteredAuditLogs().length / state.auditFilter.pageSize) || 1;
+      const totalPages = Math.ceil((state.auditResults?.total || 0) / state.auditFilter.pageSize) || 1;
       if (state.auditFilter.page < totalPages) {
         state.auditFilter.page++;
-        renderFullAuditTable();
+        loadGateRecords();
       }
     });
   }
@@ -2571,40 +2573,51 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function exportAuditCsv() {
-    const logs = getFilteredAuditLogs();
-    if (logs.length === 0) {
-      showToast("No matching audit logs available to export.");
-      return;
+  [
+    [auditDateFrom,'dateFrom'], [auditDateTo,'dateTo'], [auditTimeFrom,'timeFrom'], [auditTimeTo,'timeTo'],
+    [auditOfficerFilter,'officer'], [auditSourceFilter,'source'], [auditSortFilter,'sort'], [auditPageSize,'pageSize']
+  ].forEach(([element,key]) => element?.addEventListener('change', () => {
+    state.auditFilter[key] = key === 'pageSize' ? Number(element.value) : element.value;
+    if (key === 'dateFrom' || key === 'dateTo') {
+      state.auditFilter.dateFrom = auditDateFrom.value; state.auditFilter.dateTo = auditDateTo.value;
+      state.auditFilter.dateRange = 'Custom'; if (auditDateFilter) auditDateFilter.value = 'Custom';
     }
+    requestGateRecords();
+  }));
+  auditFilterRetryBtn?.addEventListener('click',loadGateRecords);
+  document.addEventListener('sp:auth-required', () => {
+    ++auditLoadGeneration; clearTimeout(auditLoadTimer); state.auditResults = null; auditLoading = false;
+  });
 
-    const headers = ["Log ID", "Timestamp", "Plate Number", "Vehicle Type", "Owner Name", "Driver Name", "Relationship", "Gate Point", "Action", "Status", "Officer", "Notes"];
-    const rows = logs.map(l => [
-      l.id,
-      `"${l.timestamp}"`,
-      `"${l.plateNumber}"`,
-      `"${l.vehicleType || ''}"`,
-      `"${l.ownerName || ''}"`,
-      `"${l.driverName || ''}"`,
-      `"${l.driverRelationship || ''}"`,
-      `"${l.gatePoint || ''}"`,
-      `"${l.action || ''}"`,
-      `"${l.status || ''}"`,
-      `"${l.guardName || ''}"`,
-      `"${(l.notes || '').replace(/"/g, '""')}"`
-    ]);
-
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `securepark_audit_logs_${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast(`Exported ${logs.length} audit logs to CSV.`);
+  async function exportAuditCsv() {
+    if (auditExporting || auditLoading || auditError || !state.auditResults?.total) return;
+    auditExporting = true; renderFullAuditTable();
+    try {
+      const params = {...gateRecordParams(), page:1, limit:200, snapshot:state.auditResults.snapshot};
+      const logs = [];
+      let total;
+      do {
+        const data = await ApiClient.getGateRecords(params);
+        if (!data || !Array.isArray(data.rows) || !Number.isInteger(data.total)) throw new Error('The server returned incomplete gate records.');
+        total = data.total;
+        if (!data.rows.length && logs.length < total) throw new Error('The record export was interrupted. Please retry.');
+        logs.push(...data.rows); params.page++;
+      } while (logs.length < total);
+      if (!logs.length) {showToast('No matching gate records to export.'); return;}
+      const cell = value => {
+        let text = String(value ?? '');
+        if (/^\s*[=+@-]/.test(text)) text = "'" + text;
+        return '"' + text.replace(/"/g,'""') + '"';
+      };
+      const headers = ['Log ID','Timestamp (Manila UTC+8)','Plate Number','Vehicle Type','Owner Name','Driver Name','Relationship','Gate Point','Action','Status','Officer','Notes','Offline synced at'];
+      const rows = logs.map(l => [l.id,l.loggedAt,l.plateNumber,l.vehicleType,l.ownerName,l.driverName,l.driverRelationship,l.gatePoint,l.action,l.status,l.guardName,l.notes,l.syncedAt].map(cell).join(','));
+      const blob = new Blob(['\uFEFF'+[headers.map(cell).join(','),...rows].join('\r\n')],{type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = `securepark_gate_records_${manilaDay()}.csv`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      showToast(`Exported ${logs.length} matching gate records.`);
+    } catch (error) {showToast(error.message || 'Export failed. Please retry.','error');}
+    finally {auditExporting = false; renderFullAuditTable();}
   }
 
   /* ==========================================================================
@@ -2762,6 +2775,7 @@ document.addEventListener('DOMContentLoaded', () => {
       vipGrantedBy: v.vipGrantedBy || null,
       vipGrantedAt: v.vipGrantedAt || null,
       isBanned: !!v.isBanned,
+      standing: v.standing || null,
       isRetired: !!v.isRetired,
       retiredReason: v.retiredReason || null,
       entryTime: entryTime,
@@ -2959,7 +2973,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
           Replace Pass
         </button>
-        ${v.isBanned && v.status === 'Inside Campus' ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
+        ${v.standing?.releaseEligible ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
         ${v.isRetired ? '' : `<button id="drawerRetireBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="The owner sold or no longer uses this vehicle. History is kept.">Retire</button>`}
         <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
           <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3146,7 +3160,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isHeld) {
       footerHtml = `
         <button id="drawerResolveBtn" class="admin-only px-3 py-1.5 rounded-md bg-ncst-green hover:bg-ncst-greenDark text-white text-xs font-semibold">
-          Clear & Unblock
+          Review case
         </button>
         <button id="drawerCancelBtnInner" class="px-3 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700">
           Close
@@ -3699,12 +3713,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Edit Vehicle Form Submission
   if (editVehicleForm) {
-    editVehicleForm.addEventListener('submit', (e) => {
+    editVehicleForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const saveButton = document.getElementById('saveEditVehicleBtn');
+      if (saveButton?.disabled) return;
       const targetId = editVehicleId.value;
       const v = state.vehicles.find(item => String(item.id) === String(targetId));
       if (!v) return;
-      const beforeSave = { ...v };
       const requestedVip = editPassClassVip ? editPassClassVip.checked : Boolean(v.isVip);
 
       const ownerRole = editOwnerRole ? editOwnerRole.value : (v.ownerRole || 'Student');
@@ -3759,85 +3774,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
-      // Update in-memory vehicle record
-      v.plateNumber = plateNumber;
-      v.plate_number = plateNumber;
-      v.ownerName = ownerFullName;
-      v.owner_name = ownerFullName;
-      v.ownerRole = ownerRole;
-      v.owner_role = ownerRole;
-      v.ownerIdNumber = ownerIdNumber;
-      v.owner_id_number = ownerIdNumber;
-      v.department = department;
-      v.ownerPhone = ownerPhone;
-      v.owner_phone = ownerPhone;
-      v.ownerEmail = ownerEmail;
-      v.owner_email = ownerEmail;
-      v.vehicleType = vehicleCategory;
-      v.vehicle_type = vehicleCategory;
-      v.makeModelColor = makeModelColor;
-      v.make_model_color = makeModelColor;
-      v.stickerYear = stickerYear;
-      v.sticker_year = stickerYear;
-      // VIP status stays server-confirmed until the update succeeds.
-      v.registrationStatus = registrationStatus;
-      v.registration_status = registrationStatus;
-      v.ownerPhoto = editOwnerPhotoDataUrl;
-      v.owner_photo = editOwnerPhotoDataUrl;
-      v.ownerPhotoUrl = editOwnerPhotoDataUrl;
-      v.vehiclePhoto = editVehiclePhotoDataUrl;
-      v.vehicle_photo = editVehiclePhotoDataUrl;
-      v.authorizedDrivers = authorizedDrivers;
-
-      closeEditModal();
-      renderVehiclesTable();
-      updateCounts();
-      renderDashboard();
-      showToast(`Saving changes for ${v.plateNumber}…`);
-
-      // Sync with InfinityFree backend API
-      if (window.ApiClient && v.id) {
-        ApiClient.updateVehicle(v.id, {
-          plateNumber: v.plateNumber,
-          plate_number: v.plateNumber,
-          vehicleType: v.vehicleType,
-          category: v.vehicleType && v.vehicleType.toLowerCase().includes('motorcycle') ? 'motorcycle' : (v.vehicleType && v.vehicleType.toLowerCase().includes('bicycle') ? 'non-plated' : 'plated'),
-          makeModelColor: v.makeModelColor,
-          ownerName: v.ownerName,
-          ownerRole: v.ownerRole,
-          department: v.department,
-          ownerIdNumber: v.ownerIdNumber,
-          ownerPhone: v.ownerPhone,
-          ownerEmail: v.ownerEmail,
-          stickerYear: v.stickerYear,
-          ...(passDateChanged ? { passValidUntil: newPassDate } : {}),
-          passClass: requestedVip ? 'VIP' : 'Standard',
-          registrationStatus: v.registrationStatus,
-          ownerPhoto: v.ownerPhoto,
-          vehiclePhoto: v.vehiclePhoto,
-          authorizedDrivers: v.authorizedDrivers
-        }).then((saved) => {
-          const wasUnpaid = v.paymentStatus === 'Unpaid';
-          if (saved) applyServerPass(v, saved);
-          renderVehiclesTable();
-          updateCounts();
-          renderDashboard();
-          if (!wasUnpaid && v.paymentStatus === 'Unpaid') {
-            // The edit moved the vehicle into a higher fee class: the difference is due before it can enter again
-            showToast(`Changes saved. ${v.plateNumber} now owes ₱${Number(v.feeAmount).toLocaleString('en-PH')} (fee difference) and cannot enter until it is paid at the Cashier or online.`, 'warning');
-            document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
-          } else {
-            showToast(`Changes saved for ${v.plateNumber}.`);
-          }
-          console.log('[App] Vehicle updated on server:', v.plateNumber);
-        }).catch(err => {
-          console.warn('[App] Update API sync notice:', err.message);
-          Object.assign(v, beforeSave);
-          renderVehiclesTable();
-          updateCounts();
-          renderDashboard();
-          showToast(`Changes were not saved: ${err.message}`);
+      const payload = {
+        plateNumber, plate_number: plateNumber, vehicleType: vehicleCategory,
+        category: vehicleCategory.toLowerCase().includes('motorcycle') ? 'motorcycle' : (vehicleCategory.toLowerCase().includes('bicycle') ? 'non-plated' : 'plated'),
+        makeModelColor, ownerName: ownerFullName, ownerRole, department,
+        ownerIdNumber, ownerPhone, ownerEmail, stickerYear,
+        ...(passDateChanged ? { passValidUntil: newPassDate } : {}),
+        passClass: requestedVip ? 'VIP' : 'Standard', registrationStatus,
+        ownerPhoto: editOwnerPhotoDataUrl, vehiclePhoto: editVehiclePhotoDataUrl,
+        authorizedDrivers
+      };
+      if (saveButton) saveButton.disabled = true;
+      let savedOnServer = false;
+      try {
+        const wasUnpaid = v.paymentStatus === 'Unpaid';
+        const saved = await ApiClient.updateVehicle(v.id, payload);
+        savedOnServer = true;
+        Object.assign(v, {
+          plateNumber, plate_number: plateNumber, ownerName: ownerFullName, owner_name: ownerFullName,
+          ownerRole, owner_role: ownerRole, ownerIdNumber, owner_id_number: ownerIdNumber,
+          department, ownerPhone, owner_phone: ownerPhone, ownerEmail, owner_email: ownerEmail,
+          vehicleType: vehicleCategory, vehicle_type: vehicleCategory,
+          makeModelColor, make_model_color: makeModelColor, stickerYear, sticker_year: stickerYear,
+          registrationStatus, registration_status: registrationStatus,
+          ownerPhoto: editOwnerPhotoDataUrl, owner_photo: editOwnerPhotoDataUrl, ownerPhotoUrl: editOwnerPhotoDataUrl,
+          vehiclePhoto: editVehiclePhotoDataUrl, vehicle_photo: editVehiclePhotoDataUrl, authorizedDrivers
         });
+        if (saved) applyServerPass(v, saved);
+        closeEditModal();
+        renderVehiclesTable(); updateCounts(); renderDashboard();
+        if (!wasUnpaid && v.paymentStatus === 'Unpaid') {
+          showToast(`Changes saved. ${v.plateNumber} now owes ₱${Number(v.feeAmount).toLocaleString('en-PH')} (fee difference) and cannot enter until it is paid at the Cashier or online.`, 'warning');
+          document.dispatchEvent(new CustomEvent('sp:vehicle-registered'));
+        } else {
+          showToast(`Changes saved for ${v.plateNumber}.`, 'success');
+        }
+      } catch (err) {
+        showToast(savedOnServer
+          ? 'Changes were saved, but the fleet display could not update. Refresh before editing again.'
+          : `Changes were not saved: ${err.message}`, 'error');
+      } finally {
+        if (saveButton) saveButton.disabled = false;
       }
     });
   }
@@ -4219,24 +4196,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Handle Form Submission
   if (vehicleForm) {
-    vehicleForm.addEventListener('submit', (e) => {
+    vehicleForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const submitButton = document.getElementById('submitVehicleBtn');
+      if (submitButton?.disabled) return;
 
       const plateNumber = plateInput.value.trim().toUpperCase();
 
       // Check duplicate plate
       if (state.vehicles.some(v => v.plateNumber === plateNumber)) {
-        showToast(`Error: Plate ${plateNumber} is already registered!`);
+        plateValidationMsg.textContent = `Plate ${plateNumber} is already registered.`;
+        plateValidationMsg.classList.remove('hidden');
         plateInput.focus();
-        return;
-      }
-
-      // One vehicle per ID number (the server enforces this too)
-      const enteredOwnerId = document.getElementById('ownerIdNumber').value.trim().toUpperCase();
-      const ownerTaken = enteredOwnerId && state.vehicles.find(v => String(v.ownerIdNumber || v.owner_id_number || '').trim().toUpperCase() === enteredOwnerId);
-      if (ownerTaken) {
-        showToast(`ID ${enteredOwnerId} already has a registered vehicle (${ownerTaken.plateNumber}). Only one vehicle can be registered per ID number.`, 'warning');
-        document.getElementById('ownerIdNumber').focus();
         return;
       }
 
@@ -4312,17 +4283,10 @@ document.addEventListener('DOMContentLoaded', () => {
         authorizedDrivers
       };
 
-      // Add to Registered Fleet (gate passages are only recorded when vehicle actually enters at a gate)
-      state.vehicles.unshift(newVehicle);
-
-      showToast(`Vehicle ${plateNumber} enrolled successfully.`);
-      updateCounts();
-      renderDashboard();
-      renderFullAuditTable();
-
-      // Synchronize with InfinityFree Backend API
-      if (window.ApiClient) {
-        ApiClient.registerVehicle({
+      if (submitButton) submitButton.disabled = true;
+      let savedOnServer = false;
+      try {
+        const res = await ApiClient.registerVehicle({
           plateNumber,
           vehicleType: newVehicle.vehicleType,
           category: newVehicle.category,
@@ -4338,10 +4302,12 @@ document.addEventListener('DOMContentLoaded', () => {
           ownerPhoto: ownerPhotoDataUrl,
           vehiclePhoto: vehiclePhotoDataUrl,
           authorizedDrivers
-        }).then(res => {
+        });
+          savedOnServer = true;
           if (res && res.id) newVehicle.id = res.id;
           if (res) applyServerPass(newVehicle, res);
-          console.log('[App] Vehicle enrolled on backend:', res);
+          state.vehicles.unshift(newVehicle);
+          updateCounts(); renderDashboard(); renderVehiclesTable(); renderFullAuditTable();
           if (res && res.paymentStatus === 'Unpaid') {
             newVehicle.paymentStatus = 'Unpaid';
             newVehicle.feeAmount = res.feeAmount;
@@ -4355,29 +4321,25 @@ document.addEventListener('DOMContentLoaded', () => {
           const acct = res && res.studentAccount;
           if (acct && acct.tempPassword && window.SPTempPassword) {
             SPTempPassword(`Student portal login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
+          } else if (acct?.error) {
+            showToast(`${plateNumber} was registered, but the owner login was not created. Issue it from the vehicle record.`, 'warning');
           }
-        }).catch(err => {
-          console.warn('[App] Registration was not saved:', err.message);
-          if (err.status >= 400 && err.status < 500) {
-            // The server refused it (e.g. the ID already has a vehicle): drop the optimistic local row
-            state.vehicles = state.vehicles.filter(x => x !== newVehicle);
-            updateCounts();
-            renderDashboard();
-            renderVehiclesTable();
-            showToast(`${plateNumber} was not registered: ${err.message}`, 'warning');
-          } else {
-            showToast(`Notice: Saved locally, server sync error: ${err.message}`);
-          }
-        });
+          vehicleForm.reset();
+          resetDriverFields(); resetOwnerPhoto(); resetVehiclePhoto();
+          plateValidationMsg.classList.add('hidden');
+          plateInput.classList.remove('border-ncst-crimson');
+      } catch (err) {
+        if (!savedOnServer && err.status === 409 && /plate.*already registered/i.test(err.message)) {
+          plateValidationMsg.textContent = err.message;
+          plateValidationMsg.classList.remove('hidden');
+          plateInput.focus();
+        }
+        showToast(savedOnServer
+          ? 'Vehicle was registered, but the fleet display could not update. Refresh before taking another action.'
+          : `Vehicle was not confirmed: ${err.message} Check the fleet before retrying.`, 'error');
+      } finally {
+        if (submitButton) submitButton.disabled = false;
       }
-
-      // Reset form
-      vehicleForm.reset();
-      resetDriverFields();
-      resetOwnerPhoto();
-      resetVehiclePhoto();
-      plateValidationMsg.classList.add('hidden');
-      plateInput.classList.remove('border-ncst-crimson');
 
     });
   }
@@ -5148,16 +5110,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!window.ApiClient) return;
     try {
       const needVehicles = !silent || forceVehicles || (Date.now() - lastVehiclesLoad) >= VEHICLES_REFRESH_MS;
-      const [vehicles, logs, incidents, visitors, onCampus] = await Promise.all([
+      const [vehicles, logs, incidents, visitors, onCampus, stats] = await Promise.all([
         needVehicles ? ApiClient.getVehicles().catch(error => { if (strict) throw error; return null; }) : Promise.resolve(null),
         ApiClient.getLogs().catch(error => { if (strict) throw error; return null; }),
         ApiClient.getIncidents().catch(error => { if (strict) throw error; return null; }),
         ApiClient.getVisitorPasses().catch(error => { if (strict) throw error; return null; }),
-        ApiClient.getOnCampus().catch(error => { if (strict) throw error; return null; })
+        ApiClient.getOnCampus().catch(error => { if (strict) throw error; return null; }),
+        ApiClient.getStats().catch(error => { if (strict) throw error; return null; })
       ]);
 
       if (mine !== coreLoadGeneration || (window.SPAuth && !SPAuth.isAuthenticated())) return;
-      let hasUpdate = false;
+      state.stats = stats;
+      let hasUpdate = !!stats;
       if (vehicles && Array.isArray(vehicles)) {
         state.vehicles = vehicles.map(v => normalizeVehicle(v));
         lastVehiclesLoad = Date.now();
@@ -5185,7 +5149,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDashboard();
         renderVehiclesTable();
         renderIncidentsTable();
-        renderFullAuditTable();
+        if (state.currentView === 'auditView') await loadGateRecords();
         if (!silent) console.log('[App] Synchronized state with backend.');
       }
     } catch (err) {
@@ -5202,7 +5166,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SPLive?.subscribe(async changed => {
     if (!liveDrawer || drawerOverlay.classList.contains('hidden') || !changed.some(k => ['vehicles','movements','cases','visitors','evidence'].includes(k))) return;
     const {kind,id} = liveDrawer;
-    const record = ({vehicle:state.vehicles, incident:state.incidents, log:state.auditLogs}[kind] || []).find(r => String(r.id) === String(id));
+    const record = ({vehicle:state.vehicles, incident:state.incidents, log:[...getFilteredAuditLogs(),...state.auditLogs]}[kind] || []).find(r => String(r.id) === String(id));
     if (!record) { closeDrawer(); showToast('This record is no longer available.', 'warning'); return; }
     ({vehicle:openVehicleDrawer, incident:openIncidentDrawer, log:openAuditDrawer}[kind])(record);
   });

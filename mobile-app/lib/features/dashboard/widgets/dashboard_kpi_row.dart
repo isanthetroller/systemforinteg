@@ -3,9 +3,9 @@ import '../../../theme/ncst_theme.dart';
 import 'kpi_metric_card.dart';
 
 class DashboardKpiRow extends StatelessWidget {
-  final int insideCount;
-  final int totalEntriesToday;
-  final int blockedTodayCount;
+  final int? insideCount;
+  final int? totalEntriesToday;
+  final int? blockedTodayCount;
 
   const DashboardKpiRow({
     super.key,
@@ -27,23 +27,23 @@ class DashboardKpiRow extends StatelessWidget {
             children: [
               KpiMetricCard(
                 label: 'INSIDE CAMPUS',
-                value: '$insideCount',
+                value: insideCount?.toString() ?? '—',
                 color: NcstColors.green,
                 icon: Icons.directions_car_outlined,
                 compact: true,
               ),
               const SizedBox(height: 8),
               KpiMetricCard(
-                label: 'TOTAL ENTRIES',
-                value: '$totalEntriesToday',
+                label: 'ENTRIES TODAY',
+                value: totalEntriesToday?.toString() ?? '—',
                 color: NcstColors.navy,
                 icon: Icons.playlist_add_check_rounded,
                 compact: true,
               ),
               const SizedBox(height: 8),
               KpiMetricCard(
-                label: 'BLOCKED ATTEMPTS',
-                value: '$blockedTodayCount',
+                label: 'DENIED TODAY',
+                value: blockedTodayCount?.toString() ?? '—',
                 color: NcstColors.crimson,
                 icon: Icons.block_outlined,
                 compact: true,
@@ -57,7 +57,7 @@ class DashboardKpiRow extends StatelessWidget {
             children: [
               KpiMetricCard(
                 label: 'INSIDE CAMPUS',
-                value: '$insideCount',
+                value: insideCount?.toString() ?? '—',
                 color: NcstColors.green,
                 icon: Icons.directions_car_outlined,
                 compact: true,
@@ -67,8 +67,8 @@ class DashboardKpiRow extends StatelessWidget {
                 children: [
                   Expanded(
                     child: KpiMetricCard(
-                      label: 'TOTAL ENTRIES',
-                      value: '$totalEntriesToday',
+                      label: 'ENTRIES TODAY',
+                      value: totalEntriesToday?.toString() ?? '—',
                       color: NcstColors.navy,
                       icon: Icons.playlist_add_check_rounded,
                       compact: true,
@@ -77,8 +77,8 @@ class DashboardKpiRow extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: KpiMetricCard(
-                      label: 'BLOCKED ATTEMPTS',
-                      value: '$blockedTodayCount',
+                      label: 'DENIED TODAY',
+                      value: blockedTodayCount?.toString() ?? '—',
                       color: NcstColors.crimson,
                       icon: Icons.block_outlined,
                       compact: true,
@@ -95,7 +95,7 @@ class DashboardKpiRow extends StatelessWidget {
             Expanded(
               child: KpiMetricCard(
                 label: 'INSIDE CAMPUS',
-                value: '$insideCount',
+                value: insideCount?.toString() ?? '—',
                 color: NcstColors.green,
                 icon: Icons.directions_car_outlined,
                 compact: isCompact,
@@ -104,8 +104,8 @@ class DashboardKpiRow extends StatelessWidget {
             SizedBox(width: isCompact ? 8 : 12),
             Expanded(
               child: KpiMetricCard(
-                label: 'TOTAL ENTRIES',
-                value: '$totalEntriesToday',
+                label: 'ENTRIES TODAY',
+                value: totalEntriesToday?.toString() ?? '—',
                 color: NcstColors.navy,
                 icon: Icons.playlist_add_check_rounded,
                 compact: isCompact,
@@ -114,8 +114,8 @@ class DashboardKpiRow extends StatelessWidget {
             SizedBox(width: isCompact ? 8 : 12),
             Expanded(
               child: KpiMetricCard(
-                label: 'BLOCKED ATTEMPTS',
-                value: '$blockedTodayCount',
+                label: 'DENIED TODAY',
+                value: blockedTodayCount?.toString() ?? '—',
                 color: NcstColors.crimson,
                 icon: Icons.block_outlined,
                 compact: isCompact,

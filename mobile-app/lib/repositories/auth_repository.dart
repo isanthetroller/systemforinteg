@@ -33,7 +33,7 @@ class ApiAuthRepository implements AuthRepository {
     required String password,
   }) async {
     final cleanUsername = username.trim();
-    final cleanPassword = password.trim();
+    final cleanPassword = password;
 
     if (cleanUsername.isEmpty) {
       throw const AuthException('Please enter your guard username or ID.');
@@ -97,7 +97,7 @@ class MockAuthRepository implements AuthRepository {
     required String password,
   }) async {
     final cleanUsername = username.trim().toLowerCase();
-    final cleanPassword = password.trim();
+    final cleanPassword = password;
 
     // Simulate network delay
     await Future.delayed(const Duration(milliseconds: 600));

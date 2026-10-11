@@ -6,6 +6,7 @@
 /** Allowed settings: key => [default, min, max, label] */
 function spSettingDefinitions() {
     return [
+        'event_gate_mode' => [0, 0, 1, 'Gate operation (0 = normal, 1 = event: entry and exit at both gates)'],
         'parking_capacity' => [0, 0, 100000, 'Parking capacity (0 = not limited)'],
         'notify_entry_exit' => [1, 0, 1, 'E-mail owners when their vehicle enters or leaves campus (1 = yes, 0 = no)'],
         'renewal_window_days' => [60, 1, 365, 'Renewal opens this many days before expiry'],

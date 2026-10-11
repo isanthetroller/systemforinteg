@@ -12,7 +12,7 @@
  *        later day (up to SP_VISITOR_MAX_ADVANCE_DAYS ahead); past dates are refused.
  *        A pass is valid all day on its date, from midnight to midnight (Asia/Manila).
  * PUT  /api/visitors.php  { id, action: "revoke", notes? }   (admin)
- *        Revoking a pass whose visitor is on campus opens a Held incident; the visitor can still leave.
+ *        Revoking a pass whose visitor is on campus opens a Held incident; normal passage remains blocked until administration resolves the restriction.
  *
  * The QR is signed as type "visitor_temp" (lib/qr.php). verify.php rejects it before its date
  * as "NOT_YET_VALID" and after its date as "EXPIRED TEMPORARY PASS".
@@ -186,24 +186,33 @@ function handleCreateVisitor($pdo, $actor) {
 
     $clientCode = trim((string)($data['passCode'] ?? $data['passId'] ?? $data['pass_code'] ?? ''));
     $code = $clientCode !== '' ? $clientCode : newVisitorPassCode($pdo, $validDate);
-    $stmt = $pdo->prepare("INSERT INTO `visitor_passes`
-        (`pass_code`, `visitor_name`, `contact_number`, `plate_number`, `vehicle_model`, `purpose_of_visit`,
-         `person_to_visit`, `valid_date`, `status`, `created_by`, `created_by_user_id`, `created_at`, `vehicle_photo`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?)");
-    $photo = validImageDataUrl($data['vehiclePhoto'] ?? $data['vehicle_photo'] ?? $data['vehiclePhotoUrl'] ?? null);
-    $stmt->execute([$code, $visitorName, $contact, $plate, $vehicleModel ?: null, $purpose, $host, $validDate,
-        actorLabel($actor), actorUserId($actor), date('Y-m-d H:i:s', spNow()), $photo]);
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("INSERT INTO `visitor_passes`
+            (`pass_code`, `visitor_name`, `contact_number`, `plate_number`, `vehicle_model`, `purpose_of_visit`,
+             `person_to_visit`, `valid_date`, `status`, `created_by`, `created_by_user_id`, `created_at`, `vehicle_photo`)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?)");
+        $photo = validImageDataUrl($data['vehiclePhoto'] ?? $data['vehicle_photo'] ?? $data['vehiclePhotoUrl'] ?? null);
+        $stmt->execute([$code, $visitorName, $contact, $plate, $vehicleModel ?: null, $purpose, $host, $validDate,
+            actorLabel($actor), actorUserId($actor), date('Y-m-d H:i:s', spNow()), $photo]);
 
-    $passId = (int)$pdo->lastInsertId();
-    $itemStmt = $pdo->prepare("INSERT INTO `visitor_pass_items` (`visitor_pass_id`, `item_name`, `quantity`, `description`) VALUES (?, ?, ?, ?)");
-    foreach ($items as $item) {
-        $itemStmt->execute([$passId, $item['name'], $item['quantity'], $item['description']]);
+        $passId = (int)$pdo->lastInsertId();
+        $itemStmt = $pdo->prepare("INSERT INTO `visitor_pass_items` (`visitor_pass_id`, `item_name`, `quantity`, `description`) VALUES (?, ?, ?, ?)");
+        foreach ($items as $item) {
+            $itemStmt->execute([$passId, $item['name'], $item['quantity'], $item['description']]);
+        }
+
+        $row = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `id` = ?");
+        $row->execute([$passId]);
+        $issued = formatVisitorPass($row->fetch(), true);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('SecurePark visitor issuance failed: ' . $e->getMessage());
+        sendResponse(503, null, 'Could not issue the visitor pass. Check the visitor list before trying again.');
     }
-
-    $row = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `id` = ?");
-    $row->execute([$passId]);
     $itemNote = $items ? ' Items declared: ' . count($items) . '.' : '';
-    sendResponse(201, formatVisitorPass($row->fetch(), true), "Day pass {$code} issued. Valid only on {$validDate}.{$itemNote}");
+    sendResponse(201, $issued, "Day pass {$code} issued. Valid only on {$validDate}.{$itemNote}");
 }
 
 /**
@@ -271,7 +280,7 @@ function handleRevokeVisitor($pdo, $admin) {
 
     $message = "Day pass {$row['pass_code']} revoked by " . actorLabel($admin) . '.';
     if (!empty($row['entry_time']) && empty($row['exit_time'])) {
-        // The visitor is on campus: flag it so the gate sees a hold. The visitor may still leave.
+        // The visitor is on campus: flag it so the gate sees a hold. Normal passage remains blocked until administration resolves the restriction.
         $notes = trim((string)($data['notes'] ?? ''));
         $incident = openSecurityIncident($pdo, $admin, [
             'plate' => $row['plate_number'],
@@ -291,32 +300,14 @@ function handleRevokeVisitor($pdo, $admin) {
 }
 
 function handleVisitorExit($pdo, $actor) {
-    $data = getJsonInput();
-    $passId = trim((string)($data['passId'] ?? $data['pass_code'] ?? ''));
-    $plate = trim((string)($data['plateNumber'] ?? $data['plate'] ?? ''));
-
-    if ($passId === '' && $plate === '') {
-        sendResponse(400, null, 'Provide passId or plateNumber for visitor checkout.');
+    $actor = requireStaff($pdo);
+    require_once __DIR__ . '/../lib/movements.php';
+    try {
+        $result = confirmVisitorCheckout($pdo, $actor, getJsonInput());
+        sendResponse(200, $result, $result['duplicate'] ? 'Visitor checkout was already recorded.' : 'Visitor checkout and gate audit recorded.');
+    } catch (MovementFailure $e) {
+        sendResponse($e->httpStatus, ['code' => $e->errorCode], $e->getMessage());
+    } catch (Throwable $e) {
+        sendResponse(503, ['code' => 'CONFIRM_RETRY'], 'Could not confirm checkout. Retry the same visitor checkout.');
     }
-
-    $norm = normalizePlate($plate);
-    $stmt = $pdo->prepare("SELECT * FROM `visitor_passes` WHERE `pass_code` = ? OR `plate_number` = ? OR REPLACE(REPLACE(`plate_number`, '-', ''), ' ', '') = ? ORDER BY `id` DESC LIMIT 1");
-    $stmt->execute([$passId, $plate, $norm]);
-    $pass = $stmt->fetch();
-
-    if (!$pass) {
-        sendResponse(404, null, 'Visitor pass not found.');
-    }
-
-    $now = date('Y-m-d H:i:s', spNow());
-    $upd = $pdo->prepare("UPDATE `visitor_passes` SET `exit_time` = COALESCE(`exit_time`, ?), `status` = 'Revoked' WHERE `id` = ?");
-    $upd->execute([$now, $pass['id']]);
-
-    sendResponse(200, [
-        'passId' => $pass['pass_code'],
-        'plateNumber' => $pass['plate_number'],
-        'exitTime' => $now,
-        'status' => 'Revoked',
-    ], 'Visitor checkout confirmed.');
 }
-

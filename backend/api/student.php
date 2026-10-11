@@ -195,8 +195,8 @@ switch ($action) {
         $keys = array_merge(array_map(fn($r) => 'V' . $r['id'], $vRows), array_map(fn($r) => 'I' . $r['id'], $iRows));
         $events = caseEventsFor($pdo, $keys);
         $out = [];
-        foreach ($vRows as $r) { $k = 'V' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('violation', $r, $ev), $ev); }
-        foreach ($iRows as $r) { $k = 'I' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('incident', $r, $ev), $ev); }
+        foreach ($vRows as $r) { $k = 'V' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('violation', $r, $ev), $ev, $pdo); }
+        foreach ($iRows as $r) { $k = 'I' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('incident', $r, $ev), $ev, $pdo); }
         usort($out, fn($a, $b) => strcmp((string)$b['openedAt'], (string)$a['openedAt']));
         sendResponse(200, $out);
 
