@@ -7,6 +7,11 @@
  * POST /api/payments.php { action: "cash", vehicleId, tendered? }
  *                                                Record an in-person cash payment: activates the vehicle's QR pass
  *                                                and returns the receipt. Fails if the vehicle is not Unpaid.
+ * POST /api/payments.php { action: "mark_refunded", paymentIds: [..] | all: true, reference? }
+ *                                                A payment that arrived for an already paid vehicle is flagged
+ *                                                "DUPLICATE" until the money is refunded in the PayMongo dashboard.
+ *                                                This records that the refund was done (who, when, optional PayMongo
+ *                                                reference) so it stops counting as outstanding.
  */
 
 require_once __DIR__ . '/../config/db.php';
@@ -63,8 +68,9 @@ if ($method === 'GET') {
 
     $dayStart = date('Y-m-d') . ' 00:00:00';
     $dayEnd = date('Y-m-d', strtotime('+1 day')) . ' 00:00:00';
+    // Money that was refunded (a duplicate payment marked refunded) is not collected: it is left out of today's totals
     $today = $pdo->prepare("SELECT `method`, COUNT(*) AS n, SUM(`amount`) AS total FROM `payments`
-        WHERE `status` = 'Paid' AND `paid_at` >= ? AND `paid_at` < ? GROUP BY `method`");
+        WHERE `status` = 'Paid' AND `paid_at` >= ? AND `paid_at` < ? AND (`notes` IS NULL OR `notes` NOT LIKE 'REFUNDED%') GROUP BY `method`");
     $today->execute([$dayStart, $dayEnd]);
     $byMethod = ['Cash' => ['count' => 0, 'total' => 0.0], 'PayMongo' => ['count' => 0, 'total' => 0.0]];
     foreach ($today->fetchAll() as $r) {
@@ -90,8 +96,45 @@ if ($method === 'GET') {
 
 if ($method === 'POST') {
     $data = getJsonInput();
+    if (($data['action'] ?? '') === 'mark_refunded') {
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array)($data['paymentIds'] ?? [])), fn($i) => $i > 0)));
+        $all = !empty($data['all']);
+        if (!$all && !$ids) sendResponse(400, null, 'Choose the payments to mark as refunded.');
+        $reference = mb_substr(trim((string)($data['reference'] ?? '')), 0, 60);
+        $sql = "SELECT * FROM `payments` WHERE `notes` LIKE 'DUPLICATE%'";
+        $args = [];
+        if (!$all) {
+            $sql .= ' AND `id` IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+            $args = $ids;
+        }
+        $find = $pdo->prepare($sql . ' ORDER BY `id` ASC');
+        $find->execute($args);
+        $rows = $find->fetchAll();
+        if (!$rows) sendResponse(409, ['code' => 'NOTHING_TO_REFUND'], 'None of these payments are waiting for a refund. Refresh the page.');
+
+        $note = 'REFUNDED: marked refunded on ' . date('Y-m-d H:i', spNow()) . ' by ' . actorLabel($admin)
+            . ($reference !== '' ? " (PayMongo ref {$reference})" : '') . '. It was a duplicate payment.';
+        $note = mb_substr($note, 0, 255);
+        $pdo->beginTransaction();
+        try {
+            $mark = $pdo->prepare("UPDATE `payments` SET `notes` = ? WHERE `id` = ? AND `notes` LIKE 'DUPLICATE%'");
+            foreach ($rows as $r) {
+                $mark->execute([$note, (int)$r['id']]);
+                auditLog($pdo, $admin, 'payment.refunded', ['entityType' => 'payment', 'entityId' => (int)$r['id'], 'plate' => $r['plate_number'],
+                    'detail' => "{$r['receipt_number']}: duplicate payment of PHP " . number_format((float)$r['amount'], 2) . ' marked refunded'
+                        . ($reference !== '' ? " (PayMongo ref {$reference})" : '')]);
+            }
+            $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            sendResponse(500, null, 'Could not mark the payments as refunded.' . (defined('SP_DEBUG') && SP_DEBUG ? ' ' . $e->getMessage() : ''));
+        }
+        $remaining = (int)$pdo->query("SELECT COUNT(*) FROM `payments` WHERE `notes` LIKE 'DUPLICATE%'")->fetchColumn();
+        sendResponse(200, ['marked' => count($rows), 'remaining' => $remaining],
+            count($rows) === 1 ? 'Marked as refunded.' : count($rows) . ' payments marked as refunded.');
+    }
     if (($data['action'] ?? '') !== 'cash') {
-        sendResponse(400, null, 'Unknown action. Use cash.');
+        sendResponse(400, null, 'Unknown action. Use cash or mark_refunded.');
     }
     $vehicle = findVehicleById($pdo, (int)($data['vehicleId'] ?? 0));
     if (!$vehicle) sendResponse(404, null, 'Vehicle not found.');

@@ -227,6 +227,12 @@ const ApiClient = (function() {
       return res.data;
     },
 
+    // Duplicate payments (a second payment for a vehicle that was already paid) after they were refunded in PayMongo
+    markPaymentsRefunded: async ({ paymentIds = [], all = false, reference = '' } = {}) => {
+      const res = await request('payments.php', { method: 'POST', body: { action: 'mark_refunded', paymentIds, all, reference } });
+      return res.data;
+    },
+
     // Renewals (admin): cashier renewal list, cash / free / bulk renewal
     getRenewals: async () => (await request('renewals.php')).data,
     renewPass: async (vehicleId, action, tendered) => {

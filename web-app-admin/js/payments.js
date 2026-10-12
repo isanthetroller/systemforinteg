@@ -33,6 +33,7 @@
   }
 
   function statusBadge(p) {
+    if (p.notes && /^REFUNDED/.test(p.notes)) return '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-50 text-sky-800 border border-sky-200" title="' + esc(p.notes) + '">Refunded</span>';
     const dup = p.notes && /^DUPLICATE/.test(p.notes);
     if (dup) return '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200" title="' + esc(p.notes) + '">Paid twice – refund</span>';
     if (p.status === 'Paid') return '<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">Paid</span>';
@@ -106,8 +107,10 @@
     }
     const dup = $('cashierDuplicateNote');
     if (summary.duplicates > 0) {
-      dup.textContent = `${summary.duplicates} payment${summary.duplicates === 1 ? ' was' : 's were'} received for a vehicle that was already paid. Refund them in the PayMongo dashboard (marked "Paid twice" in History).`;
-      dup.className = 'text-[11px] px-3 py-2 rounded-md bg-rose-50 text-rose-700 border border-rose-200';
+      dup.innerHTML = `<span>${summary.duplicates} payment${summary.duplicates === 1 ? ' was' : 's were'} received for a vehicle that was already paid. Refund ${summary.duplicates === 1 ? 'it' : 'them'} in the PayMongo dashboard, then mark ${summary.duplicates === 1 ? 'it' : 'them'} as refunded here.</span>
+        <button type="button" id="cashierMarkAllRefunded" class="sp-btn sp-btn-sm sp-btn-danger">Mark ${summary.duplicates === 1 ? 'it' : 'all'} as refunded</button>`;
+      dup.className = 'flex flex-wrap items-center justify-between gap-3 text-xs px-4 py-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200';
+      $('cashierMarkAllRefunded').addEventListener('click', () => markRefunded({ all: true, count: summary.duplicates }));
     } else {
       dup.className = 'hidden';
     }
@@ -164,6 +167,34 @@
     });
   }
 
+  /* A duplicate payment is refunded in the PayMongo dashboard (outside this system). This records that it was done. */
+  async function markRefunded({ ids = [], all = false, count = 1, label = '' }) {
+    if (typeof Swal === 'undefined') { SP.showToast('Dialogs failed to load. Reload the page.'); return; }
+    const what = all ? `${count} payment${count === 1 ? '' : 's'}` : label;
+    const result = await Swal.fire({
+      icon: 'question',
+      title: all ? `Mark ${count === 1 ? 'it' : `all ${count}`} as refunded?` : 'Mark as refunded?',
+      html: `<div style="text-align:left;font-size:13px;line-height:1.6"><div>${esc(what)}</div>
+        <div style="margin-top:8px;color:#b42336">Do this only after you have refunded the money in the PayMongo dashboard. It will stop counting as outstanding, and your name and the time are recorded.</div></div>`,
+      input: 'text',
+      inputLabel: 'PayMongo refund reference (optional)',
+      inputAttributes: { maxlength: 60, autocomplete: 'off' },
+      showCancelButton: true,
+      confirmButtonText: 'Yes, it was refunded',
+      confirmButtonColor: '#253475',
+    });
+    if (!result.isConfirmed) return;
+    try {
+      const res = await ApiClient.markPaymentsRefunded({ paymentIds: ids, all, reference: (result.value || '').trim() });
+      SP.showToast(res.marked === 1 ? 'Marked as refunded.' : `${res.marked} payments marked as refunded.`, 'success');
+      await load();
+    } catch (err) {
+      if (window.ApiClient?.isFresh?.()) throw err;
+      SP.showToast(err.message, 'error');
+      await load();
+    }
+  }
+
   function renderHistory() {
     const body = $('cashierHistoryBody');
     if (!history.length) {
@@ -182,9 +213,11 @@
         <td class="px-4 py-2.5">${methodLabel(p)}${p.recordedBy ? `<div class="text-[11px] text-slate-500">${esc(p.recordedBy)}</div>` : ''}</td>
         <td class="px-4 py-2.5 font-bold text-slate-900 whitespace-nowrap">${peso(p.amount)}</td>
         <td class="px-4 py-2.5">${statusBadge(p)}</td>
-        <td class="px-4 py-2.5 text-right">${p.status === 'Paid' ? '<button type="button" class="px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs cursor-pointer">Receipt</button>' : ''}</td>`;
-      const btn = tr.querySelector('button');
-      if (btn) btn.addEventListener('click', () => showReceipt(p));
+        <td class="px-4 py-2.5"><div class="sp-row-actions">${p.status === 'Paid' ? '<button type="button" data-act="receipt" class="sp-btn sp-btn-sm sp-btn-secondary">Receipt</button>' : ''}${p.notes && /^DUPLICATE/.test(p.notes) ? '<button type="button" data-act="refunded" class="sp-btn sp-btn-sm sp-btn-danger">Mark refunded</button>' : ''}</div></td>`;
+      const receiptBtn = tr.querySelector('[data-act="receipt"]');
+      if (receiptBtn) receiptBtn.addEventListener('click', () => showReceipt(p));
+      const refundBtn = tr.querySelector('[data-act="refunded"]');
+      if (refundBtn) refundBtn.addEventListener('click', () => markRefunded({ ids: [p.id], count: 1, label: `${p.receiptNumber || 'This payment'} (${p.plateNumber}, ${peso(p.amount)})` }));
       body.appendChild(tr);
     });
   }
