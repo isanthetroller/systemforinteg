@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/constants/app_constants.dart';
 import '../../../core/widgets/driver_photo_view.dart';
 import '../../../core/widgets/evidence_button.dart';
 import '../../../core/widgets/vehicle_photo_panel.dart';
@@ -9,13 +12,23 @@ import '../../../theme/ncst_theme.dart';
 import '../models/scan_lane.dart';
 import 'scan_notice_strip.dart';
 
-/// Reasons a guard can pick when blocking a vehicle at the gate.
-const List<String> kBlockReasons = [
-  'Wrong driver',
-  'Fake or damaged pass',
+/// Reasons a guard can pick when blocking a vehicle at the gate: the ones the app always had, plus two catch-alls.
+final List<String> kBlockReasons = [
+  ...AppConstants.defaultBlockReasons,
   'Suspicious behavior',
   'Other',
 ];
+
+/// What the guard entered in the Block sheet.
+class BlockDecision {
+  final String reason;
+  final String note;
+  final PendingEvidence? photo;
+  const BlockDecision(this.reason, this.note, this.photo);
+
+  /// Reason and note as one line for the gate log and the incident report.
+  String get text => note.isEmpty ? reason : '$reason: $note';
+}
 
 /// What the guard sees after every scan: a green or red status, the owner and vehicle photos, the facts to check, and
 /// two big buttons. A cleared scan is one tap away from being saved (Allow); Block asks only for a reason.
@@ -32,8 +45,8 @@ class ScanResultView extends StatefulWidget {
   /// Called by the green button. [itemsVerified] is true when the visitor's declared items were ticked as matching.
   final void Function(int? driverId, bool itemsVerified) onAllow;
 
-  /// Called by the red button after the guard picked a reason.
-  final void Function(String reason, String driverName, String relationship) onBlock;
+  /// Called by the red button after the guard filled in the Block sheet.
+  final void Function(BlockDecision decision, String driverName, String relationship) onBlock;
   final VoidCallback onScanNext;
 
   /// Offered on a passback refusal: the guard says the recorded state is wrong.
@@ -187,6 +200,8 @@ class _ScanResultViewState extends State<ScanResultView> {
           title: banner.title,
           sub: banner.sub,
           menu: _menu(),
+          // A way out when the wrong vehicle was scanned (not while a save is in flight or being retried)
+          onClose: widget.saving || widget.retryPending ? null : widget.onScanNext,
         ),
         Expanded(
           child: SingleChildScrollView(
@@ -531,17 +546,17 @@ class _ScanResultViewState extends State<ScanResultView> {
   }
 
   Future<void> _block() async {
-    final reason = await showModalBottomSheet<String>(
+    final decision = await showModalBottomSheet<BlockDecision>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => _BlockSheet(plate: _plate.isEmpty ? (_visitorPass?.plateNumber ?? '') : _plate),
+      builder: (_) => BlockSheet(plate: _plate.isEmpty ? (_visitorPass?.plateNumber ?? '') : _plate, lane: _shownLane),
     );
-    if (reason == null || !mounted) return;
+    if (decision == null || !mounted) return;
     final driver = _isVisitor
         ? (_visitorPass?.visitorName ?? '')
         : ('${_selectedDriver?['fullName'] ?? _selectedDriver?['full_name'] ?? _record['ownerName'] ?? ''}');
-    widget.onBlock(reason, driver, _isVisitor ? 'Visitor (Day Pass)' : '${_selectedDriver?['relationship'] ?? 'Registered Owner'}');
+    widget.onBlock(decision, driver, _isVisitor ? 'Visitor (Day Pass)' : '${_selectedDriver?['relationship'] ?? 'Registered Owner'}');
   }
 }
 
@@ -551,7 +566,8 @@ class _Banner extends StatelessWidget {
   final String title;
   final String sub;
   final Widget? menu;
-  const _Banner({required this.color, required this.icon, required this.title, required this.sub, this.menu});
+  final VoidCallback? onClose;
+  const _Banner({required this.color, required this.icon, required this.title, required this.sub, this.menu, this.onClose});
 
   @override
   Widget build(BuildContext context) {
@@ -572,7 +588,13 @@ class _Banner extends StatelessWidget {
               ],
             ),
           ),
-          if (menu != null) menu! else const SizedBox(width: 12),
+          ?menu,
+          IconButton(
+            key: const Key('closeResult'),
+            tooltip: 'Scan another',
+            icon: const Icon(Icons.close, color: Colors.white),
+            onPressed: onClose,
+          ),
         ],
       ),
     );
@@ -608,105 +630,230 @@ class _BigButton extends StatelessWidget {
   }
 }
 
-class _BlockSheet extends StatefulWidget {
+/// Block sheet: reason (the app's usual list), an optional note, an optional photo, then one red button.
+class BlockSheet extends StatefulWidget {
   final String plate;
-  const _BlockSheet({required this.plate});
+  final ScanLane lane;
+  const BlockSheet({super.key, required this.plate, required this.lane});
 
   @override
-  State<_BlockSheet> createState() => _BlockSheetState();
+  State<BlockSheet> createState() => _BlockSheetState();
 }
 
-class _BlockSheetState extends State<_BlockSheet> {
+class _BlockSheetState extends State<BlockSheet> {
   String? _reason;
+  final _note = TextEditingController();
+  PendingEvidence? _photo;
+  String? _error;
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final note = _note.text.trim();
+    if (_reason == null) {
+      setState(() => _error = 'Pick a reason.');
+      return;
+    }
+    if (_reason == 'Other' && note.isEmpty) {
+      setState(() => _error = 'Describe the reason in the note.');
+      return;
+    }
+    Navigator.pop(context, BlockDecision(_reason!, note, _photo));
+  }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Block ${widget.plate}?', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          const Text('Pick a reason. The vehicle is held and an incident is logged.', style: TextStyle(color: NcstColors.slate600)),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              for (final r in kBlockReasons)
-                ChoiceChip(
-                  label: Text(r),
-                  selected: _reason == r,
-                  selectedColor: NcstColors.crimsonLight,
-                  onSelected: (_) => setState(() => _reason = r),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: SizedBox(height: 52, child: OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')))),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 2,
-                child: SizedBox(
-                  height: 52,
-                  child: FilledButton(
-                    key: const Key('confirmBlock'),
-                    style: FilledButton.styleFrom(backgroundColor: NcstColors.crimson),
-                    onPressed: () => Navigator.pop(context, _reason ?? 'Other'),
-                    child: const Text('Block and log', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Block ${widget.lane.verb} for ${widget.plate}?', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: NcstColors.crimson)),
+            const SizedBox(height: 4),
+            const Text('The vehicle is held and a security incident is logged.', style: TextStyle(color: NcstColors.slate600)),
+            const SizedBox(height: 8),
+            for (final r in kBlockReasons)
+              ListTile(
+                key: Key('reason_$r'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(_reason == r ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: _reason == r ? NcstColors.crimson : NcstColors.slate400),
+                title: Text(r, style: TextStyle(fontWeight: _reason == r ? FontWeight.w800 : FontWeight.w600)),
+                onTap: () => setState(() {
+                  _reason = r;
+                  _error = null;
+                }),
+              ),
+            const SizedBox(height: 4),
+            TextField(
+              key: const Key('blockNote'),
+              controller: _note,
+              maxLines: 2,
+              maxLength: 200,
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+              decoration: InputDecoration(
+                labelText: _reason == 'Other' ? 'Describe the reason' : 'Note (optional)',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            EvidenceButton(expectedPlate: widget.plate, onChanged: (p) => _photo = p),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(_error!, style: const TextStyle(color: NcstColors.crimson, fontWeight: FontWeight.w600)),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(child: SizedBox(height: 52, child: OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')))),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: SizedBox(
+                    height: 52,
+                    child: FilledButton(
+                      key: const Key('confirmBlock'),
+                      style: FilledButton.styleFrom(backgroundColor: NcstColors.crimson),
+                      onPressed: _submit,
+                      child: const Text('Block and log', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// Shown for a moment after a passage is saved (green) or a vehicle is blocked (red), then the camera comes back.
+/// Shown after a passage is saved (green, returns to the camera by itself) or a vehicle is blocked (red, stays until the
+/// guard taps Scan next so there is time to call the owner or issue a violation).
 class ScanSavedView extends StatelessWidget {
   final bool blocked;
   final String title;
   final String plate;
   final String detail;
   final VoidCallback onNext;
-  const ScanSavedView({super.key, required this.blocked, required this.title, required this.plate, required this.detail, required this.onNext});
+
+  /// Blocked screen follow-ups.
+  final String ownerName;
+  final String ownerPhone;
+  final VoidCallback? onIssueViolation;
+  const ScanSavedView({
+    super.key,
+    required this.blocked,
+    required this.title,
+    required this.plate,
+    required this.detail,
+    required this.onNext,
+    this.ownerName = '',
+    this.ownerPhone = '',
+    this.onIssueViolation,
+  });
+
+  Future<void> _call(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await launchUrl(Uri(scheme: 'tel', path: ownerPhone.replaceAll(RegExp(r'[^0-9+*#]'), '')));
+    if (!ok) messenger.showSnackBar(const SnackBar(content: Text('This phone cannot place calls. Copy the number instead.')));
+  }
 
   @override
   Widget build(BuildContext context) {
     final color = blocked ? NcstColors.crimson : NcstColors.green;
+    final hasPhone = blocked && ownerPhone.trim().isNotEmpty;
     return Container(
       color: color,
       width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(blocked ? Icons.block : Icons.check_circle, color: Colors.white, size: 96),
-          const SizedBox(height: 12),
-          Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 6),
-          Text(plate, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-          const SizedBox(height: 6),
-          Text(detail, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14)),
-          const SizedBox(height: 28),
-          SizedBox(
-            width: 220,
-            height: 52,
-            child: FilledButton(
-              key: const Key('savedNext'),
-              style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: color),
-              onPressed: onNext,
-              child: const Text('Scan next', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-            ),
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(blocked ? Icons.block : Icons.check_circle, color: Colors.white, size: blocked ? 72 : 96),
+              const SizedBox(height: 12),
+              Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 6),
+              Text(plate, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+              const SizedBox(height: 6),
+              Text(detail, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14)),
+              if (hasPhone) ...[
+                const SizedBox(height: 20),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(14)),
+                  child: Column(
+                    children: [
+                      Text(ownerName.isEmpty ? 'Owner' : 'Owner: $ownerName', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      SelectableText(ownerPhone, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton.icon(
+                              key: const Key('callOwner'),
+                              style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: color, minimumSize: const Size.fromHeight(46)),
+                              onPressed: () => _call(context),
+                              icon: const Icon(Icons.call),
+                              label: const Text('Call owner', style: TextStyle(fontWeight: FontWeight.w800)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton(
+                            key: const Key('copyPhone'),
+                            style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white), minimumSize: const Size(64, 46)),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: ownerPhone));
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Number copied')));
+                            },
+                            child: const Text('Copy'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (blocked && onIssueViolation != null) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton.icon(
+                    key: const Key('issueViolationAfterBlock'),
+                    style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white, width: 1.5)),
+                    onPressed: onIssueViolation,
+                    icon: const Icon(Icons.warning_amber_rounded),
+                    label: const Text('Issue violation', style: TextStyle(fontWeight: FontWeight.w800)),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              SizedBox(
+                width: 240,
+                height: 52,
+                child: FilledButton(
+                  key: const Key('savedNext'),
+                  style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: color),
+                  onPressed: onNext,
+                  child: const Text('Scan next', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

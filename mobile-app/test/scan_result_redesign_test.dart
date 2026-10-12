@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:systemforinteg/core/constants/app_constants.dart';
 import 'package:systemforinteg/features/scanner/models/scan_lane.dart';
 import 'package:systemforinteg/features/scanner/widgets/scan_lane_bar.dart';
 import 'package:systemforinteg/features/scanner/widgets/scan_result_view.dart';
@@ -39,7 +40,7 @@ Map<String, dynamic> refused(String result, {String reason = 'Not allowed.', boo
 Widget view(
   Map<String, dynamic> data, {
   void Function(int?, bool)? onAllow,
-  void Function(String, String, String)? onBlock,
+  void Function(BlockDecision, String, String)? onBlock,
   VoidCallback? onReport,
 }) => MaterialApp(
   home: Scaffold(
@@ -193,20 +194,100 @@ void main() {
     expect(reported, isTrue);
   });
 
-  testWidgets('Block asks for a reason once, then reports it with the driver', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    String? reason;
-    String? driver;
-    await tester.pumpWidget(view(cleared(), onBlock: (r, d, _) { reason = r; driver = d; }));
-    await tester.tap(find.byKey(const Key('blockButton')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Fake or damaged pass'));
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('confirmBlock')));
-    await tester.pumpAndSettle();
-    expect(reason, 'Fake or damaged pass');
-    expect(driver, 'Juan Dela Cruz');
+  group('Block sheet', () {
+    Future<void> openSheet(WidgetTester tester, void Function(BlockDecision, String, String) onBlock) async {
+      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(view(cleared(), onBlock: onBlock));
+      await tester.tap(find.byKey(const Key('blockButton')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('offers the original reasons and reports the choice with the driver', (tester) async {
+      BlockDecision? decision;
+      String? driver;
+      await openSheet(tester, (d, drv, _) { decision = d; driver = drv; });
+      for (final r in AppConstants.defaultBlockReasons) {
+        expect(find.byKey(Key('reason_$r')), findsOneWidget, reason: 'the reasons the app always had are kept');
+      }
+      await tester.tap(find.byKey(const Key('reason_Invalid / Revoked QR Pass')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pumpAndSettle();
+      expect(decision!.reason, 'Invalid / Revoked QR Pass');
+      expect(decision!.note, isEmpty);
+      expect(driver, 'Juan Dela Cruz');
+    });
+
+    testWidgets('a reason is required and a note travels with it', (tester) async {
+      BlockDecision? decision;
+      await openSheet(tester, (d, _, _) => decision = d);
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pump();
+      expect(find.text('Pick a reason.'), findsOneWidget);
+      expect(decision, isNull);
+      await tester.tap(find.byKey(const Key('reason_Suspicious behavior')));
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('blockNote')), 'Driver would not show a license');
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pumpAndSettle();
+      expect(decision!.reason, 'Suspicious behavior');
+      expect(decision!.text, 'Suspicious behavior: Driver would not show a license');
+    });
+
+    testWidgets('Other needs a description', (tester) async {
+      BlockDecision? decision;
+      await openSheet(tester, (d, _, _) => decision = d);
+      await tester.tap(find.byKey(const Key('reason_Other')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pump();
+      expect(find.text('Describe the reason in the note.'), findsOneWidget);
+      expect(decision, isNull);
+    });
+
+    testWidgets('the sheet offers a photo', (tester) async {
+      await openSheet(tester, (_, _, _) {});
+      expect(find.text('Photo of vehicle / plate'), findsOneWidget);
+    });
+  });
+
+  group('after a block', () {
+    testWidgets('the red screen offers Call owner, Copy and Issue violation', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      var violation = 0;
+      var next = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: ScanSavedView(
+            blocked: true,
+            title: 'Entry blocked',
+            plate: 'ABC 1234',
+            detail: 'Suspicious behavior · logged as an incident',
+            ownerName: 'Juan Dela Cruz',
+            ownerPhone: '0917 123 4567',
+            onIssueViolation: () => violation++,
+            onNext: () => next++,
+          ),
+        ),
+      ));
+      expect(find.text('Entry blocked'), findsOneWidget);
+      expect(find.text('0917 123 4567'), findsOneWidget);
+      expect(find.byKey(const Key('callOwner')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('issueViolationAfterBlock')));
+      await tester.tap(find.byKey(const Key('savedNext')));
+      expect(violation, 1);
+      expect(next, 1);
+    });
+
+    testWidgets('no phone number means no call buttons, and a green save never offers them', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: ScanSavedView(blocked: true, title: 'Exit blocked', plate: 'X 1', detail: 'd', onNext: () {})),
+      ));
+      expect(find.byKey(const Key('callOwner')), findsNothing);
+      expect(find.byKey(const Key('issueViolationAfterBlock')), findsNothing);
+    });
   });
 
   testWidgets('visitor with declared items needs the single Items match tick', (tester) async {

@@ -10,6 +10,10 @@ class CameraViewfinder extends StatefulWidget {
   final ValueChanged<String> onQrDetected;
   final VoidCallback onManualQrPressed;
   final VoidCallback onFlipCameraPressed;
+
+  /// Flashlight toggle (shown next to Flip when given); torchOn picks the icon.
+  final VoidCallback? onTorchPressed;
+  final bool torchOn;
   final Duration stabilizationDuration;
 
   const CameraViewfinder({
@@ -19,6 +23,8 @@ class CameraViewfinder extends StatefulWidget {
     required this.onQrDetected,
     required this.onManualQrPressed,
     required this.onFlipCameraPressed,
+    this.onTorchPressed,
+    this.torchOn = false,
     this.stabilizationDuration = const Duration(milliseconds: 900),
   });
 
@@ -525,6 +531,22 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
                         ),
+                        if (widget.onTorchPressed != null)
+                          OutlinedButton.icon(
+                            key: const Key('torchButton'),
+                            onPressed: widget.onTorchPressed,
+                            icon: Icon(widget.torchOn ? Icons.flash_on : Icons.flash_off, size: 16, color: widget.torchOn ? NcstColors.goldDark : NcstColors.navy),
+                            label: Text(
+                              widget.torchOn ? 'Light on' : 'Light',
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: NcstColors.navy),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: NcstColors.white,
+                              side: const BorderSide(color: NcstColors.slate200),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                          ),
                       ],
                     ),
                   ],

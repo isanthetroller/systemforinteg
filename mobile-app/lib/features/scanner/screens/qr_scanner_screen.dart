@@ -158,6 +158,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   );
   ScanLane get _lane => _laneConfig.resolve(_laneChoice);
 
+  Future<void> _toggleTorch() async {
+    try {
+      await _cameraController?.toggleTorch();
+    } catch (_) {}
+    if (mounted) setState(() => _isTorchOn = !_isTorchOn);
+  }
+
   void _setLane(ScanLane lane) {
     setState(() => _laneChoice = lane);
     LocalCacheService.setScanLane(lane.code);
@@ -493,21 +500,40 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour >= 12 ? 'PM' : 'AM'}';
   }
 
-  /// Shows the green / red confirmation for a moment, then brings the camera back for the next vehicle.
-  void _showSaved({required bool blocked, required String title, required String plate, required String detail}) {
+  /// Shows the green / red confirmation. Green returns to the camera by itself; red stays until the guard taps Scan next,
+  /// so there is time to call the owner or issue a violation.
+  void _showSaved({
+    required bool blocked,
+    required String title,
+    required String plate,
+    required String detail,
+    String ownerName = '',
+    String ownerPhone = '',
+    VehicleRecord? vehicle,
+  }) {
     _savedTimer?.cancel();
     setState(() {
       _movementPreview = null;
       _refusedPreview = null;
-      _saved = _SavedFlash(blocked: blocked, title: title, plate: plate, detail: detail);
+      _saved = _SavedFlash(
+        blocked: blocked,
+        title: title,
+        plate: plate,
+        detail: detail,
+        ownerName: ownerName,
+        ownerPhone: ownerPhone,
+        vehicle: vehicle,
+      );
     });
-    _savedTimer = Timer(const Duration(milliseconds: 1600), () {
-      if (mounted && _saved != null) _resetScanner();
-    });
+    if (!blocked) {
+      _savedTimer = Timer(const Duration(milliseconds: 1600), () {
+        if (mounted && _saved != null) _resetScanner();
+      });
+    }
   }
 
-  /// Red button: hold the vehicle, log the refused passage and open an incident.
-  void _blockMovement(String reason, String driver, String relationship) {
+  /// Red button: hold the vehicle, log the refused passage, open an incident and keep the guard's note and photo.
+  Future<void> _blockMovement(BlockDecision decision, String driver, String relationship) async {
     final preview = _movementPreview;
     if (preview == null || _isSubmitting) return;
     final record = Map<String, dynamic>.from((preview['vehicle'] ?? preview['visitor']) as Map);
@@ -517,9 +543,15 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     final gate = _laneConfig.gateFor(lane);
     final gatePoint = gate == 'Gate 2' ? 'Gate 2 (Main Egress)' : 'Gate 1 (Main Ingress)';
     final owner = '${record['ownerName'] ?? record['visitorName'] ?? ''}';
+    final phone = '${record['ownerPhone'] ?? record['owner_phone'] ?? record['contactNumber'] ?? ''}'.replaceAll('null', '');
     final type = '${record['vehicleType'] ?? (isVisitor ? 'Visitor Vehicle' : '')}';
     final visitorId = isVisitor ? int.tryParse('${record['id']}') : null;
-    ApiService.postGateLog(
+    final reason = decision.text;
+    final vehicle = isVisitor
+        ? null
+        : VehicleRecord.fromQrJson(record, isSyncedWithDb: true);
+    setState(() => _isSubmitting = true);
+    final logged = await ApiService.postGateLog(
       plateNumber: plate,
       driverName: driver,
       driverRelationship: relationship,
@@ -532,13 +564,20 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       ownerName: owner,
       visitorPassId: visitorId,
     );
+    final logId = ApiService.lastGateLogId;
     ApiService.reportIncident(
       plateNumber: plate,
       driverName: driver,
-      reason: reason,
+      reason: decision.reason,
       gatePoint: gatePoint,
       notes: '${lane == ScanLane.entry ? 'Entry' : 'Exit'} blocked at the gate: $reason',
     );
+    final photo = decision.photo;
+    if (photo != null && logged && logId != null) {
+      unawaited(EvidenceService.upload(photo, kind: 'incident', plate: plate, gateLogId: logId));
+    }
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
     widget.onDecision(
       AuditLogEntry(
         id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
@@ -552,7 +591,15 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         blockReason: reason,
       ),
     );
-    _showSaved(blocked: true, title: 'Vehicle blocked', plate: plate, detail: '$reason · logged as an incident');
+    _showSaved(
+      blocked: true,
+      title: lane == ScanLane.entry ? 'Entry blocked' : 'Exit blocked',
+      plate: plate,
+      detail: '$reason · logged as an incident',
+      ownerName: owner,
+      ownerPhone: phone,
+      vehicle: vehicle,
+    );
   }
 
   /// "Report" on an anti-passback refusal: the guard says the recorded state is wrong; an admin is asked to correct it.
@@ -1117,8 +1164,9 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   }
 
   /// "Issue violation" from the already-inside screen: the vehicle is put on hold and the owner is notified.
-  void _showIssueViolationDialog() {
+  void _showIssueViolationDialog({VehicleRecord? forVehicle}) {
     final vehicle =
+        forVehicle ??
         _rejectionDetails?.vehicle ??
         ((_movementPreview ?? _refusedPreview)?['vehicle'] is Map
             ? VehicleRecord.fromQrJson(
@@ -1819,6 +1867,11 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         plate: _saved!.plate,
         detail: _saved!.detail,
         onNext: _resetScanner,
+        ownerName: _saved!.ownerName,
+        ownerPhone: _saved!.ownerPhone,
+        onIssueViolation: _saved!.vehicle == null
+            ? null
+            : () => _showIssueViolationDialog(forVehicle: _saved!.vehicle),
       );
     } else if (_movementPreview != null || _refusedPreview != null) {
       final data = (_movementPreview ?? _refusedPreview)!;
@@ -1869,6 +1922,16 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       content = _buildScannedVerificationBody();
     }
 
+    final scanning = _scannedVehicle == null &&
+        _visitorPass == null &&
+        _movementPreview == null &&
+        _refusedPreview == null &&
+        _rejectionDetails == null &&
+        _saved == null &&
+        !_isValidating;
+    final resultShown = _movementPreview != null || _refusedPreview != null || _saved != null || _isValidating;
+    final showBar = !(widget.automaticMovement && (scanning || resultShown));
+
     final appBar = AppBar(
       leading: (widget.isEmbedded && widget.onReturnToDashboard != null)
           ? IconButton(
@@ -1914,14 +1977,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
               _isTorchOn ? Icons.flash_on : Icons.flash_off,
               color: _isTorchOn ? NcstColors.gold : NcstColors.white,
             ),
-            onPressed: () async {
-              try {
-                await _cameraController?.toggleTorch();
-                setState(() => _isTorchOn = !_isTorchOn);
-              } catch (_) {
-                setState(() => _isTorchOn = !_isTorchOn);
-              }
-            },
+            onPressed: _toggleTorch,
           ),
         ] else
           TextButton.icon(
@@ -1944,13 +2000,6 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       ],
     );
 
-    final scanning = _scannedVehicle == null &&
-        _visitorPass == null &&
-        _movementPreview == null &&
-        _refusedPreview == null &&
-        _rejectionDetails == null &&
-        _saved == null &&
-        !_isValidating;
     final body = widget.automaticMovement
         ? Column(
             children: [
@@ -1970,7 +2019,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         color: NcstColors.slate50,
         child: Column(
           children: [
-            appBar,
+            if (showBar) appBar,
             Expanded(child: body),
           ],
         ),
@@ -1979,7 +2028,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
     return Scaffold(
       backgroundColor: NcstColors.slate50,
-      appBar: appBar,
+      appBar: showBar ? appBar : null,
       body: SafeArea(child: body),
     );
   }
@@ -1998,6 +2047,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           await _cameraController?.switchCamera();
         } catch (_) {}
       },
+      onTorchPressed: _toggleTorch,
+      torchOn: _isTorchOn,
     );
   }
 
@@ -2338,5 +2389,16 @@ class _SavedFlash {
   final String title;
   final String plate;
   final String detail;
-  const _SavedFlash({required this.blocked, required this.title, required this.plate, required this.detail});
+  final String ownerName;
+  final String ownerPhone;
+  final VehicleRecord? vehicle;
+  const _SavedFlash({
+    required this.blocked,
+    required this.title,
+    required this.plate,
+    required this.detail,
+    this.ownerName = '',
+    this.ownerPhone = '',
+    this.vehicle,
+  });
 }

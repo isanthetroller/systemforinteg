@@ -40,7 +40,7 @@ ScanResultView resultView(
   bool retryPending = false,
   bool invalidated = false,
   void Function(int?, bool)? onAllow,
-  void Function(String, String, String)? onBlock,
+  void Function(BlockDecision, String, String)? onBlock,
   VoidCallback? onReport,
   VoidCallback? onDetails,
   VoidCallback? onIssueViolation,
@@ -122,7 +122,7 @@ void main() {
     expect(find.text('Clear to enter'), findsOneWidget);
     expect(find.text('Allow entry'), findsOneWidget);
     expect(find.text('Block'), findsOneWidget);
-    await tester.tap(find.text('Re-Scan QR'));
+    await tester.tap(find.byKey(const Key('closeResult')));
     await tester.pumpAndSettle();
     expect(requests.map((r) => r['action']), ['prepare']);
     expect(requests.single['direction'], 'IN', reason: 'the phone tells the server which lane the guard is in');

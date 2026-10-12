@@ -249,22 +249,31 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
             : NcstColors.slate100,
         appBar: _buildAppBar(isEntrance),
         body: Column(children: [
-          Container(
-            key: const Key('gatePolicyBanner'),
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: NcstColors.slate100,
-            child: Text(
-              _gatePolicy == null ? 'Gate permissions unavailable. Connect before confirming a passage.'
-                : '${_gatePolicy!['modeLabel']} · ${_gatePolicy!['checkpoint']}\n${_gatePolicy!['message']}${_policyStale ? ' Last known policy — reconnect to confirm.' : ''}',
-              style: const TextStyle(fontSize: 12, color: NcstColors.navy),
+          if (_policyNotice() case final notice?)
+            Container(
+              key: const Key('gatePolicyBanner'),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              color: notice.warning ? const Color(0xFFFEF3C7) : NcstColors.slate100,
+              child: Text(
+                notice.text,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: notice.warning ? NcstColors.goldDark : NcstColors.navy),
+              ),
             ),
-          ),
           Expanded(child: _buildBody(isEntrance)),
         ]),
         bottomNavigationBar: _buildBottomNav(isEntrance),
       ),
     );
+  }
+
+  /// One short line, or null when everything is normal (the lane bar on the scanner already shows gate and lane).
+  ({String text, bool warning})? _policyNotice() {
+    final policy = _gatePolicy;
+    if (policy == null) return (text: 'Gate rules unavailable. Connect before confirming a passage.', warning: true);
+    if (_policyStale) return (text: 'Using the last known gate rules. Reconnect before confirming.', warning: true);
+    if (policy['mode'] == 'event') return (text: 'Event mode: entry and exit are allowed at both gates.', warning: false);
+    return null;
   }
 
   PreferredSizeWidget _buildAppBar(bool isEntrance) {
@@ -312,32 +321,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
         // The checkpoint comes from the authenticated account, not a local role switch.
         PopupMenuButton<String>(
           tooltip: 'Guard account',
-          icon: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Colors.white24),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'IN / OUT',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                  ),
-                ),
-                const Icon(
-                  Icons.arrow_drop_down,
-                  color: Colors.white,
-                  size: 16,
-                ),
-              ],
-            ),
-          ),
+          icon: const Icon(Icons.more_vert, color: Colors.white),
           onSelected: (val) {
             if (val == 'toggle_sound') {
               _toggleScanFeedback();

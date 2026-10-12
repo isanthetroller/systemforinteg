@@ -34,16 +34,16 @@ void main() {
     expect(find.text('321'), findsOneWidget);
     expect(find.text('987'), findsOneWidget);
     expect(find.text('654'), findsOneWidget);
-    expect(find.textContaining('Normal operation'), findsOneWidget);
+    expect(find.byKey(const Key('gatePolicyBanner')), findsNothing, reason: 'no banner while everything is normal');
     event = true;
     SyncQueueService().lastSyncTimeNotifier.value = DateTime(2026,10,11,10);
     for (var i=0;i<10;i++) { await tester.pump(const Duration(milliseconds:100)); }
-    expect(find.textContaining('Event operation'), findsOneWidget);
+    expect(find.textContaining('Event mode'), findsOneWidget);
     unavailable = true;
     SyncQueueService().lastSyncTimeNotifier.value = DateTime(2026,10,11,11);
     for (var i=0;i<10;i++) { await tester.pump(const Duration(milliseconds:100)); }
     expect(find.text('Totals are from the last successful refresh'), findsOneWidget);
-    expect(find.textContaining('Last known policy'), findsOneWidget);
+    expect(find.textContaining('last known gate rules'), findsOneWidget);
     expect(find.text('987'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
