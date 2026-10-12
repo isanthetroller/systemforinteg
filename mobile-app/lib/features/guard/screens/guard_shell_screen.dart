@@ -387,6 +387,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
         return QrScannerScreen(
           isEmbedded: true,
           automaticMovement: true,
+          gatePolicy: _gatePolicy,
           currentGuard: _currentUser,
           onMovementPendingChanged: (pending) {
             if (mounted) setState(() => _movementPending = pending);
@@ -396,7 +397,7 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
             setState(() {
               _auditLogs.removeWhere((l) => l.id == entry.id);
               _auditLogs.insert(0, entry);
-              _selectedIndex = 0;
+              // Stay on the scanner: the result screen returns to the camera for the next vehicle
             });
             _fetchLiveLogs();
           },

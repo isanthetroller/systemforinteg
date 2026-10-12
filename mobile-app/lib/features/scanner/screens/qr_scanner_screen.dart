@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -28,7 +29,9 @@ import '../../../core/widgets/evidence_button.dart';
 import '../../../services/evidence_service.dart';
 import '../widgets/scanned_person_card.dart';
 import '../widgets/scanned_visitor_card.dart';
-import '../widgets/movement_confirmation_card.dart';
+import '../models/scan_lane.dart';
+import '../widgets/scan_lane_bar.dart';
+import '../widgets/scan_result_view.dart';
 
 class QrScannerScreen extends StatefulWidget {
   final Function(AuditLogEntry) onDecision;
@@ -41,6 +44,9 @@ class QrScannerScreen extends StatefulWidget {
   final bool automaticMovement;
   final ValueChanged<bool>? onMovementPendingChanged;
 
+  /// The server's gate policy (gate_policy.php); decides which lanes this guard may work.
+  final Map<String, dynamic>? gatePolicy;
+
   const QrScannerScreen({
     super.key,
     required this.onDecision,
@@ -52,6 +58,7 @@ class QrScannerScreen extends StatefulWidget {
     this.currentGuard,
     this.automaticMovement = false,
     this.onMovementPendingChanged,
+    this.gatePolicy,
   });
 
   @override
@@ -79,6 +86,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   ScanRejectionDetails? _rejectionDetails;
 
   Map<String, dynamic>? _movementPreview;
+  // A scan the server refused although it knows the vehicle / visitor (hold, expired, passback ...)
+  Map<String, dynamic>? _refusedPreview;
+  // The lane the guard last chose (only used when the account may switch lanes)
+  ScanLane? _laneChoice;
+  // The green / red confirmation shown for a moment after Allow or Block
+  _SavedFlash? _saved;
+  Timer? _savedTimer;
   Map<String, dynamic>? _movementSubmission;
   String? _movementError;
   bool _movementRetryPending = false;
@@ -97,6 +111,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     super.initState();
     ApiService.liveRevision.addListener(_onExternalChange);
     WidgetsBinding.instance.addObserver(this);
+    final savedLane = LocalCacheService.getScanLane();
+    _laneChoice = savedLane == 'OUT' ? ScanLane.exit : (savedLane == 'IN' ? ScanLane.entry : null);
     if (widget.initialVehicle != null) {
       final v = widget.initialVehicle!;
       _scannedVehicle = v;
@@ -136,6 +152,17 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     }
   }
 
+  LaneConfig get _laneConfig => LaneConfig.from(
+    assignedGate: widget.currentGuard?.assignedGate,
+    policy: widget.gatePolicy,
+  );
+  ScanLane get _lane => _laneConfig.resolve(_laneChoice);
+
+  void _setLane(ScanLane lane) {
+    setState(() => _laneChoice = lane);
+    LocalCacheService.setScanLane(lane.code);
+  }
+
   String? _liveQr;
   Future<void> _onExternalChange() async {
     final previous = _movementPreview;
@@ -151,6 +178,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         'action': 'prepare',
         'qr_code': _liveQr,
         'lookup_method': _manualLookup ? 'manual' : 'qr',
+        'direction': _lane.code,
       });
       if (!mounted || _isSubmitting || !identical(previous, _movementPreview)) {
         return;
@@ -176,6 +204,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _savedTimer?.cancel();
     _cameraController?.dispose();
     ApiService.liveRevision.removeListener(_onExternalChange);
     super.dispose();
@@ -229,6 +258,9 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   void _resetScanner() {
     if (_isSubmitting || _movementRetryPending) return;
     setState(() {
+      _savedTimer?.cancel();
+      _saved = null;
+      _refusedPreview = null;
       _movementPreview = null;
       _movementSubmission = null;
       _movementError = null;
@@ -254,7 +286,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   }
 
   void _processRawQrCode(String raw) async {
-    if (_movementPreview != null) return;
+    if (_movementPreview != null || _refusedPreview != null || _saved != null) return;
     final now = DateTime.now();
     if (_lastScanTime != null &&
         now.difference(_lastScanTime!).inMilliseconds < 1500) {
@@ -293,10 +325,18 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         'action': 'prepare',
         'qr_code': qr,
         'lookup_method': _manualLookup ? 'manual' : 'qr',
+        'direction': _lane.code,
       });
       if (!mounted) return;
       _scanNotices = ScanNotice.fromVerify(preview);
       if (preview['accepted'] != true || preview['movement'] is! Map) {
+        if (preview['vehicle'] is Map || preview['visitor'] is Map) {
+          setState(() {
+            _isValidating = false;
+            _refusedPreview = preview;
+          });
+          return;
+        }
         setState(() {
           _isValidating = false;
           _rejectionDetails = ScanRejectionDetails(
@@ -384,16 +424,11 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         saved['currentStatus'] == 'OUTSIDE' ? 'Outside' : 'Inside Campus',
       );
       if (!mounted) return;
-      setState(() => _isSubmitting = false);
+      setState(() {
+        _isSubmitting = false;
+        _movementRetryPending = false;
+      });
       widget.onMovementPendingChanged?.call(false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: NcstColors.green,
-          content: Text(
-            '${outgoing ? 'Exit' : 'Entry'} saved: ${saved['plateNumber']} is now ${saved['currentStatus']}.',
-          ),
-        ),
-      );
       widget.onDecision(
         AuditLogEntry(
           id: saved['id'].toString(),
@@ -419,6 +454,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       );
       if (!widget.isEmbedded && mounted && Navigator.canPop(context)) {
         Navigator.of(context).pop();
+      } else if (mounted) {
+        _showSaved(
+          blocked: false,
+          title: outgoing ? 'Exit recorded' : 'Entry recorded',
+          plate: saved['plateNumber'].toString(),
+          detail: '${_laneConfig.gateFor(_lane)} · ${_clock(saved['loggedAt'])}',
+        );
       }
     } on MovementApiException catch (e) {
       if (!mounted) return;
@@ -443,6 +485,117 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         _movementError = 'The result is uncertain. Retry this confirmation to check whether it was saved.';
       });
     }
+  }
+
+  static String _clock(dynamic raw) {
+    final t = DateTime.tryParse('$raw'.replaceFirst(' ', 'T')) ?? DateTime.now();
+    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  /// Shows the green / red confirmation for a moment, then brings the camera back for the next vehicle.
+  void _showSaved({required bool blocked, required String title, required String plate, required String detail}) {
+    _savedTimer?.cancel();
+    setState(() {
+      _movementPreview = null;
+      _refusedPreview = null;
+      _saved = _SavedFlash(blocked: blocked, title: title, plate: plate, detail: detail);
+    });
+    _savedTimer = Timer(const Duration(milliseconds: 1600), () {
+      if (mounted && _saved != null) _resetScanner();
+    });
+  }
+
+  /// Red button: hold the vehicle, log the refused passage and open an incident.
+  void _blockMovement(String reason, String driver, String relationship) {
+    final preview = _movementPreview;
+    if (preview == null || _isSubmitting) return;
+    final record = Map<String, dynamic>.from((preview['vehicle'] ?? preview['visitor']) as Map);
+    final isVisitor = preview['vehicle'] is! Map;
+    final plate = '${record['plateNumber'] ?? record['plate_number'] ?? ''}';
+    final lane = _lane;
+    final gate = _laneConfig.gateFor(lane);
+    final gatePoint = gate == 'Gate 2' ? 'Gate 2 (Main Egress)' : 'Gate 1 (Main Ingress)';
+    final owner = '${record['ownerName'] ?? record['visitorName'] ?? ''}';
+    final type = '${record['vehicleType'] ?? (isVisitor ? 'Visitor Vehicle' : '')}';
+    final visitorId = isVisitor ? int.tryParse('${record['id']}') : null;
+    ApiService.postGateLog(
+      plateNumber: plate,
+      driverName: driver,
+      driverRelationship: relationship,
+      gatePoint: gatePoint,
+      action: lane == ScanLane.entry ? 'Entry Denied' : 'Exit Denied',
+      status: 'Blocked',
+      guardName: widget.currentGuard?.fullName ?? 'Gate Officer',
+      notes: reason,
+      vehicleType: type,
+      ownerName: owner,
+      visitorPassId: visitorId,
+    );
+    ApiService.reportIncident(
+      plateNumber: plate,
+      driverName: driver,
+      reason: reason,
+      gatePoint: gatePoint,
+      notes: '${lane == ScanLane.entry ? 'Entry' : 'Exit'} blocked at the gate: $reason',
+    );
+    widget.onDecision(
+      AuditLogEntry(
+        id: 'LOG-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+        plateNumber: plate,
+        vehicleType: type,
+        ownerName: owner,
+        driverName: driver,
+        driverRelationship: relationship,
+        timeIn: DateTime.now(),
+        status: GateStatus.blocked,
+        blockReason: reason,
+      ),
+    );
+    _showSaved(blocked: true, title: 'Vehicle blocked', plate: plate, detail: '$reason · logged as an incident');
+  }
+
+  /// "Report" on an anti-passback refusal: the guard says the recorded state is wrong; an admin is asked to correct it.
+  Future<void> _reportDiscrepancy() async {
+    final preview = _refusedPreview;
+    if (preview == null) return;
+    final record = Map<String, dynamic>.from((preview['vehicle'] ?? preview['visitor']) as Map);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ApiService.movementRequest({
+        'action': 'report_discrepancy',
+        'plate': '${record['plateNumber'] ?? record['plate_number'] ?? ''}',
+        'direction': _lane.code,
+        'recorded': preview['currentlyInside'] == true ? 'INSIDE' : 'OUTSIDE',
+      });
+      messenger.showSnackBar(const SnackBar(content: Text('Reported. An admin will check the record.')));
+    } on MovementApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('Could not send the report. Check the connection and try again.')));
+    }
+  }
+
+  /// "View details or report incident" from the result screen: opens the on-campus inspection view for this vehicle.
+  void _openDetails() {
+    final preview = _movementPreview ?? _refusedPreview;
+    if (preview == null) return;
+    final vehicle = preview['vehicle'] is Map
+        ? _withOnCampusDetails(
+            VehicleRecord.fromQrJson(Map<String, dynamic>.from(preview['vehicle'] as Map), isSyncedWithDb: true),
+            preview,
+          )
+        : null;
+    _rejectionDetails = ScanRejectionDetails(
+      type: ScanRejectionType.unknown,
+      title: 'Vehicle details',
+      message: '',
+      vehicle: vehicle,
+      visitor: ScannedVisitorPass.fromVerify(preview),
+    );
+    _movementPreview = null;
+    _refusedPreview = null;
+    _startPatrolInspection();
   }
 
   Future<void> _syncVehicleWithDb(
@@ -967,9 +1120,9 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   void _showIssueViolationDialog() {
     final vehicle =
         _rejectionDetails?.vehicle ??
-        (_movementPreview?['vehicle'] is Map
+        ((_movementPreview ?? _refusedPreview)?['vehicle'] is Map
             ? VehicleRecord.fromQrJson(
-                Map<String, dynamic>.from(_movementPreview!['vehicle'] as Map),
+                Map<String, dynamic>.from((_movementPreview ?? _refusedPreview)!['vehicle'] as Map),
                 isSyncedWithDb: true,
               )
             : null);
@@ -1617,7 +1770,15 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   /// What the guard should hear for the result on screen (null while scanning / verifying).
   ScanOutcome? get _outcome {
-    if (_isValidating || _isPatrolInspection) return null;
+    if (_isValidating || _isPatrolInspection || _saved != null) return null;
+    final refused = _refusedPreview;
+    if (refused != null) return ScanOutcome.refused;
+    final cleared = _movementPreview;
+    if (cleared != null) {
+      final needsLook = _scanNotices.any((n) => n.level != ScanNoticeLevel.info) ||
+          (cleared['warnings'] as List? ?? const []).isNotEmpty;
+      return needsLook ? ScanOutcome.warning : ScanOutcome.cleared;
+    }
     final rejection = _rejectionDetails;
     if (rejection != null) {
       return (rejection.type == ScanRejectionType.networkError || rejection.type == ScanRejectionType.unknown)
@@ -1651,38 +1812,38 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           ],
         ),
       );
-    } else if (_movementPreview != null) {
-      content = MovementConfirmationCard(
-        preview: _movementPreview!,
-        guardName: widget.currentGuard?.fullName ?? 'Signed-in guard',
+    } else if (_saved != null) {
+      content = ScanSavedView(
+        blocked: _saved!.blocked,
+        title: _saved!.title,
+        plate: _saved!.plate,
+        detail: _saved!.detail,
+        onNext: _resetScanner,
+      );
+    } else if (_movementPreview != null || _refusedPreview != null) {
+      final data = (_movementPreview ?? _refusedPreview)!;
+      final cleared = ScanResultView.isCleared(data);
+      final hasVehicle = data['vehicle'] is Map;
+      final result = '${data['result']}';
+      final passback = result == 'ALREADY_INSIDE' || result == 'NOT_ON_CAMPUS';
+      content = ScanResultView(
+        data: data,
+        lane: _lane,
+        gateLabel: _laneConfig.gateFor(_lane),
         saving: _isSubmitting,
         retryPending: _movementRetryPending,
         invalidated: _movementInvalidated,
         error: _movementError,
-        onConfirm: _confirmMovement,
-        onCancel: _resetScanner,
-        onEvidenceChanged: (photo) => _evidence = photo,
-        onInspect: () {
-          final preview = _movementPreview!;
-          _rejectionDetails = ScanRejectionDetails(
-            type: ScanRejectionType.unknown,
-            title: 'Vehicle details',
-            message: '',
-            vehicle: preview['vehicle'] is Map
-                ? VehicleRecord.fromQrJson(
-                    Map<String, dynamic>.from(preview['vehicle'] as Map),
-                    isSyncedWithDb: true,
-                  )
-                : null,
-            visitor: ScannedVisitorPass.fromVerify(preview),
-          );
-          _movementPreview = null;
-          _startPatrolInspection();
-        },
-        onIssueViolation:
-            _movementPreview!['vehicle'] is Map &&
-                (_movementPreview!['movement'] as Map)['suggestedAction'] ==
-                    'OUT'
+        onAllow: _confirmMovement,
+        onBlock: _blockMovement,
+        onScanNext: _resetScanner,
+        onReport: !cleared && passback ? _reportDiscrepancy : null,
+        onDetails: _openDetails,
+        onEvidenceChanged: cleared ? (photo) => _evidence = photo : null,
+        onIssueViolation: hasVehicle &&
+                (cleared
+                    ? (data['movement'] as Map)['suggestedAction'] == 'OUT'
+                    : result == 'ALREADY_INSIDE')
             ? _showIssueViolationDialog
             : null,
       );
@@ -1719,8 +1880,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
             )
           : null,
       title: Text(
-        _movementPreview != null
-            ? 'Confirm movement'
+        (_movementPreview != null || _refusedPreview != null || _saved != null)
+            ? 'Scan result'
             : _rejectionDetails != null
             ? 'Scan Rejected'
             : (_isPatrolInspection
@@ -1739,6 +1900,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         if (_scannedVehicle == null &&
             _rejectionDetails == null &&
             _movementPreview == null &&
+            _refusedPreview == null &&
+            _saved == null &&
             !_isValidating) ...[
           IconButton(
             tooltip: 'Enter QR Manually',
@@ -1781,13 +1944,34 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       ],
     );
 
+    final scanning = _scannedVehicle == null &&
+        _visitorPass == null &&
+        _movementPreview == null &&
+        _refusedPreview == null &&
+        _rejectionDetails == null &&
+        _saved == null &&
+        !_isValidating;
+    final body = widget.automaticMovement
+        ? Column(
+            children: [
+              ScanLaneBar(
+                config: _laneConfig,
+                lane: _lane,
+                enabled: scanning,
+                onChanged: _setLane,
+              ),
+              Expanded(child: content),
+            ],
+          )
+        : content;
+
     if (widget.isEmbedded) {
       return Container(
         color: NcstColors.slate50,
         child: Column(
           children: [
             appBar,
-            Expanded(child: content),
+            Expanded(child: body),
           ],
         ),
       );
@@ -1796,7 +1980,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     return Scaffold(
       backgroundColor: NcstColors.slate50,
       appBar: appBar,
-      body: SafeArea(child: content),
+      body: SafeArea(child: body),
     );
   }
 
@@ -2146,4 +2330,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       ],
     );
   }
+}
+
+/// What the green / red confirmation shows after Allow or Block.
+class _SavedFlash {
+  final bool blocked;
+  final String title;
+  final String plate;
+  final String detail;
+  const _SavedFlash({required this.blocked, required this.title, required this.plate, required this.detail});
 }

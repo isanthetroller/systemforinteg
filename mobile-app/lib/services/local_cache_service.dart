@@ -19,6 +19,7 @@ class LocalCacheService {
   static const String keyRejectedSync = 'sp_rejected_sync_events_v1';
   static const String keyVisitorPassValidityHours = 'sp_visitor_pass_validity_hours';
   static const String keyScanFeedback = 'sp_scan_feedback_enabled';
+  static const String keyScanLane = 'sp_scan_lane';
   static const String keyServerBaseUrl = 'sp_server_base_url_v2';
 
   static const Set<String> _legacyMockPlates = {
@@ -329,6 +330,17 @@ class LocalCacheService {
       debugPrint('[LocalCacheService] Error reading visitor pass validity hours: $e');
     }
     return 8; // Default 8 hours
+  }
+
+  /// The lane ('IN' or 'OUT') the guard last worked, for accounts that may switch (event mode / All Gates).
+  static String? getScanLane() => _getString(keyScanLane);
+
+  static Future<void> setScanLane(String code) async {
+    try {
+      await _setString(keyScanLane, code);
+    } catch (e) {
+      debugPrint('[LocalCacheService] Error saving scan lane: $e');
+    }
   }
 
   /// Beep + vibration on every scan result (on by default).

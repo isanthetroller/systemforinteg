@@ -185,9 +185,19 @@ if ($result === null && $vehicle === null && $visitor === null && $plateInput !=
 /* --------------------------------------------------------------------------
    2. Visitor pass rules & security incident holds
    -------------------------------------------------------------------------- */
+$passback = null;
 if ($movementPrepare) {
     $insideForMovement = ($vehicle || $visitor) && movementInside($vehicle ?: $visitor, $vehicle ? 'vehicle' : 'visitor', $pdo);
     $gateType = $insideForMovement ? 'Egress' : 'Ingress';
+    // The phone says which lane the guard stands in (IN / OUT). A lane that contradicts the vehicle's recorded state is
+    // anti-passback: it is refused instead of silently turning an entry scan into an exit (or the other way round).
+    // Older phones send no lane and keep the state-derived direction.
+    $lane = strtoupper(trim((string)($data['direction'] ?? '')));
+    if (in_array($lane, ['IN', 'OUT'], true) && ($vehicle || $visitor)) {
+        $laneGate = $lane === 'OUT' ? 'Egress' : 'Ingress';
+        if ($laneGate !== $gateType) $passback = $laneGate === 'Ingress' ? 'ALREADY_INSIDE' : 'NOT_ON_CAMPUS';
+        $gateType = $laneGate; // permissions are judged for the lane the guard is working in
+    }
     if ($insideForMovement && $result === 'EXPIRED') {
         $warnings[] = $reasonDetail;
         $result = 'VALID';
@@ -358,6 +368,14 @@ if ($vehicle) {
    5. Side effects: log every rejection; open incidents for forged / revoked passes
    -------------------------------------------------------------------------- */
 $autoLogged = false;
+// Anti-passback outranks routine refusals (expired, unpaid...) but never a security result (banned, forged, revoked...)
+if ($passback && ($accepted || in_array($result, ['VALID', 'LEGACY', 'MANUAL', 'EXPIRED', 'EXPIRED_TEMP', 'NOT_YET_VALID', 'UNPAID', 'RETIRED'], true))) {
+    $accepted = false;
+    $result = $passback;
+    $reasonDetail = $passback === 'ALREADY_INSIDE'
+        ? 'This vehicle is already recorded inside campus, so a second entry was not recorded. If it really left without an exit scan, tap Report so an admin can correct the record.'
+        : 'This vehicle has no open entry, so an exit was not recorded. If it is on campus, tap Report so an admin can correct the record.';
+}
 $policy = gatePolicy($pdo, $actor, $data['checkpoint'] ?? null, $gateType);
 $gateError = gateDirectionError($policy, $gateType);
 if ($gateError && $accepted) {
@@ -416,6 +434,8 @@ $messages = [
     'SUSPENDED' => 'REGISTRATION SUSPENDED.',
     'UNPAID' => 'REGISTRATION FEE UNPAID.',
     'RETIRED' => 'VEHICLE RETIRED.',
+    'ALREADY_INSIDE' => 'ALREADY INSIDE - second entry not recorded.',
+    'NOT_ON_CAMPUS' => 'NOT ON CAMPUS - exit not recorded.',
     'NOT_FOUND' => 'No matching vehicle or pass.',
 ];
 
