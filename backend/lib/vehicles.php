@@ -124,6 +124,22 @@ function findVehicleByOwnerId($pdo, $ownerIdNumber, $exceptVehicleId = 0) {
     return $stmt->fetch() ?: null;
 }
 
+/**
+ * The next auto-generated ID for a VIP owner, like VIP-2026-0004: the year, then a running number that is never reused
+ * (retired vehicles keep their row, so their number stays taken).
+ */
+function nextVipIdNumber($pdo) {
+    $prefix = 'VIP-' . date('Y') . '-';
+    $stmt = $pdo->prepare("SELECT `owner_id_number` FROM `vehicles` WHERE `owner_id_number` LIKE ?");
+    $stmt->execute([$prefix . '%']);
+    $max = 0;
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $n = substr(strtoupper(trim((string)$id)), strlen($prefix));
+        if ($n !== '' && ctype_digit($n)) $max = max($max, (int)$n);
+    }
+    return $prefix . str_pad((string)($max + 1), 4, '0', STR_PAD_LEFT);
+}
+
 function ownerHasVehicleResponse($existing) {
     sendResponse(409, ['code' => 'OWNER_HAS_VEHICLE', 'plateNumber' => $existing['plate_number']],
         "ID {$existing['owner_id_number']} already has a registered vehicle ({$existing['plate_number']}). Only one vehicle can be registered per ID number.");

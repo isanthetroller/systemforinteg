@@ -1,5 +1,5 @@
 /**
- * SecurePark - input rules for the vehicle forms (admin web)
+ * SecurePark - input rules for the vehicle and visitor day pass forms (admin web)
  *
  * Philippine mobile numbers and driver's license numbers: typing is limited to the right characters and length, the
  * field explains a problem before the form is sent, and a valid value is tidied to the format that is stored
@@ -74,7 +74,7 @@
   root.SPInputs = api;
   if (typeof document === 'undefined') return;
 
-  const PHONE = '#ownerContact, #editOwnerPhone, .driver-phone, .edit-driver-phone';
+  const PHONE = '#ownerContact, #editOwnerPhone, #vpContact, .driver-phone, .edit-driver-phone';
   const LICENSE = '.driver-license, .edit-driver-license';
   const OWNER_ID = '#ownerIdNumber, #editOwnerIdNumber';
   const PHONE_MSG = 'Enter a Philippine mobile number, like 0927 910 0511.';

@@ -107,6 +107,40 @@ def run():
         c, r = req('vehicles.php', {'id': vid, 'ownerIdNumber': 'ncst-2025-00042'}, method='PUT')
         check('changing the ID to a good value works and is stored in capitals', c == 200 and r['data']['ownerIdNumber'] == 'NCST-2025-00042', r)
 
+        # ---- a vehicle has the primary driver plus at most 5 more (6 in all)
+        def roster(k):
+            return [{'fullName': f'Roster Driver {i}', 'relationship': 'Designated Driver', 'licenseNo': 'N/A'} for i in range(k)]
+        c, r = register(authorizedDrivers=roster(6))
+        check('six drivers (the primary driver plus 5) are accepted', c == 201 and len(r['data']['authorizedDrivers']) == 6, r)
+        full = r['data']['id']
+        c, r = register(authorizedDrivers=roster(7))
+        check('a seventh driver is refused at registration', c == 400 and r['data']['code'] == 'TOO_MANY_DRIVERS', r)
+        c, r = req('vehicles.php', {'id': full, 'authorizedDrivers': roster(7)}, method='PUT')
+        check('a seventh driver is refused when editing', c == 400 and r['data']['code'] == 'TOO_MANY_DRIVERS', r)
+        c, r = req('vehicles.php', {'id': full, 'authorizedDrivers': roster(5)}, method='PUT')
+        check('removing a driver brings the roster back under the limit', c == 200 and len(r['data']['authorizedDrivers']) == 5, r)
+
+        # ---- a VIP owner needs no institutional ID: the server generates one (VIP-<year>-0001, 0002, ...)
+        import datetime
+        vip = {'vehicleType': 'Bicycle', 'category': 'non-plated', 'ownerName': 'Vera Guest', 'ownerPhone': '09171234567', 'passClass': 'VIP', 'reason': 'Guest of honour', 'stickerYear': '2026'}
+        year = datetime.date.today().year
+        c, r = req('vehicles.php', {**vip, 'plateNumber': 'VIPGEN1'})
+        check('a VIP is registered without an ID and gets VIP-<year>-0001', c == 201 and r['data']['ownerIdNumber'] == f'VIP-{year}-0001', r)
+        check('...with the role VIP and no portal login', r['data']['ownerRole'] == 'VIP' and r['data'].get('studentAccount') is None, r['data'])
+        c, r = req('vehicles.php', {**vip, 'plateNumber': 'VIPGEN2', 'ownerName': 'Victor Guest'})
+        check('the next VIP gets the next number', c == 201 and r['data']['ownerIdNumber'] == f'VIP-{year}-0002', r)
+        c, r = req('vehicles.php', {'vehicleType': 'Bicycle', 'category': 'non-plated', 'ownerName': 'No Id', 'plateNumber': 'NOVIPID1', 'stickerYear': '2026'})
+        check('a standard registration still needs an ID', c == 400, r)
+
+        # ---- visitor day pass contact number: the same Philippine mobile rule, stored tidied
+        visitor = {'visitor_name': 'Format Visitor', 'plate': 'FMTVIS01', 'purpose': 'Delivery', 'person_to_visit': 'Registrar'}
+        for i, given in enumerate(('09279100511', '0927 910 0511', '+639279100511', '0927-910-0511')):
+            c, r = req('visitors.php', {**visitor, 'plate': f'FMTVIS{i + 10}', 'contact_number': given})
+            check(f'visitor contact "{given}" is accepted and stored as +63 927 910 0511', c == 201 and r['data']['contactNumber'] == '+63 927 910 0511', r)
+        for bad in ('0927 910 051', '0827 910 0511', '02-8123-4567', 'abc', '555-1234', '1234567'):
+            c, r = req('visitors.php', {**visitor, 'plate': 'FMTVIS99', 'contact_number': bad})
+            check(f'visitor contact "{bad}" is refused', c == 400 and r['data']['code'] == 'INVALID_PHONE', r)
+
     return results
 
 

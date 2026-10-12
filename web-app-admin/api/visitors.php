@@ -23,6 +23,7 @@ require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/photos.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/records.php';
+require_once __DIR__ . '/../lib/formats.php';
 
 // How far ahead an admin may schedule a day pass
 const SP_VISITOR_MAX_ADVANCE_DAYS = 60;
@@ -158,8 +159,9 @@ function handleCreateVisitor($pdo, $actor) {
     if ($missing) {
         sendResponse(400, null, 'Missing required fields: ' . implode(', ', $missing) . '.');
     }
-    if (!preg_match('/^[0-9+()\-\s]{7,20}$/', $contact)) {
-        sendResponse(400, null, 'Enter a valid contact number.');
+    $contact = normalizePhMobile($contact);
+    if ($contact === null) {
+        sendResponse(400, ['code' => 'INVALID_PHONE'], 'Contact number must be a Philippine mobile number, for example 0927 910 0511.');
     }
     $plate = normalizePlate($plateRaw);
     if (strlen($plate) < 2) {

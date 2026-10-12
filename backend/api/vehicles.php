@@ -121,6 +121,13 @@ function handleRegisterVehicle($pdo, $admin) {
     $ownerIdNumber = isset($data['ownerIdNumber']) ? trim($data['ownerIdNumber']) : '';
     if ($ownerIdNumber !== '') $ownerIdNumber = institutionalIdOrFail($ownerIdNumber);
 
+    // A VIP owner has no institutional ID: when none is sent, one is generated (VIP-2026-0001, ...)
+    $idGenerated = false;
+    if ($ownerIdNumber === '' && requestedPassClass($data) === 'VIP') {
+        $ownerIdNumber = nextVipIdNumber($pdo);
+        $idGenerated = true;
+    }
+
     if ($plateNumber === '' || $ownerName === '' || $ownerIdNumber === '') {
         sendResponse(400, null, "Missing required fields: plateNumber, ownerName, and ownerIdNumber are required.");
     }
@@ -159,10 +166,11 @@ function handleRegisterVehicle($pdo, $admin) {
     $vehicleType = isset($data['vehicleType']) ? $data['vehicleType'] : '4-Wheel (Sedan)';
     $category = isset($data['category']) ? $data['category'] : 'plated';
     $makeModelColor = isset($data['makeModelColor']) ? $data['makeModelColor'] : 'Vehicle';
-    $ownerRole = isset($data['ownerRole']) ? $data['ownerRole'] : 'Student';
+    $ownerRole = isset($data['ownerRole']) ? $data['ownerRole'] : ($idGenerated ? 'VIP' : 'Student');
     $department = isset($data['department']) ? $data['department'] : '';
     $ownerPhone = isset($data['ownerPhone']) ? $data['ownerPhone'] : (isset($data['owner_phone']) ? $data['owner_phone'] : '');
     $ownerPhone = formatPhoneOrFail($ownerPhone, 'Contact phone');
+    driverLimitOrFail($data['authorizedDrivers'] ?? $data['authorized_drivers'] ?? []);
     foreach ((array)($data['authorizedDrivers'] ?? $data['authorized_drivers'] ?? []) as $drv) {
         if (is_array($drv)) driverFormatsOrFail($drv);
     }
@@ -278,7 +286,8 @@ function handleRegisterVehicle($pdo, $admin) {
         // Student portal login for the owner (created once per owner ID; the temporary
         // password is returned only in this response and shown to the admin once)
         try {
-            $newVeh['studentAccount'] = ensureStudentAccount($pdo, $ownerIdNumber, $ownerName, $ownerEmail);
+            // A generated VIP ID is not a student / employee ID: there is no portal login for it
+            $newVeh['studentAccount'] = $idGenerated ? null : ensureStudentAccount($pdo, $ownerIdNumber, $ownerName, $ownerEmail);
         } catch (Exception $e) {
             // The vehicle is saved; the admin can issue the login later from the dossier
             $newVeh['studentAccount'] = ['ownerIdNumber' => $ownerIdNumber, 'created' => false, 'tempPassword' => null, 'error' => 'Portal account could not be created.'];
@@ -517,6 +526,7 @@ function handleUpdateVehicle($pdo, $admin) {
     $legacyLicenses = [];
     $legacyPhones = [$stored['owner_phone'] ?? ''];
     if ($drivers !== null) {
+        driverLimitOrFail($drivers);
         $legacy = $pdo->prepare("SELECT `license_no`, `phone` FROM `authorized_drivers` WHERE `vehicle_id` = ?");
         $legacy->execute([$id]);
         foreach ($legacy->fetchAll() as $row) {

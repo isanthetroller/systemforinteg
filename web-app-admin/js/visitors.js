@@ -454,6 +454,11 @@
      ------------------------------------------------------------------------ */
   function openCreate(prefill = {}) {
     ['vpName', 'vpContact', 'vpPlate', 'vpModel', 'vpHost', 'vpPurpose'].forEach(id => { $(id).value = ''; });
+    // Forget the previous attempt's phone check (the rule itself lives in inputs.js)
+    $('vpContact').setCustomValidity('');
+    $('vpContact').removeAttribute('data-touched');
+    $('vpContact').removeAttribute('aria-invalid');
+    if ($('vpContact').nextElementSibling?.classList.contains('sp-field-error')) $('vpContact').nextElementSibling.textContent = '';
     $('vpItems').innerHTML = '';
     if (prefill.plate) $('vpPlate').value = String(prefill.plate).toUpperCase();
     const today = manilaToday();

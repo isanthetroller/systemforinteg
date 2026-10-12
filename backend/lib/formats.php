@@ -54,6 +54,20 @@ function driverFormatsOrFail(array $drv, array $legacyLicenses = [], array $lega
     return [$license, $phone];
 }
 
+/** Most drivers one vehicle can have: the primary driver plus 5 more. */
+const SP_MAX_DRIVERS = 6;
+
+/** Answers 400 when the roster has more than SP_MAX_DRIVERS named drivers. */
+function driverLimitOrFail($drivers) {
+    $named = 0;
+    foreach ((array)$drivers as $drv) {
+        if (is_array($drv) && trim((string)($drv['fullName'] ?? $drv['full_name'] ?? '')) !== '') $named++;
+    }
+    if ($named > SP_MAX_DRIVERS) {
+        sendResponse(400, ['code' => 'TOO_MANY_DRIVERS'], 'A vehicle can have at most ' . SP_MAX_DRIVERS . ' authorized drivers (the primary driver plus 5 more).');
+    }
+}
+
 /**
  * Institutional ID (student, employee or other): free-form, but letters, numbers and hyphens only, 3 to 20 characters,
  * stored in capitals. Returns null when it does not fit.

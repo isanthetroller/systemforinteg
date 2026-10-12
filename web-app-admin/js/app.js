@@ -263,6 +263,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const editAddDriverBtn = document.getElementById('editAddDriverBtn');
   const editDriversContainer = document.getElementById('editDriversContainer');
 
+  // A vehicle has the primary driver plus at most 5 more (the server enforces the same limit)
+  const MAX_DRIVERS = 6;
+  function syncDriverLimit(button, container, cardSelector) {
+    if (!button || !container) return;
+    const full = container.querySelectorAll(cardSelector).length >= MAX_DRIVERS;
+    button.disabled = full;
+    button.classList.toggle('opacity-50', full);
+    button.classList.toggle('cursor-not-allowed', full);
+    button.title = full ? `A vehicle can have at most ${MAX_DRIVERS} drivers (the primary driver plus 5 more).` : '';
+  }
+
   // Zoom QR Modal
   const zoomQrModalOverlay = document.getElementById('zoomQrModalOverlay');
   const closeZoomQrModalBtn = document.getElementById('closeZoomQrModalBtn');
@@ -3516,6 +3527,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renumberEditDrivers() {
     if (!editDriversContainer) return;
+    syncDriverLimit(editAddDriverBtn, editDriversContainer, '.edit-driver-entry-card');
     const cards = editDriversContainer.querySelectorAll('.edit-driver-entry-card');
     cards.forEach((card, idx) => {
       card.setAttribute('data-index', idx);
@@ -3535,7 +3547,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (editOwnerRole) editOwnerRole.value = v.ownerRole || 'Student';
     if (editOwnerIdNumber) editOwnerIdNumber.value = v.ownerIdNumber || '';
     if (editOwnerFullName) editOwnerFullName.value = v.ownerName || '';
-    if (editDepartment) editDepartment.value = v.department || '';
+    if (editDepartment) {
+      editDepartment.value = v.department || '';
+      editDepartment.required = (v.ownerRole || '') !== 'VIP';   // a VIP owner has no department / course
+    }
     if (editOwnerPhone) editOwnerPhone.value = v.ownerPhone || '';
     if (editOwnerEmail) editOwnerEmail.value = v.ownerEmail || '';
 
@@ -3616,6 +3631,7 @@ document.addEventListener('DOMContentLoaded', () => {
           phone: v.ownerPhone || ''
         }));
       }
+      syncDriverLimit(editAddDriverBtn, editDriversContainer, '.edit-driver-entry-card');
     }
 
     editModalOverlay.classList.remove('hidden');
@@ -3718,7 +3734,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (editAddDriverBtn && editDriversContainer) {
     editAddDriverBtn.addEventListener('click', () => {
       const count = editDriversContainer.querySelectorAll('.edit-driver-entry-card').length;
+      if (count >= MAX_DRIVERS) return;
       editDriversContainer.appendChild(createEditDriverCard(count, {}));
+      syncDriverLimit(editAddDriverBtn, editDriversContainer, '.edit-driver-entry-card');
     });
   }
 
@@ -3935,6 +3953,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Dynamic Driver Field Management
   if (addDriverBtn) {
     addDriverBtn.addEventListener('click', () => {
+      if (driversContainer.querySelectorAll('.driver-entry-card').length >= MAX_DRIVERS) return;
       state.driverCounter++;
       const count = state.driverCounter;
 
@@ -3985,12 +4004,14 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       driversContainer.appendChild(driverCard);
+      syncDriverLimit(addDriverBtn, driversContainer, '.driver-entry-card');
       triggerQrUpdate(10);
     });
   }
 
   function renumberDrivers() {
     const cards = driversContainer.querySelectorAll('.driver-entry-card');
+    syncDriverLimit(addDriverBtn, driversContainer, '.driver-entry-card');
     state.driverCounter = cards.length;
     cards.forEach((card, idx) => {
       const label = card.querySelector('.driver-num-label');
@@ -4037,6 +4058,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `;
     state.driverCounter = 1;
+    syncDriverLimit(addDriverBtn, driversContainer, '.driver-entry-card');
     triggerQrUpdate(10);
   }
 
@@ -4205,6 +4227,36 @@ document.addEventListener('DOMContentLoaded', () => {
     removeVehiclePhotoBtn.addEventListener('click', resetVehiclePhoto);
   }
 
+  /* VIP registration asks for less: name, picture and contact phone. The affiliation, department and e-mail are
+     hidden (a VIP is neither student nor staff) and the server generates the ID (VIP-2026-0001). Sections 2 and 3 are
+     the same as for any vehicle. */
+  const vipToggle = document.getElementById('passClassVip');
+  const isVipRegistration = () => !!(vipToggle && vipToggle.checked);
+  function applyVipMode() {
+    const vip = isVipRegistration();
+    const el = (id) => document.getElementById(id);
+    ['ownerRoleField', 'departmentField', 'ownerEmailField'].forEach(id => el(id)?.classList.toggle('hidden', vip));
+    el('department').required = !vip;
+    el('ownerRole').required = !vip;
+    const idInput = el('ownerIdNumber');
+    idInput.required = !vip;
+    idInput.readOnly = vip;
+    idInput.placeholder = vip ? 'Auto-generated' : 'NCST-2024-05182';
+    if (vip) {
+      idInput.value = '';
+      idInput.setCustomValidity('');
+      if (idInput.nextElementSibling?.classList.contains('sp-field-error')) idInput.nextElementSibling.textContent = '';
+    }
+    el('ownerIdReq').classList.toggle('hidden', vip);
+    el('ownerIdAutoNote').classList.toggle('hidden', !vip);
+    el('ownerContact').required = vip;
+    el('ownerContactReq').classList.toggle('hidden', !vip);
+    el('ownerPhotoReq').classList.toggle('hidden', !vip);
+    triggerQrUpdate(10);
+  }
+  if (vipToggle) vipToggle.addEventListener('change', applyVipMode);
+  if (vehicleForm) vehicleForm.addEventListener('reset', () => setTimeout(applyVipMode, 0));
+
   // Handle Form Submission
   if (vehicleForm) {
     vehicleForm.addEventListener('submit', async (e) => {
@@ -4222,16 +4274,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      const isVip = isVipRegistration();
+      if (isVip && !ownerPhotoDataUrl) {
+        showToast("A VIP pass needs the owner's picture. Attach a 1x1 photo first.", 'warning');
+        ownerPhotoBtn?.focus();
+        return;
+      }
+
       const ownerFullName = document.getElementById('ownerFullName').value.trim();
-      const ownerRole = document.getElementById('ownerRole').value;
-      const department = document.getElementById('department').value.trim();
-      const ownerIdNumber = document.getElementById('ownerIdNumber').value.trim();
+      // A VIP has no affiliation, department, e-mail or institutional ID of their own (the ID is generated on save)
+      const ownerRole = isVip ? 'VIP' : document.getElementById('ownerRole').value;
+      const department = isVip ? '' : document.getElementById('department').value.trim();
+      const ownerIdNumber = isVip ? '' : document.getElementById('ownerIdNumber').value.trim();
       const ownerContact = document.getElementById('ownerContact').value.trim();
-      const ownerEmail = document.getElementById('ownerEmail').value.trim();
+      const ownerEmail = isVip ? '' : document.getElementById('ownerEmail').value.trim();
       const vehicleCategory = document.getElementById('vehicleCategory').value;
       const makeModelColor = document.getElementById('makeModelColor').value.trim();
       const stickerYear = document.getElementById('stickerYear').value.trim() || '2026';
-      const isVip = !!(document.getElementById('passClassVip') && document.getElementById('passClassVip').checked);
 
       // Read Authorized Drivers
       const driverCards = document.querySelectorAll('.driver-entry-card');
@@ -4316,6 +4375,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
           savedOnServer = true;
           if (res && res.id) newVehicle.id = res.id;
+          if (res && res.ownerIdNumber) newVehicle.ownerIdNumber = res.ownerIdNumber;
           if (res) applyServerPass(newVehicle, res);
           state.vehicles.unshift(newVehicle);
           updateCounts(); renderDashboard(); renderVehiclesTable(); renderFullAuditTable();
@@ -4393,10 +4453,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const owner = (ownerNameInput && ownerNameInput.value.trim()) || 'Juan C. Dela Cruz';
 
     const roleInput = document.getElementById('ownerRole');
-    const role = (roleInput && roleInput.value) || 'Student';
+    const role = isVipRegistration() ? 'VIP' : ((roleInput && roleInput.value) || 'Student');
 
     const idInput = document.getElementById('ownerIdNumber');
-    const idNum = (idInput && idInput.value.trim()) || 'NCST-2024-05182';
+    const idNum = isVipRegistration() ? 'VIP-' + new Date().getFullYear() + '-AUTO' : ((idInput && idInput.value.trim()) || 'NCST-2024-05182');
 
     const makeInput = document.getElementById('makeModelColor');
     const makeModel = (makeInput && makeInput.value.trim()) || 'White Toyota Vios';
@@ -4850,8 +4910,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const plate = (plateInput && plateInput.value.trim().toUpperCase()) || 'NDK-4821';
       const owner = (document.getElementById('ownerFullName') && document.getElementById('ownerFullName').value.trim()) || 'Juan C. Dela Cruz';
-      const role = (document.getElementById('ownerRole') && document.getElementById('ownerRole').value) || 'Student';
-      const idNum = (document.getElementById('ownerIdNumber') && document.getElementById('ownerIdNumber').value.trim()) || 'NCST-2024-05182';
+      const role = isVipRegistration() ? 'VIP' : ((document.getElementById('ownerRole') && document.getElementById('ownerRole').value) || 'Student');
+      const idNum = isVipRegistration() ? 'VIP-' + new Date().getFullYear() + '-AUTO' : ((document.getElementById('ownerIdNumber') && document.getElementById('ownerIdNumber').value.trim()) || 'NCST-2024-05182');
       const makeModel = (document.getElementById('makeModelColor') && document.getElementById('makeModelColor').value.trim()) || 'White Toyota Vios';
       const category = (document.getElementById('vehicleCategory') && document.getElementById('vehicleCategory').value) || '4-Wheel';
       const year = (document.getElementById('stickerYear') && document.getElementById('stickerYear').value.trim()) || '2026';
@@ -5003,6 +5063,7 @@ document.addEventListener('DOMContentLoaded', () => {
     target.paymentStatus = serverVehicle.paymentStatus || target.paymentStatus || 'Paid';
     if (serverVehicle.feeAmount != null) target.feeAmount = Number(serverVehicle.feeAmount);
     target.passValidUntil = serverVehicle.passValidUntil || target.passValidUntil || null;
+    if (serverVehicle.ownerIdNumber) target.ownerIdNumber = serverVehicle.ownerIdNumber;
     if (serverVehicle.plateNumber) target.plateNumber = serverVehicle.plateNumber;
     if (typeof serverVehicle.isVip === 'boolean') {
       target.isVip = serverVehicle.isVip;
