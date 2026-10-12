@@ -326,6 +326,17 @@ void main() {
       expect(next, 1);
     });
 
+    testWidgets('the case reference is shown and the violation button says it is an extra', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: ScanSavedView(blocked: true, title: 'Entry blocked', plate: 'ABC 1234', detail: 'd', caseRef: 'SEC-0012', onIssueViolation: () {}, onNext: () {}),
+        ),
+      ));
+      expect(find.byKey(const Key('caseRef')), findsOneWidget);
+      expect(find.text('Case SEC-0012'), findsOneWidget);
+      expect(find.text('Also issue a violation'), findsOneWidget);
+    });
+
     testWidgets('no phone number means no call buttons, and a green save never offers them', (tester) async {
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(body: ScanSavedView(blocked: true, title: 'Exit blocked', plate: 'X 1', detail: 'd', onNext: () {})),

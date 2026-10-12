@@ -787,6 +787,9 @@ class ScanSavedView extends StatelessWidget {
   final String ownerName;
   final String ownerPhone;
   final VoidCallback? onIssueViolation;
+
+  /// The fixed case reference (SEC-0012) of the case this block or report opened.
+  final String caseRef;
   const ScanSavedView({
     super.key,
     required this.blocked,
@@ -797,6 +800,7 @@ class ScanSavedView extends StatelessWidget {
     this.ownerName = '',
     this.ownerPhone = '',
     this.onIssueViolation,
+    this.caseRef = '',
   });
 
   Future<void> _call(BuildContext context) async {
@@ -825,6 +829,15 @@ class ScanSavedView extends StatelessWidget {
               Text(plate, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
               const SizedBox(height: 6),
               Text(detail, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14)),
+              if (blocked && caseRef.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const Key('caseRef'),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(20)),
+                  child: SelectableText('Case $caseRef', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                ),
+              ],
               if (hasPhone) ...[
                 const SizedBox(height: 20),
                 Container(
@@ -874,7 +887,7 @@ class ScanSavedView extends StatelessWidget {
                     style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white, width: 1.5)),
                     onPressed: onIssueViolation,
                     icon: const Icon(Icons.warning_amber_rounded),
-                    label: const Text('Issue violation', style: TextStyle(fontWeight: FontWeight.w800)),
+                    label: Text(caseRef.isEmpty ? 'Issue violation' : 'Also issue a violation', style: const TextStyle(fontWeight: FontWeight.w800)),
                   ),
                 ),
               ],

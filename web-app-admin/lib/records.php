@@ -95,6 +95,7 @@ function openSecurityIncident($pdo, $actor, array $f, $dedupeMinutes = 0) {
         $f['reportedAt'] ?? date('Y-m-d H:i:s'),
     ], !empty($f['clientRef']) ? [$f['clientRef']] : []));
     $incidentId = (int)$pdo->lastInsertId();
+    $caseNumber = useReferenceCaseNumber($pdo, $incidentId);
     // Callers that block a vehicle at the gate pass 'notifyOwner' => true; internal review cases and violation holds do not
     // (a violation sends its own notice).
     if (!empty($f['notifyOwner'])) {
@@ -117,6 +118,21 @@ function incidentLogId($pdo, $r) {
     $stmt->execute([normalizePlate($r['plate_number']), date('Y-m-d H:i:s', $at - 600), date('Y-m-d H:i:s', $at + 600)]);
     $id = $stmt->fetchColumn();
     return $id === false ? null : (int)$id;
+}
+
+/** The fixed, readable reference of a case: SEC-0012 for a security case, VIO-0008 for a violation. Never changes. */
+function caseReference($kind, $id) {
+    return ($kind === 'violation' ? 'VIO-' : 'SEC-') . str_pad((string)(int)$id, 4, '0', STR_PAD_LEFT);
+}
+
+/**
+ * New security cases are numbered SEC-<id>, the same reference the staff Cases list, the phone, the owner notices and
+ * the e-mails show. The row is inserted with a provisional random number first (it must be unique), then renumbered.
+ */
+function useReferenceCaseNumber($pdo, $incidentId) {
+    $ref = caseReference('incident', $incidentId);
+    $pdo->prepare("UPDATE `security_incidents` SET `case_number` = ? WHERE `id` = ?")->execute([$ref, (int)$incidentId]);
+    return $ref;
 }
 
 function newCaseNumber($pdo) {

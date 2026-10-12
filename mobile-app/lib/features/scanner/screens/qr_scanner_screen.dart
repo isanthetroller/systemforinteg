@@ -510,6 +510,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     String ownerName = '',
     String ownerPhone = '',
     VehicleRecord? vehicle,
+    String caseRef = '',
   }) {
     _savedTimer?.cancel();
     setState(() {
@@ -523,6 +524,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         ownerName: ownerName,
         ownerPhone: ownerPhone,
         vehicle: vehicle,
+        caseRef: caseRef,
       );
     });
     if (!blocked) {
@@ -565,13 +567,16 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       visitorPassId: visitorId,
     );
     final logId = ApiService.lastGateLogId;
-    ApiService.reportIncident(
+    final incidentOk = await ApiService.reportIncident(
       plateNumber: plate,
       driverName: driver,
       reason: decision.reason,
       gatePoint: gatePoint,
       notes: '${lane == ScanLane.entry ? 'Entry' : 'Exit'} blocked at the gate: $reason',
     );
+    // The server answers with the fixed case reference; a repeat of the same block returns the case that is already open
+    final caseRef = incidentOk ? '${ApiService.lastResponseData?['caseNumber'] ?? ''}'.replaceAll('null', '') : '';
+    final alreadyOpen = incidentOk && ApiService.lastResponseData?['duplicate'] == true;
     final photo = decision.photo;
     if (photo != null && logged && logId != null) {
       unawaited(EvidenceService.upload(photo, kind: 'incident', plate: plate, gateLogId: logId));
@@ -595,7 +600,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       blocked: true,
       title: lane == ScanLane.entry ? 'Entry blocked' : 'Exit blocked',
       plate: plate,
-      detail: '$reason · logged as an incident',
+      detail: '$reason · ${alreadyOpen ? 'this case was already open' : 'logged as an incident'}',
+      caseRef: caseRef,
       ownerName: owner,
       ownerPhone: phone,
       vehicle: vehicle,
@@ -630,6 +636,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       reportOnly: true,
     );
     final incidentId = ok ? int.tryParse('${ApiService.lastResponseData?['id'] ?? ''}') : null;
+    final caseRef = ok ? '${ApiService.lastResponseData?['caseNumber'] ?? ''}'.replaceAll('null', '') : '';
+    final alreadyOpen = ok && ApiService.lastResponseData?['duplicate'] == true;
     final photo = decision.photo;
     if (photo != null && incidentId != null) {
       unawaited(EvidenceService.upload(photo, kind: 'incident', plate: plate, incidentId: incidentId));
@@ -646,11 +654,31 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       blocked: true,
       title: 'Reported',
       plate: plate,
-      detail: '${decision.text} · case opened for an admin',
+      detail: '${decision.text} · ${alreadyOpen ? 'this case was already open' : 'case opened for an admin'}',
+      caseRef: caseRef,
       ownerName: owner,
       ownerPhone: phone,
       vehicle: vehicle,
     );
+  }
+
+  /// "Also issue a violation" after a block or report: the vehicle already has an open case, so say so before opening a second one.
+  Future<void> _issueViolationAfterCase(_SavedFlash saved) async {
+    if (saved.caseRef.isNotEmpty) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('A case is already open'),
+          content: Text('${saved.plate} already has case ${saved.caseRef}. A violation opens a second case for the same vehicle. Issue it anyway?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(key: const Key('confirmSecondCase'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Issue violation')),
+          ],
+        ),
+      );
+      if (go != true || !mounted) return;
+    }
+    _showIssueViolationDialog(forVehicle: saved.vehicle);
   }
 
   /// "View details or report incident" from the result screen: opens the on-campus inspection view for this vehicle.
@@ -1899,9 +1927,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         onNext: _resetScanner,
         ownerName: _saved!.ownerName,
         ownerPhone: _saved!.ownerPhone,
-        onIssueViolation: _saved!.vehicle == null
-            ? null
-            : () => _showIssueViolationDialog(forVehicle: _saved!.vehicle),
+        caseRef: _saved!.caseRef,
+        onIssueViolation: _saved!.vehicle == null ? null : () => _issueViolationAfterCase(_saved!),
       );
     } else if (_movementPreview != null || _refusedPreview != null) {
       final data = (_movementPreview ?? _refusedPreview)!;
@@ -2422,6 +2449,7 @@ class _SavedFlash {
   final String ownerName;
   final String ownerPhone;
   final VehicleRecord? vehicle;
+  final String caseRef;
   const _SavedFlash({
     required this.blocked,
     required this.title,
@@ -2430,5 +2458,6 @@ class _SavedFlash {
     this.ownerName = '',
     this.ownerPhone = '',
     this.vehicle,
+    this.caseRef = '',
   });
 }

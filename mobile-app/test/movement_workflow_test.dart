@@ -252,7 +252,7 @@ void main() {
       tester,
       requests: requests,
       prepared: refused,
-      confirm: (body) async => http.Response(jsonEncode({'status': 'success', 'data': {'reported': true}}), 201),
+      confirm: (body) async => http.Response(jsonEncode({'status': 'success', 'data': {'id': 12, 'caseNumber': 'SEC-0012'}}), 201),
       decision: () => fail('Nothing may be saved'),
     );
     expect(find.text('Already inside'), findsOneWidget);
@@ -273,7 +273,63 @@ void main() {
     expect(report['notes'], contains('Left by the side gate'));
     expect(report['notes'], contains('inside campus'));
     expect(find.text('Reported'), findsOneWidget, reason: 'the follow-up screen stays for Call owner / Issue violation');
+    expect(find.text('Case SEC-0012'), findsOneWidget, reason: 'the fixed case reference is shown');
     expect(find.byKey(const Key('savedNext')), findsOneWidget);
+  });
+
+  group('blocking from the scan screen', () {
+    Future<void> blockIt(WidgetTester tester, List<Map<String, dynamic>> requests, {bool duplicate = false}) async {
+      await screen(
+        tester,
+        requests: requests,
+        decision: () {},
+        confirm: (body) async {
+          if (body['action'] == 'Entry Denied') {
+            return http.Response(jsonEncode({'status': 'success', 'data': {'id': 5}}), 201);
+          }
+          return http.Response(
+            jsonEncode({'status': 'success', 'data': {'id': 9, 'caseNumber': 'SEC-0009', if (duplicate) 'duplicate': true}}),
+            duplicate ? 200 : 201,
+          );
+        },
+      );
+      await tester.tap(find.byKey(const Key('blockButton')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reason_Suspicious behavior')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a block opens one case and shows its fixed reference', (tester) async {
+      final requests = <Map<String, dynamic>>[];
+      await blockIt(tester, requests);
+      expect(find.text('Entry blocked'), findsOneWidget);
+      expect(find.text('Case SEC-0009'), findsOneWidget);
+      expect(requests.where((r) => r['action'] == 'Entry Denied').length, 1, reason: 'one denied gate log');
+      final incidents = requests.where((r) => r.containsKey('reason') && r['action'] == null).toList();
+      expect(incidents.length, 1, reason: 'exactly one incident, so exactly one case');
+      expect(incidents.single.containsKey('report'), isFalse, reason: 'a block is not a record-check report');
+    });
+
+    testWidgets('repeating a block says the case was already open', (tester) async {
+      await blockIt(tester, <Map<String, dynamic>>[], duplicate: true);
+      expect(find.textContaining('this case was already open'), findsOneWidget);
+      expect(find.text('Case SEC-0009'), findsOneWidget);
+    });
+
+    testWidgets('issuing a violation after a block asks before opening a second case', (tester) async {
+      await blockIt(tester, <Map<String, dynamic>>[]);
+      expect(find.text('Also issue a violation'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('issueViolationAfterBlock')));
+      await tester.pumpAndSettle();
+      expect(find.text('A case is already open'), findsOneWidget);
+      expect(find.textContaining('SEC-0009'), findsWidgets);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('A case is already open'), findsNothing);
+      expect(find.text('Entry blocked'), findsOneWidget, reason: 'cancelling keeps the guard on the blocked screen');
+    });
   });
 
   testWidgets('ordinary pass: the owner is preselected and one tap saves', (tester) async {

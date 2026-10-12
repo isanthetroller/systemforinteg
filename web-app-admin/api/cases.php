@@ -66,9 +66,9 @@ if ($method === 'GET') {
         if (!$isAdmin) sendResponse(403, null, 'Only an administrator can export cases.');
         $res = caseSearch($pdo, $filters, false);
         $out = fopen('php://temp', 'w+');
-        fputcsv($out, ['Case', 'Type', 'Plate', 'Owner', 'Owner ID', 'What happened', 'Opened', 'Opened by', 'Status', 'Outcome', 'Closed', 'Closed by', 'Contact attempts', 'Police referral', 'Closing notes']);
+        fputcsv($out, ['Case no.', 'Type', 'Plate', 'Owner', 'Owner ID', 'What happened', 'Opened', 'Opened by', 'Status', 'Outcome', 'Closed', 'Closed by', 'Contact attempts', 'Police referral', 'Closing notes']);
         foreach ($res['rows'] as $c) {
-            fputcsv($out, [$c['caseNumber'] ?: $c['key'], $c['type'], $c['plateNumber'], $c['ownerName'], $c['ownerIdNumber'], $c['title'], $c['openedAt'], $c['openedBy'],
+            fputcsv($out, [$c['reference'], $c['type'], $c['plateNumber'], $c['ownerName'], $c['ownerIdNumber'], $c['title'], $c['openedAt'], $c['openedBy'],
                 $c['status'], $c['outcome'], $c['closedAt'], $c['closedBy'], $c['contactAttempts'], $c['policeReferred'] ? 'Yes' : 'No', $c['closeNotes']]);
         }
         rewind($out);

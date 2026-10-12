@@ -234,7 +234,7 @@ class _CaseDetailScreenState extends State<CaseDetailScreen> {
         appBar: AppBar(
           backgroundColor: NcstColors.navy,
           foregroundColor: NcstColors.white,
-          title: Text('Case ${widget.caseKey}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          title: Text('Case ${c?['reference'] ?? widget.preview?['reference'] ?? widget.caseKey}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
         ),
         body: c == null
             ? Center(

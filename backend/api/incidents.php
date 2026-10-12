@@ -104,6 +104,17 @@ function handleCreateIncident($pdo, $actor) {
         }
     }
 
+    // The same plate blocked for the same reason a few minutes ago is the same case (a double tap, a rescan, a second guard),
+    // not a new one: answer with the case that is already open.
+    $recent = $pdo->prepare("SELECT `id`, `case_number`, `status` FROM `security_incidents`
+        WHERE REPLACE(REPLACE(UPPER(`plate_number`), '-', ''), ' ', '') = ? AND `reason` = ? AND `status` = 'Held' AND `reported_at` >= ?
+        ORDER BY `id` DESC LIMIT 1");
+    $recent->execute([strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $plateNumber)), $reason, date('Y-m-d H:i:s', spNow() - 15 * 60)]);
+    if ($row = $recent->fetch()) {
+        sendResponse(200, ['id' => (int)$row['id'], 'caseNumber' => $row['case_number'], 'plateNumber' => $plateNumber, 'status' => $row['status'], 'duplicate' => true],
+            "Already open as case {$row['case_number']}.");
+    }
+
     $caseNumber = newCaseNumber($pdo);
     $vehicleType = isset($data['vehicleType']) ? $data['vehicleType'] : 'Vehicle';
     $ownerName = isset($data['ownerName']) ? $data['ownerName'] : 'Unknown';
@@ -129,15 +140,18 @@ function handleCreateIncident($pdo, $actor) {
     try {
         $sql = "INSERT INTO `security_incidents` (
             `case_number`, `plate_number`, `vehicle_type`, `owner_name`, `owner_role`,
-            `driver_name`, `driver_relationship`, `reason`, `gate_point`, `officer`, `logged_by_user_id`, `status`, `notes`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Held', ?)";
+            `driver_name`, `driver_relationship`, `reason`, `gate_point`, `officer`, `logged_by_user_id`, `status`, `notes`, `reported_at`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Held', ?, ?)";
 
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
             $caseNumber, $plateNumber, $vehicleType, $ownerName, $ownerRole,
-            $driverName, $driverRelationship, $reason, $gatePoint, $officer, $loggedByUserId, $notes
+            $driverName, $driverRelationship, $reason, $gatePoint, $officer, $loggedByUserId, $notes,
+            // Set here (Manila time, like every other case) instead of the database default, so times compare consistently
+            date('Y-m-d H:i:s', spNow())
         ]);
         $newId = $pdo->lastInsertId();
+        $caseNumber = useReferenceCaseNumber($pdo, (int)$newId);
         if ($clientRef !== '') {
             $pdo->prepare("UPDATE `security_incidents` SET `client_ref` = ? WHERE `id` = ?")->execute([$clientRef, $newId]);
         }

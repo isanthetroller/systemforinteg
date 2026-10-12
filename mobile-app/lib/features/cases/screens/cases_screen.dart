@@ -141,6 +141,10 @@ class _CasesScreenState extends State<CasesScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if ('${c['reference'] ?? ''}'.isNotEmpty)
+                        Text('${c['reference']}',
+                            key: Key('caseRef:${c['key']}'),
+                            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: 0.8, color: NcstColors.slate500)),
                       Text((c['plateNumber'] ?? '').toString(),
                           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900, letterSpacing: 0.8, color: NcstColors.navy)),
                       const SizedBox(height: 2),

@@ -13,6 +13,7 @@ Runs against a LOCAL dev server using the SQLite fallback, never production:
 The script refuses to run against a non-localhost URL.
 """
 import json
+import re
 import os
 import sys
 import urllib.error
@@ -894,7 +895,7 @@ def test_scheduled_and_revoked_passes(admin):
     check('guard cannot revoke -> 403', code == 403, code)
     code, res = call('PUT', 'visitors.php', {'id': today_pass['id'], 'action': 'revoke', 'notes': 'Disruptive behaviour'}, admin)
     check('admin revokes a pass whose visitor is inside -> 200', code == 200 and res['data']['status'] == 'Revoked', res)
-    check('  ...a security hold is opened', 'hold CASE-' in res['message'], res['message'])
+    check('  ...a security hold is opened', 'hold SEC-' in res['message'], res['message'])
     held = open_incidents_for(admin, 'SCH5001')
     check('  ...the incident is in the Held queue with the reason', held and held[0]['reason'] == 'Visitor pass revoked while on campus'
           and 'Disruptive behaviour' in (held[0].get('notes') or ''), held)
@@ -1644,7 +1645,7 @@ def test_owner_notices(admin):
     check('guard blocks the vehicle at the gate', code == 201, res)
     rows = notices(tok1, ['Sent', 'Failed', 'Skipped'])
     check('the owner sees a Blocked notice with the reason and case number', len(rows) == 2 and rows[0]['kind'] == 'Blocked'
-          and 'Plate & Vehicle Profile Mismatch' in rows[0]['message'] and 'CASE-' in rows[0]['message'], rows)
+          and 'Plate & Vehicle Profile Mismatch' in rows[0]['message'] and re.search(r'SEC-\d{4}', rows[0]['message']), rows)
     if smtp:
         check('  ...and a second e-mail went out', rows[0]['emailStatus'] == 'Sent' and len(smtp.messages) == 2, (rows[0]['emailStatus'], len(smtp.messages)))
 
@@ -2587,7 +2588,7 @@ def test_cases(admin):
     req = urllib.request.Request(f'{BASE}/cases.php?status=closed&format=csv', headers={'Authorization': f'Bearer {admin}'})
     with urllib.request.urlopen(req) as r:
         body = r.read().decode('utf-8-sig')
-        check('admin exports the matching cases as CSV', r.headers.get('Content-Type', '').startswith('text/csv') and body.splitlines()[0].startswith('Case,Type,Plate')
+        check('admin exports the matching cases as CSV', r.headers.get('Content-Type', '').startswith('text/csv') and body.splitlines()[0].startswith('"Case no.",Type,Plate')
               and 'CSE 1001' in body and 'Clearance signed' in body, body[:120])
     AUTO_PAY = True
 

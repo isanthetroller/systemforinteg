@@ -67,7 +67,7 @@
       render();
     } catch (err) {
       if (window.ApiClient?.isFresh?.()) throw err;
-      $('casesBody').innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
+      $('casesBody').innerHTML = `<tr><td colspan="8" class="px-4 py-6 text-center text-ncst-crimson">${esc(err.message)}</td></tr>`;
     }
   }
 
@@ -87,7 +87,7 @@
     });
     const body = $('casesBody');
     if (!data.cases.length) {
-      body.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-slate-400">No cases match.</td></tr>';
+      body.innerHTML = '<tr><td colspan="8" class="px-4 py-10 text-center text-slate-400">No cases match.</td></tr>';
       renderPaging();
       return;
     }
@@ -96,6 +96,7 @@
       const tr = document.createElement('tr');
       tr.className = 'hover:bg-slate-50/60 cursor-pointer';
       tr.innerHTML = `
+        <td class="px-4 py-2.5 font-mono font-bold text-ncst-navy whitespace-nowrap">${esc(c.reference || c.key)}</td>
         <td class="px-4 py-2.5 font-mono font-bold text-slate-900 whitespace-nowrap">${esc(c.plateNumber)}</td>
         <td class="px-4 py-2.5"><div class="font-semibold text-slate-800">${esc(c.ownerName || 'Unknown')}</div><div class="text-[11px] text-slate-500">${esc(c.ownerIdNumber || '')}</div></td>
         <td class="px-4 py-2.5">${typeBadge(c.type)}</td>
@@ -156,7 +157,7 @@
             <div><div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Owner</div><div class="font-semibold text-slate-800">${esc(c.ownerName || 'Unknown')}</div><div class="text-slate-500">${esc(c.ownerIdNumber || '')}</div></div>
             <div><div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Contact</div><div>${phone}</div></div>
           </div>
-          ${c.caseNumber ? `<div class="text-[11px] text-slate-500">Case no. ${esc(c.caseNumber)}</div>` : ''}
+          <div class="text-[11px] text-slate-500">Case no. <span class="font-mono font-bold text-slate-700">${esc(c.reference || c.key)}</span></div>
           ${closed ? `<div class="text-[11px] text-slate-600 pt-1">Closed by ${esc(c.closedBy || '—')} · ${fmt(c.closedAt)}</div>` : ''}
         </div>
         ${evidence}
@@ -177,7 +178,7 @@
     if (c.incidentId && window.SP && SP.openIncident) buttons.push(`<button type="button" data-act="investigate" class="${plain}">Investigation file</button>`);
     buttons.push('<button id="drawerCancelBtnInner" type="button" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">Close</button>');
 
-    SP.openDrawer(`Case — ${c.plateNumber}`, c.key, html, `<div class="flex flex-wrap items-center gap-2">${buttons.join('')}</div>`);
+    SP.openDrawer(`Case ${c.reference || c.key} — ${c.plateNumber}`, c.key, html, `<div class="flex flex-wrap items-center gap-2">${buttons.join('')}</div>`);
     $('drawerContent').dataset.liveCase = c.key;
     const footer = $('drawerFooter');
     footer.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => act(c, b.dataset.act)));

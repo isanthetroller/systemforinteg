@@ -94,6 +94,7 @@ function caseSummary($kind, $row, array $events) {
         ];
         $defaultOutcome = 'Resolved';
     }
+    $c['reference'] = caseReference($kind, $row['id']);
     $contacts = array_values(array_filter($events, fn($e) => $e['event_type'] === 'contact'));
     $awaiting = (bool)array_filter($events, fn($e) => $e['event_type'] === 'awaiting');
     $police = (bool)array_filter($events, fn($e) => $e['event_type'] === 'police');
@@ -210,6 +211,14 @@ function caseSearch($pdo, array $f, $paginate = true) {
         if ($status === 'all') return '1=1';
         return $openExpr; // active, open, awaiting
     };
+    // A case reference (SEC-0012 / VIO-0008) finds exactly that case
+    $refKind = null;
+    $refId = 0;
+    if (preg_match('/^\s*(SEC|VIO)[- ]?0*(\d+)\s*$/i', $q, $m)) {
+        $refKind = strtoupper($m[1]);
+        $refId = (int)$m[2];
+        $q = '';
+    }
     $qLike = $q !== '' ? "%{$q}%" : null;
     $qPlateLike = $q !== '' ? '%' . strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $q)) . '%' : null;
 
@@ -221,6 +230,9 @@ function caseSearch($pdo, array $f, $paginate = true) {
         if ($type === 'Violation') { $where[] = "vv.`violation_type` <> ?"; $args[] = SP_OVERNIGHT_VIOLATION; }
         if ($type === 'Overnight') { $where[] = "vv.`violation_type` = ?"; $args[] = SP_OVERNIGHT_VIOLATION; }
         if ($plate !== '') { $where[] = caseNormPlateSql('vv.`plate_number`') . ' = ?'; $args[] = $plate; }
+        if ($refKind !== null) {
+            if ($refKind === 'VIO') { $where[] = 'vv.`id` = ?'; $args[] = $refId; } else { $where[] = '1=0'; }
+        }
         if ($qLike !== null) {
             $where[] = '(' . caseNormPlateSql('vv.`plate_number`') . ' LIKE ? OR v.`owner_name` LIKE ? OR v.`owner_id_number` LIKE ? OR vv.`violation_type` LIKE ? OR vv.`description` LIKE ? OR vv.`resolution_notes` LIKE ?)';
             array_push($args, $qPlateLike, $qLike, $qLike, $qLike, $qLike, $qLike);
@@ -242,6 +254,9 @@ function caseSearch($pdo, array $f, $paginate = true) {
             $stateWhere("`status` <> 'Held'", "`status` = 'Held'")];
         $args = [];
         if ($plate !== '') { $where[] = caseNormPlateSql('`plate_number`') . ' = ?'; $args[] = $plate; }
+        if ($refKind !== null) {
+            if ($refKind === 'SEC') { $where[] = '`id` = ?'; $args[] = $refId; } else { $where[] = '1=0'; }
+        }
         if ($qLike !== null) {
             $where[] = '(' . caseNormPlateSql('`plate_number`') . ' LIKE ? OR `owner_name` LIKE ? OR `reason` LIKE ? OR `case_number` LIKE ? OR `notes` LIKE ?)';
             array_push($args, $qPlateLike, $qLike, $qLike, $qLike, $qLike);
