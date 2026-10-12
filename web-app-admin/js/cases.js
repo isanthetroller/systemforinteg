@@ -164,21 +164,23 @@
         <div><div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Timeline</div>${timelineHtml(c)}</div>
       </div>`;
 
-    const buttons = [];
+    // Everyday actions on the left, Close case on the right, the rest under More
+    const left = [];
+    const right = [];
+    const more = [];
     if (!closed) {
-      buttons.push(`<button type="button" data-act="contact" class="${navy}">Log contact attempt</button>`);
-      if (c.status !== 'Awaiting clearance') buttons.push(`<button type="button" data-act="awaiting" class="${plain}">Owner is coming in</button>`);
-      buttons.push(`<button type="button" data-act="note" class="${plain}">Add note</button>`);
+      left.push(`<button type="button" data-act="contact" class="sp-btn sp-btn-primary">Log contact attempt</button>`);
+      if (c.status !== 'Awaiting clearance') left.push(`<button type="button" data-act="awaiting" class="sp-btn sp-btn-secondary">Owner is coming in</button>`);
+      left.push(`<button type="button" data-act="note" class="sp-btn sp-btn-secondary">Add note</button>`);
       if (isAdmin()) {
-        if (!c.policeReferred) buttons.push(`<button type="button" data-act="police" class="${danger}">Refer to police</button>`);
-        if (c.vehicle?.standing?.releaseEligible) buttons.push(`<button type="button" data-act="release" class="${plain}">Release one exit</button>`);
-        buttons.push(`<button type="button" data-act="close" class="${navy}">Close case</button>`);
+        if (!c.policeReferred) more.push(`<button type="button" role="menuitem" data-act="police" class="sp-menu-item danger">Refer to police</button>`);
+        if (c.vehicle?.standing?.releaseEligible) more.push(`<button type="button" role="menuitem" data-act="release" class="sp-menu-item">Release one exit</button>`);
+        right.push(`<button type="button" data-act="close" class="sp-btn sp-btn-emphasis">Close case</button>`);
       }
     }
-    if (c.incidentId && window.SP && SP.openIncident) buttons.push(`<button type="button" data-act="investigate" class="${plain}">Investigation file</button>`);
-    buttons.push('<button id="drawerCancelBtnInner" type="button" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">Close</button>');
+    if (c.incidentId && window.SP && SP.openIncident) more.push(`<button type="button" role="menuitem" data-act="investigate" class="sp-menu-item">Investigation file</button>`);
 
-    SP.openDrawer(`Case ${c.reference || c.key} — ${c.plateNumber}`, c.key, html, `<div class="flex flex-wrap items-center gap-2">${buttons.join('')}</div>`);
+    SP.openDrawer(`Case ${c.reference || c.key} — ${c.plateNumber}`, `${c.type} case · ${c.status}`, html, SP.actionBar({ left, right, more }));
     $('drawerContent').dataset.liveCase = c.key;
     const footer = $('drawerFooter');
     footer.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => act(c, b.dataset.act)));

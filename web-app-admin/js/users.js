@@ -64,11 +64,11 @@
         <td class="px-4 py-2.5 whitespace-nowrap">${formatDateTime(u.lastLogin)}</td>
         <td class="px-4 py-2.5">
           <div class="flex items-center justify-end gap-1.5">
-            <button type="button" data-act="edit" class="px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs cursor-pointer">Edit</button>
-            <button type="button" data-act="reset" class="px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-xs cursor-pointer">Reset Password</button>
+            <button type="button" data-act="edit" class="sp-btn sp-btn-sm sp-btn-secondary">Edit</button>
+            <button type="button" data-act="reset" class="sp-btn sp-btn-sm sp-btn-secondary">Reset Password</button>
             ${isSelf ? '' : (u.status === 'Active'
-              ? '<button type="button" data-act="deactivate" class="px-2.5 py-1 rounded border border-ncst-crimson/30 bg-ncst-crimsonLight/60 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-xs cursor-pointer">Deactivate</button>'
-              : '<button type="button" data-act="activate" class="px-2.5 py-1 rounded border border-ncst-green/30 bg-ncst-greenLight/60 hover:bg-ncst-greenLight text-xs font-semibold text-ncst-greenDark shadow-xs cursor-pointer">Activate</button>')}
+              ? '<button type="button" data-act="deactivate" class="sp-btn sp-btn-sm sp-btn-danger">Deactivate</button>'
+              : '<button type="button" data-act="activate" class="sp-btn sp-btn-sm sp-btn-success">Activate</button>')}
           </div>
         </td>`;
       tr.querySelector('[data-act="edit"]').addEventListener('click', () => openModal(u));

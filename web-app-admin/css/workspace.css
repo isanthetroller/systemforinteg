@@ -509,7 +509,7 @@
 #closeDrawerBtn { display:flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; flex-shrink:0; }
 #drawerContent { min-height:0; padding:24px; background:#f5f7fb; }
 #drawerContent .text-slate-400 { color:#60708b; }
-#drawerFooter { padding:16px 24px; flex-wrap:wrap; flex-shrink:0; max-height:40dvh; overflow-y:auto; }
+#drawerFooter { padding:14px 20px; flex-wrap:wrap; flex-shrink:0; overflow:visible; position:relative; z-index:5; }  /* visible: the More menu opens upward out of the footer */
 #drawerFooter > .flex { width:100%; min-width:0; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
 #drawerFooter button { min-height:44px; padding:10px 16px; white-space:nowrap; flex-shrink:0; }
 #drawerFooter button svg { flex-shrink:0; }
@@ -575,3 +575,37 @@
 #dashboardView #occupancyCard[data-level="full"] #occupancyBar { background:var(--dashboard-danger); }
 #dashboardView #occupancyCard[data-level="nearly_full"] #occupancyNote { color:var(--dashboard-warning); }
 #dashboardView #occupancyCard[data-level="full"] #occupancyNote { color:var(--dashboard-danger); }
+
+/* ---- Action bars: one layout for every panel footer and row ------------------------------------------------------
+   Main action on the right, everyday actions on the left, rarely used ones in a "More" menu. 44px targets. */
+.sp-foot { display:flex; align-items:center; gap:10px; width:100%; flex-wrap:wrap; }
+.sp-foot-left, .sp-foot-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.sp-foot-left { margin-right:auto; }
+.sp-foot-right { margin-left:auto; }
+.sp-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:0 18px; border:1px solid transparent; border-radius:10px; font-size:13px; font-weight:700; line-height:1; cursor:pointer; white-space:nowrap; transition:background-color .15s, border-color .15s, color .15s; }
+.sp-btn svg { width:16px; height:16px; flex:none; }
+.sp-btn-primary { background:#253475; color:#fff; }
+.sp-btn-primary:hover { background:#1a2557; }
+.sp-btn-secondary { background:#fff; color:#334155; border-color:#cbd5e1; }
+.sp-btn-secondary:hover { background:#f1f5f9; border-color:#94a3b8; }
+.sp-btn-emphasis { background:#fff; color:#253475; border-color:#253475; }
+.sp-btn-emphasis:hover { background:#eef1fb; }
+.sp-btn-danger { background:#fff; color:#b42336; border-color:#e8a5af; }
+.sp-btn-danger:hover { background:#fdf2f4; border-color:#b42336; }
+.sp-btn-success { background:#fff; color:#15803d; border-color:#a7d9b8; }
+.sp-btn-success:hover { background:#f0fdf4; border-color:#15803d; }
+.sp-btn-sm { min-height:36px; padding:0 14px; font-size:12px; border-radius:8px; }
+.sp-btn:focus-visible, .sp-menu-item:focus-visible { outline:2px solid #253475; outline-offset:2px; }
+.sp-more { position:relative; }
+.sp-more-menu { position:absolute; right:0; bottom:calc(100% + 8px); min-width:240px; padding:6px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 14px 34px rgba(15,23,42,.2); z-index:30; }
+.sp-more-menu[hidden] { display:none; }
+.sp-menu-item { display:flex; align-items:center; width:100%; min-height:44px; padding:0 14px; background:transparent; border:0; border-radius:8px; color:#334155; font-size:13px; font-weight:600; text-align:left; cursor:pointer; white-space:nowrap; }
+.sp-menu-item:hover { background:#f1f5f9; }
+.sp-menu-item.danger { color:#b42336; }
+.sp-menu-item.danger:hover { background:#fdf2f4; }
+.sp-row-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+@media (max-width:639px) {
+ .sp-foot-left, .sp-foot-right { width:100%; }
+ .sp-foot-left .sp-btn, .sp-foot-right > .sp-btn { flex:1 1 auto; }
+ .sp-more-menu { right:auto; left:0; }
+}

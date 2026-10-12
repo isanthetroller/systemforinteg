@@ -2664,21 +2664,46 @@ document.addEventListener('DOMContentLoaded', () => {
     liveDrawer = null;
     drawerContent.dataset.liveCase = '';
     drawerContent.innerHTML = contentHtml;
-    drawerFooter.innerHTML = footerHtml || `
-      <button id="drawerCancelBtnInner" class="px-3.5 py-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">
-        Close
-      </button>
-    `;
-
-    const cancelBtn = drawerFooter.querySelector('#drawerCancelBtnInner') || drawerCancelBtn;
-    if (cancelBtn) cancelBtn.addEventListener('click', closeDrawer);
+    drawerFooter.innerHTML = footerHtml || '';
+    // The X in the header (and Esc, and a click outside) already closes the panel: a second Close button in the footer
+    // only duplicates it. A panel with nothing else to do gets no footer at all.
+    drawerFooter.querySelectorAll('#drawerCancelBtnInner, #drawerCancelBtn').forEach(b => b.remove());
+    drawerFooter.classList.toggle('hidden', !drawerFooter.querySelector('button'));
 
     drawerOverlay.classList.remove('hidden');
     drawerOverlay.classList.add('flex');
   }
 
+  /* Action bar shared by every panel: everyday actions on the left, the main action on the right, rarely used ones in
+     a "More" menu. Each entry is a ready-made button / menu-item string. */
+  function actionBar({ left = [], right = [], more = [], moreClass = '' } = {}) {
+    const menu = more.length
+      ? `<div class="sp-more ${moreClass}"><button type="button" data-more class="sp-btn sp-btn-secondary" aria-haspopup="menu" aria-expanded="false"><span>More</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"></polyline></svg></button><div class="sp-more-menu" role="menu" hidden>${more.join('')}</div></div>`
+      : '';
+    return `<div class="sp-foot"><div class="sp-foot-left">${left.join('')}</div><div class="sp-foot-right">${menu}${right.join('')}</div></div>`;
+  }
+
+  function closeMoreMenus() {
+    document.querySelectorAll('.sp-more-menu').forEach(m => { m.hidden = true; });
+    document.querySelectorAll('[data-more]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+  }
+  document.addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-more]');
+    if (toggle) {
+      const menu = toggle.parentElement.querySelector('.sp-more-menu');
+      const open = menu.hidden;
+      closeMoreMenus();
+      menu.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      return;
+    }
+    // Choosing an item (its own handler has already run) or clicking anywhere else closes the menu
+    closeMoreMenus();
+  });
+
   let liveDrawer = null;
   function closeDrawer() {
+    closeMoreMenus();
     liveDrawer = null;
     drawerOverlay.classList.add('hidden');
     drawerOverlay.classList.remove('flex');
@@ -2954,41 +2979,27 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `;
 
-    const footerHtml = `
-      <div class="flex items-center gap-2">
-        <button id="drawerPrintBtn" class="px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer" title="Print Gate Pass">
-          <svg class="w-4 h-4 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 6 2 18 2 18 9"></polyline>
-            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-            <rect x="6" y="14" width="12" height="8"></rect>
-          </svg>
-          <span>Print Pass</span>
-        </button>
-<button id="drawerFlagBtn" class="px-3.5 py-2 rounded-md bg-white border border-ncst-crimson/30 hover:bg-ncst-crimsonLight text-xs font-semibold text-ncst-crimson shadow-2xs transition-colors cursor-pointer" title="Issue a violation: the vehicle cannot enter or leave until it is resolved">
-          Issue Violation
-        </button>
-        <button id="drawerStudentLoginBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="Create or reset the owner's student portal login">
-          Student Login
-        </button>
-        <button id="drawerReissueBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-ncst-gold/40 hover:bg-ncst-goldLight text-xs font-semibold text-amber-950 shadow-2xs transition-colors cursor-pointer" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">
-          Replace Pass
-        </button>
-        ${v.standing?.releaseEligible ? `<button id="drawerReleaseBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-amber-300 hover:bg-amber-50 text-xs font-semibold text-amber-900 shadow-2xs transition-colors cursor-pointer" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : ''}
-        ${v.isRetired ? '' : `<button id="drawerRetireBtn" class="admin-only px-3.5 py-2 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer" title="The owner sold or no longer uses this vehicle. History is kept.">Retire</button>`}
-        <button id="drawerEditBtn" class="admin-only px-4 py-2 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer">
-          <svg class="w-3.5 h-3.5 text-ncst-gold" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-          </svg>
-          <span>Edit Record</span>
-        </button>
-        <button id="drawerCancelBtnInner" class="px-3.5 py-2 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer">
-          Close
-        </button>
-      </div>
-    `;
+    const printIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>';
+    const editIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+    // Everyday actions stay in view, the main action is on the right, the rest live in "More" (admins only)
+    const footerHtml = actionBar({
+      left: [
+        `<button id="drawerPrintBtn" type="button" class="sp-btn sp-btn-secondary" title="Print Gate Pass">${printIcon}<span>Print Pass</span></button>`,
+        `<button id="drawerFlagBtn" type="button" class="sp-btn sp-btn-danger" title="Issue a violation: the vehicle cannot enter or leave until it is resolved">Issue Violation</button>`,
+      ],
+      more: [
+        `<button id="drawerStudentLoginBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Create or reset the owner's student portal login">Student Login</button>`,
+        `<button id="drawerReissueBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">Replace Pass</button>`,
+        v.standing?.releaseEligible ? `<button id="drawerReleaseBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : '',
+        v.isRetired ? '' : `<button id="drawerRetireBtn" type="button" role="menuitem" class="admin-only sp-menu-item danger" title="The owner sold or no longer uses this vehicle. History is kept.">Retire vehicle</button>`,
+      ].filter(Boolean),
+      moreClass: 'admin-only',
+      right: [
+        `<button id="drawerEditBtn" type="button" class="admin-only sp-btn sp-btn-primary">${editIcon}<span>Edit Record</span></button>`,
+      ],
+    });
 
-    openDrawer(`Vehicle Details — ${v.plateNumber}`, v.plateNumber, html, footerHtml);
+    openDrawer(`Vehicle Details — ${v.plateNumber}`, [v.ownerName, v.makeModelColor || v.vehicleType].filter(Boolean).join(' · ') || v.plateNumber, html, footerHtml);
     liveDrawer = {kind:'vehicle', id:v.id};
 
     // Every case this vehicle has had, open or closed
@@ -5083,6 +5094,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Keyboard Ergonomics
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // Esc closes an open More menu first, then the panel
+      if (document.querySelector('.sp-more-menu:not([hidden])')) { closeMoreMenus(); return; }
       closeDrawer();
       closeEditModal();
     }
@@ -5177,6 +5190,7 @@ document.addEventListener('DOMContentLoaded', () => {
     escapeHtml,
     openDrawer,
     closeDrawer,
+    actionBar,
     alert: window.SPAlert,
     reload: loadInitialDataFromApi,
     openIncident(id) {
