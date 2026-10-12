@@ -10,6 +10,7 @@ import 'package:systemforinteg/features/cases/case_format.dart';
 import 'package:systemforinteg/features/cases/screens/case_detail_screen.dart';
 import 'package:systemforinteg/features/cases/screens/cases_screen.dart';
 import 'package:systemforinteg/features/guard/screens/guard_shell_screen.dart';
+import 'package:systemforinteg/features/guard/widgets/duty_gate.dart';
 import 'package:systemforinteg/features/guard/widgets/shift_banner.dart';
 import 'package:systemforinteg/models/user_model.dart';
 import 'package:systemforinteg/features/scanner/widgets/scan_rejection_view.dart';
@@ -21,6 +22,9 @@ import 'package:systemforinteg/services/api_service.dart';
 http.Response json(int status, Object body) => http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
 
 void main() {
+  // The guard screen asks for a shift at sign-in; the tests below open it for other reasons (DutyGate is tested on its own)
+  setUpAll(() => DutyGate.enabled = false);
+
   group('PlateReader', () {
     test('fold ignores spaces, dashes, case and the usual camera confusions', () {
       expect(PlateReader.fold('abc 1234'), PlateReader.fold('ABC-1234'));
@@ -242,6 +246,101 @@ void main() {
       await tester.pumpWidget(const MaterialApp(home: Scaffold(body: ShiftBanner(assignedGate: 'Gate 1 (Main Ingress)'))));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('shiftBanner')), findsNothing);
+    });
+  });
+
+  group('DutyGate (go on duty at sign-in)', () {
+    setUp(() => DutyGate.enabled = true);
+    tearDown(() {
+      DutyGate.resetForTesting();
+      DutyGate.enabled = false;
+      ShiftBanner.onDuty.value = false;
+    });
+
+    Future<List<Map<String, dynamic>>> open(WidgetTester tester, {Map<String, dynamic>? mine, int startStatus = 201, bool offline = false, void Function()? onSignOut}) async {
+      final calls = <Map<String, dynamic>>[];
+      ApiService.resetClient();
+      ApiService.setClientForTesting(MockClient((request) async {
+        if (offline) throw http.ClientException('offline');
+        final body = request.body.isNotEmpty ? jsonDecode(request.body) as Map<String, dynamic> : <String, dynamic>{};
+        calls.add({'method': request.method, ...body});
+        if (request.method == 'GET') {
+          return json(200, {'status': 'success', 'data': {'onDuty': [], 'mine': mine, 'handover': {'guard': 'Guard A', 'handoverNotes': 'Gate arm is jammed'}}});
+        }
+        if (startStatus != 201) return json(startStatus, {'status': 'error', 'message': 'Shifts need a personal sign-in.'});
+        return json(201, {'status': 'success', 'data': {'shift': {'id': 7, 'gate': body['gate'], 'startedAt': '2026-10-08 08:00:00'}, 'handover': null}});
+      }));
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (ctx) => ElevatedButton(
+            onPressed: () => DutyGate.ensureOnDuty(ctx, assignedGate: 'Gate 2 (Main Egress)', signOut: () async => onSignOut?.call()),
+            child: const Text('open'),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      return calls;
+    }
+
+    testWidgets('no open shift: the sheet appears with the terminal gate chosen, and Go on duty starts the shift', (tester) async {
+      final calls = await open(tester);
+      expect(find.byKey(const Key('dutyGate')), findsOneWidget);
+      expect(find.text('Gate 2 (Main Egress)'), findsOneWidget);
+      expect(find.textContaining('Gate arm is jammed'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('dutyGateStart')));
+      await tester.pumpAndSettle();
+      expect(calls.any((c) => c['action'] == 'start' && c['gate'] == 'Gate 2 (Main Egress)'), isTrue);
+      expect(find.byKey(const Key('dutyGate')), findsNothing);
+      expect(ShiftBanner.onDuty.value, isTrue);
+    });
+
+    testWidgets('the sheet cannot be dismissed by tapping outside or going back', (tester) async {
+      await open(tester);
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dutyGate')), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dutyGate')), findsOneWidget);
+    });
+
+    testWidgets('already on duty: nothing is asked', (tester) async {
+      final calls = await open(tester, mine: {'gate': 'Gate 1 (Main Ingress)', 'startedAt': '2026-10-08 08:00:00'});
+      expect(find.byKey(const Key('dutyGate')), findsNothing);
+      expect(calls.where((c) => c['method'] == 'POST'), isEmpty);
+      expect(ShiftBanner.onDuty.value, isTrue);
+    });
+
+    testWidgets('server error on start: the message shows and the guard may continue without a record', (tester) async {
+      await open(tester, startStatus: 403);
+      await tester.tap(find.byKey(const Key('dutyGateStart')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dutyGateError')), findsOneWidget);
+      expect(find.textContaining('personal sign-in'), findsOneWidget);
+      expect(find.byKey(const Key('dutyGateSkip')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('dutyGateSkip')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dutyGate')), findsNothing);
+      expect(ShiftBanner.onDuty.value, isFalse);
+    });
+
+    testWidgets('server unreachable: the sheet says so at once and offers Continue without recording', (tester) async {
+      await open(tester, offline: true);
+      expect(find.byKey(const Key('dutyGate')), findsOneWidget);
+      expect(find.textContaining('cannot be reached'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('dutyGateSkip')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dutyGate')), findsNothing);
+    });
+
+    testWidgets('Sign out leaves without starting a shift', (tester) async {
+      var signedOut = false;
+      final calls = await open(tester, onSignOut: () => signedOut = true);
+      await tester.tap(find.byKey(const Key('dutyGateSignOut')));
+      await tester.pumpAndSettle();
+      expect(signedOut, isTrue);
+      expect(calls.where((c) => c['method'] == 'POST'), isEmpty);
     });
   });
 

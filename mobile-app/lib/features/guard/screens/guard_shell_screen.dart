@@ -16,6 +16,7 @@ import '../../dashboard/widgets/dashboard_kpi_row.dart';
 import '../../dashboard/widgets/quick_scan_banner.dart';
 import '../../scanner/screens/qr_scanner_screen.dart';
 import '../../visitor/screens/visitor_registration_screen.dart';
+import '../widgets/duty_gate.dart';
 import '../widgets/handover_note_field.dart';
 import '../widgets/shift_banner.dart';
 
@@ -28,7 +29,8 @@ class GuardShellScreen extends StatefulWidget {
   State<GuardShellScreen> createState() => _GuardShellScreenState();
 }
 
-class _GuardShellScreenState extends State<GuardShellScreen> {
+class _GuardShellScreenState extends State<GuardShellScreen>
+    with WidgetsBindingObserver {
   late GuardUser _currentUser;
   int _selectedIndex = 0;
   bool _movementPending = false;
@@ -55,10 +57,14 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     SyncQueueService().lastSyncTimeNotifier.addListener(_onAutoSyncCompleted);
     SyncQueueService().statusNotifier.addListener(_onSyncStatusChanged);
     _refreshOperationalContext();
+    // A guard goes on duty right after signing in
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _ensureOnDuty());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     SyncQueueService().lastSyncTimeNotifier.removeListener(
       _onAutoSyncCompleted,
     );
@@ -66,6 +72,31 @@ class _GuardShellScreenState extends State<GuardShellScreen> {
     ApiService.currentSessionUser.removeListener(_onSessionUpdated);
     SyncQueueService().statusNotifier.removeListener(_onSyncStatusChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back in the app with no open shift (it was closed by the server, or ended on another phone): ask again
+    if (state == AppLifecycleState.resumed) _ensureOnDuty();
+  }
+
+  Future<void> _ensureOnDuty() async {
+    if (!mounted) return;
+    await DutyGate.ensureOnDuty(
+      context,
+      assignedGate: _currentUser.assignedGate,
+      signOut: _signOutWithoutShift,
+    );
+  }
+
+  /// Sign out from the "Start your shift" sheet (wrong account, or the guard is not working today): no shift to end.
+  Future<void> _signOutWithoutShift() async {
+    await AuthService().logout();
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
+    }
   }
 
   void _onSessionEnded() {

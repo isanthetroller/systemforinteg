@@ -4,12 +4,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:systemforinteg/features/guard/screens/guard_shell_screen.dart';
+import 'package:systemforinteg/features/guard/widgets/duty_gate.dart';
 import 'package:systemforinteg/models/user_model.dart';
 import 'package:systemforinteg/services/api_service.dart';
 import 'package:systemforinteg/services/local_cache_service.dart';
 import 'package:systemforinteg/services/sync_queue_service.dart';
 
 void main() {
+  setUpAll(() => DutyGate.enabled = false); // the sign-in shift sheet has its own tests (ops_features_test.dart)
   testWidgets('mobile shows authoritative totals and changing gate policy; failure retains labelled stale values', (tester) async {
     var event = false;
     var unavailable = false;
