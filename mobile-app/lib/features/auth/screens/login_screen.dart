@@ -594,25 +594,24 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildHeader(bool isCompact) {
     return Column(
       children: [
+        // NCST seal on a white disc; the soft ring and shadow keep the disc visible on the light page
         Container(
-          width: isCompact ? 60 : 72,
-          height: isCompact ? 60 : 72,
+          width: isCompact ? 72 : 88,
+          height: isCompact ? 72 : 88,
           decoration: BoxDecoration(
-            color: NcstColors.navy,
-            borderRadius: BorderRadius.circular(16),
+            shape: BoxShape.circle,
+            border: Border.all(color: NcstColors.slate200, width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: NcstColors.navy.withValues(alpha: 0.25),
+                color: NcstColors.navy.withValues(alpha: 0.18),
                 blurRadius: 16,
                 offset: const Offset(0, 6),
               ),
             ],
           ),
-          child: Center(
+          child: ClipOval(
             child: Image.asset(
-              'assets/images/securepark_mark.png',
-              width: isCompact ? 47 : 56,
-              height: isCompact ? 47 : 56,
+              'assets/images/ncst_mark.png',
               filterQuality: FilterQuality.high,
             ),
           ),

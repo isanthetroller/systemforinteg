@@ -31,7 +31,26 @@ void main() async {
   PaintingBinding.instance.imageCache.maximumSizeBytes =
       25 * 1024 * 1024; // 25 MB
 
+  // Decode the launch badge before the first frame: the system splash hands over to it, and a badge that is still
+  // decoding on that frame shows as a blank navy flash.
+  await _preload(const AssetImage('assets/images/ncst_mark.png'));
+
   runApp(const NcstGateSecurityApp());
+}
+
+/// Resolves [provider] into Flutter's image cache without needing a BuildContext. Never throws or waits forever.
+Future<void> _preload(ImageProvider provider) {
+  final done = Completer<void>();
+  final stream = provider.resolve(ImageConfiguration.empty);
+  late final ImageStreamListener listener;
+  void finish() {
+    stream.removeListener(listener);
+    if (!done.isCompleted) done.complete();
+  }
+
+  listener = ImageStreamListener((_, _) => finish(), onError: (_, _) => finish());
+  stream.addListener(listener);
+  return done.future.timeout(const Duration(seconds: 2), onTimeout: () {});
 }
 
 /// Flushes the offline queue as soon as the app is back in front of the guard.
