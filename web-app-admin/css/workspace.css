@@ -609,3 +609,11 @@
  .sp-foot-left .sp-btn, .sp-foot-right > .sp-btn { flex:1 1 auto; }
  .sp-more-menu { right:auto; left:0; }
 }
+
+/* Visitor Day Passes has only two filters: Reset Filters sits in the same row as Pass Status and Date Scope on wide
+   screens (the Vehicle Directory has four filters, so its Reset stays on its own row). On narrower screens it keeps
+   taking its own row. */
+@media (min-width:1200px) {
+  #visitorsView .sp-filter-grid > div:last-child:has(button) { grid-column:auto; align-self:end; justify-self:start; }
+  #visitorsView #resetVisitorFiltersBtn { height:44px; padding-left:18px; padding-right:18px; }
+}
