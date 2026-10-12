@@ -5,6 +5,7 @@
     tabStrikes: ['Cases', 'Anything that is holding your vehicle, how far along it is, and what to do next.'],
     tabAccount: ['Account', 'Your details, receipts and password.']
   };
+  const pageNames = { tabPass: 'My Pass', tabActivity: 'Activity', tabStrikes: 'Cases', tabAccount: 'Account' };
   let currentTab = '';
   function updateHeading() {
     const tab = document.querySelector('.tab:not([hidden])');
@@ -14,6 +15,8 @@
     currentTab = tab.id;
     const [title, description] = headings[tab.id];
     document.getElementById('portalTitle').textContent = title;
+    const page = document.getElementById('topbarPage');
+    if (page) page.textContent = pageNames[tab.id] || title;
     document.getElementById('portalDescription').textContent = description;
   }
   document.querySelectorAll('.tab').forEach(tab => new MutationObserver(updateHeading).observe(tab, {attributes:true,attributeFilter:['hidden']}));

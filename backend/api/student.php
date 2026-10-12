@@ -14,6 +14,8 @@
  *                                          optional: &plate=<own plate>  &limit=<1-200, default 50>
  * GET /api/student.php?action=alerts       Own vehicles flagged at the gate: active (Held) cases and recent closed ones
  *                                          (each carries logId = the refused passage, for its gate clip)
+ * GET /api/student.php?action=evidence&id=N  One evidence photo the guard took on the owner's own vehicle, as a data URL.
+ *                                          Cases, activity rows and flags list the photos (no pictures) in their `evidence` field.
  *
  * Sign in:          POST /api/auth.php?action=login&realm=student  { username: <student ID>, password }
  * Change password:  POST /api/auth.php?action=change_password
@@ -59,10 +61,40 @@ function ownerSafeNote($notes) {
     return $n === '' ? null : $n;
 }
 
-function incidentView($pdo, $r) {
+/**
+ * The evidence photos taken on the owner's vehicles (details only, never the pictures), indexed by what they belong to.
+ * The pictures are fetched one at a time with action=evidence.
+ */
+function ownerEvidenceIndex($pdo, array $plates) {
+    $idx = ['violation' => [], 'incident' => [], 'log' => []];
+    if (!$plates) return $idx;
+    $stmt = $pdo->prepare("SELECT `id`, `kind`, `gate_log_id`, `violation_id`, `incident_id`, `created_at`, `purged_at` FROM `evidence_photos`
+        WHERE " . plateInClause($plates) . " ORDER BY `id` ASC LIMIT 1000");
+    $stmt->execute($plates);
+    foreach ($stmt->fetchAll() as $r) {
+        $p = ['id' => (int)$r['id'], 'kind' => $r['kind'], 'takenAt' => $r['created_at'], 'purged' => $r['purged_at'] !== null];
+        if ($r['violation_id'] !== null) $idx['violation'][(int)$r['violation_id']][$p['id']] = $p;
+        if ($r['incident_id'] !== null) $idx['incident'][(int)$r['incident_id']][$p['id']] = $p;
+        if ($r['gate_log_id'] !== null) $idx['log'][(int)$r['gate_log_id']][$p['id']] = $p;
+    }
+    return $idx;
+}
+
+/** The photos of one case / flag / gate passage: any of the records it is tied to, each photo once, oldest first. */
+function evidenceFor(array $idx, $violationId = null, $incidentId = null, $logId = null) {
+    $out = [];
+    foreach ([['violation', $violationId], ['incident', $incidentId], ['log', $logId]] as [$kind, $id]) {
+        if ($id !== null && isset($idx[$kind][(int)$id])) $out += $idx[$kind][(int)$id];
+    }
+    ksort($out);
+    return array_values($out);
+}
+
+function incidentView($pdo, $r, array $evidenceIdx = ['violation' => [], 'incident' => [], 'log' => []]) {
+    $logId = incidentLogId($pdo, $r);
     return [
         'id' => (int)$r['id'],
-        'logId' => incidentLogId($pdo, $r),
+        'logId' => $logId,
         'caseNumber' => $r['case_number'],
         'plateNumber' => $r['plate_number'],
         'reason' => $r['reason'],
@@ -73,6 +105,7 @@ function incidentView($pdo, $r) {
         'driverRelationship' => $r['driver_relationship'],
         'reportedAt' => $r['reported_at'],
         'resolvedAt' => $r['resolved_at'],
+        'evidence' => evidenceFor($evidenceIdx, null, (int)$r['id'], $logId),
     ];
 }
 
@@ -194,9 +227,24 @@ switch ($action) {
         }
         $keys = array_merge(array_map(fn($r) => 'V' . $r['id'], $vRows), array_map(fn($r) => 'I' . $r['id'], $iRows));
         $events = caseEventsFor($pdo, $keys);
+        $evidenceIdx = ownerEvidenceIndex($pdo, $plates);
         $out = [];
-        foreach ($vRows as $r) { $k = 'V' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('violation', $r, $ev), $ev, $pdo); }
-        foreach ($iRows as $r) { $k = 'I' . $r['id']; $ev = $events[$k] ?? []; $out[] = casePublicView(caseSummary('incident', $r, $ev), $ev, $pdo); }
+        foreach ($vRows as $r) {
+            $k = 'V' . $r['id']; $ev = $events[$k] ?? [];
+            $s = caseSummary('violation', $r, $ev);
+            $view = casePublicView($s, $ev, $pdo);
+            $view['reference'] = $s['reference'];
+            $view['evidence'] = evidenceFor($evidenceIdx, (int)$r['id'], $s['incidentId']);
+            $out[] = $view;
+        }
+        foreach ($iRows as $r) {
+            $k = 'I' . $r['id']; $ev = $events[$k] ?? [];
+            $s = caseSummary('incident', $r, $ev);
+            $view = casePublicView($s, $ev, $pdo);
+            $view['reference'] = $s['reference'];
+            $view['evidence'] = evidenceFor($evidenceIdx, null, (int)$r['id'], incidentLogId($pdo, $r));
+            $out[] = $view;
+        }
         usort($out, fn($a, $b) => strcmp((string)$b['openedAt'], (string)$a['openedAt']));
         sendResponse(200, $out);
 
@@ -216,7 +264,8 @@ switch ($action) {
             WHERE " . plateInClause($plates) . "
             ORDER BY `logged_at` DESC, `id` DESC LIMIT {$limit}");
         $stmt->execute($plates);
-        sendResponse(200, array_map(function ($r) {
+        $evidenceIdx = ownerEvidenceIndex($pdo, $plates);
+        sendResponse(200, array_map(function ($r) use ($evidenceIdx) {
             $denied = strpos($r['action'], 'Denied') !== false;
             return [
                 'id' => (int)$r['id'],
@@ -230,23 +279,34 @@ switch ($action) {
                 // The reason is shown for refused passages; routine approvals carry no owner-facing note
                 'note' => $denied ? ownerSafeNote($r['notes']) : null,
                 'loggedAt' => $r['logged_at'],
+                'evidence' => evidenceFor($evidenceIdx, null, null, (int)$r['id']),
             ];
         }, $stmt->fetchAll()));
 
     case 'alerts':
         $plates = ownPlates($pdo, $ownerId);
         if (!$plates) sendResponse(200, ['active' => [], 'recent' => []]);
+        $evidenceIdx = ownerEvidenceIndex($pdo, $plates);
         $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE `status` = 'Held' AND " . plateInClause($plates) . "
             ORDER BY `reported_at` DESC, `id` DESC LIMIT 20");
         $stmt->execute($plates);
-        $active = array_map(fn($r) => incidentView($pdo, $r), $stmt->fetchAll());
+        $active = array_map(fn($r) => incidentView($pdo, $r, $evidenceIdx), $stmt->fetchAll());
 
         $since = date('Y-m-d H:i:s', strtotime('-30 days'));
         $stmt = $pdo->prepare("SELECT * FROM `security_incidents` WHERE `status` <> 'Held' AND `reported_at` >= ? AND " . plateInClause($plates) . "
             ORDER BY `reported_at` DESC, `id` DESC LIMIT 10");
         $stmt->execute(array_merge([$since], $plates));
-        sendResponse(200, ['active' => $active, 'recent' => array_map(fn($r) => incidentView($pdo, $r), $stmt->fetchAll())]);
+        sendResponse(200, ['active' => $active, 'recent' => array_map(fn($r) => incidentView($pdo, $r, $evidenceIdx), $stmt->fetchAll())]);
+
+    case 'evidence':
+        // One picture, and only when it was taken on one of this owner's own vehicles
+        $stmt = $pdo->prepare("SELECT `id`, `kind`, `plate_number`, `data`, `created_at`, `purged_at` FROM `evidence_photos` WHERE `id` = ?");
+        $stmt->execute([(int)($_GET['id'] ?? 0)]);
+        $photo = $stmt->fetch();
+        if (!$photo || !in_array(normalizePlate($photo['plate_number']), ownPlates($pdo, $ownerId), true)) sendResponse(404, null, 'Photo not found.');
+        sendResponse(200, ['id' => (int)$photo['id'], 'kind' => $photo['kind'], 'takenAt' => $photo['created_at'],
+            'purged' => $photo['purged_at'] !== null, 'image' => $photo['purged_at'] === null ? $photo['data'] : null]);
 
     default:
-        sendResponse(400, null, 'Unknown action. Use me, vehicles, payments, notices, violations, cases, activity or alerts.');
+        sendResponse(400, null, 'Unknown action. Use me, vehicles, payments, notices, violations, cases, activity, alerts or evidence.');
 }

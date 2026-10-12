@@ -15,7 +15,10 @@
  */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const data = { me: null, vehicles: [], violations: [], cases: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all' };
+  const data = { me: null, vehicles: [], violations: [], cases: [], activity: [], alerts: { active: [], recent: [] }, selected: 0, activityFilter: 'all',
+    af: { q: '', event: 'all', period: 'all', limit: 25 },                        // Activity filters
+    cf: { q: '', status: 'all', type: 'all', plate: 'all', photos: false },        // Cases filters
+    openCases: new Set(), seenCases: new Set() };                                  // which case rows are expanded
   const POLL_MS = 5000;
   const DEFAULT_TITLE = document.title;
   let pollTimer = null;
@@ -282,7 +285,7 @@
       ]);
       Object.assign(data, { me, vehicles, violations, activity, alerts, payments, notices, cases });
       data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
-      $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
+      paintWho(me);
       renderAll(); startPolling(); handlePaymentReturn();
       return true;
     } catch (err) {
@@ -292,17 +295,31 @@
     }
   }
 
+  /** The name in the top bar (phones) and in the sidebar account card (desktop), plus today's date. */
+  function paintWho(me) {
+    const s = me.student;
+    $('topbarName').textContent = `${s.fullName} · ${s.ownerIdNumber}`;
+    $('sidebarInitials').textContent = initials(s.fullName);
+    $('sidebarName').textContent = s.fullName;
+    $('sidebarId').textContent = `Owner ID · ${s.ownerIdNumber}`;
+    $('topbarDate').textContent = new Date().toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
   function renderAll() {
     // The tab badge counts every open case (violations and security cases), the same list the Cases tab shows
     const open = (data.cases || []).filter(c => c.status !== 'Closed').length;
     $('strikesBadge').textContent = String(open);
     $('strikesBadge').hidden = open === 0;
     $('strikesBadge').classList.add('is-blocked');
+    // A refresh redraws the tabs: keep the cursor in a search box the owner is typing in
+    const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches('input.tb-input')
+      ? { id: document.activeElement.id, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd } : null;
     renderAlerts();
     renderPass();
     renderActivity();
     renderStrikes();
     renderAccount();
+    if (typing && $(typing.id)) { const el = $(typing.id); el.focus(); try { el.setSelectionRange(typing.start, typing.end); } catch (_) {} }
   }
 
   /* ---- Live refresh: a flag raised at the gate must reach the owner while it is happening ---- */
@@ -346,7 +363,7 @@
       const raised = alerts.active.filter(a => !known.has(a.id));
       Object.assign(data, {me, vehicles, violations, activity, alerts, payments, notices, cases});
       data.selected = Math.min(data.selected, Math.max(vehicles.length - 1, 0));
-      $('topbarName').textContent = `${me.student.fullName} · ${me.student.ownerIdNumber}`;
+      paintWho(me);
       if (passChanged && !$('qrZoom').hidden) $('qrZoom').hidden = true;
       renderAll(); revisions = update.revisions;
       syncStatus('live');
@@ -656,6 +673,84 @@
     banner.hidden = false;
   }
 
+  /* ---- Evidence photos: details arrive with each case / passage / flag, the pictures are fetched one at a time ---- */
+  const EVIDENCE_KIND = { entry: 'Taken at entry', exit: 'Taken at exit', violation: 'Taken for the violation', incident: 'Taken when the vehicle was stopped' };
+  const ICON_CAMERA = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+  const evPhotos = new Map();   // id -> Promise of the photo (shared by every place that shows it)
+  const evDone = new Map();     // id -> the photo once it has arrived
+  let evActive = 0;
+  const evQueue = [];
+
+  function evidenceLabel(p) { return EVIDENCE_KIND[p.kind] || 'Photo from the gate'; }
+
+  function evidenceGallery(list, label) {
+    if (!list || !list.length) return '';
+    return `<ul class="ev-grid" aria-label="${esc(label || 'Evidence photos')}">${list.map(p => `
+      <li><button type="button" class="ev-thumb" data-ev="${p.id}" data-ev-label="${esc(evidenceLabel(p))}" data-ev-at="${esc(p.takenAt || '')}" aria-label="${esc(evidenceLabel(p))}. Tap to enlarge.">
+        <span class="ev-load">Loading&hellip;</span></button>
+        <span class="ev-cap">${esc(evidenceLabel(p))}<time>${esc(fmtDateTime(p.takenAt))}</time></span></li>`).join('')}</ul>`;
+  }
+
+  function evidenceBadge(list) {
+    return list && list.length ? `<span class="ev-count" title="${list.length} photo${list.length === 1 ? '' : 's'} from the gate">${ICON_CAMERA}${list.length}</span>` : '<span class="dt-none">—</span>';
+  }
+
+  function paintThumb(btn, photo) {
+    if (!btn.isConnected) return;
+    if (!photo || photo.purged || !photo.image) {
+      btn.classList.add('is-gone'); btn.disabled = true;
+      btn.innerHTML = `<span class="ev-load">${photo && photo.purged ? 'Photo removed after the retention period' : 'Photo unavailable'}</span>`;
+      return;
+    }
+    btn.innerHTML = '';
+    const img = document.createElement('img');
+    img.alt = btn.dataset.evLabel || 'Evidence photo';
+    img.src = photo.image;
+    btn.appendChild(img);
+  }
+
+  function fetchEvidence(id) {
+    if (!evPhotos.has(id)) {
+      evPhotos.set(id, StudentApi.evidence(id).then(p => { evDone.set(id, p); return p; }).catch(err => { evPhotos.delete(id); throw err; }));
+    }
+    return evPhotos.get(id);
+  }
+
+  function pumpEvidence() {
+    while (evActive < 3 && evQueue.length) {
+      const btn = evQueue.shift();
+      if (!btn.isConnected) continue;
+      evActive++;
+      fetchEvidence(Number(btn.dataset.ev)).then(p => paintThumb(btn, p), () => paintThumb(btn, null)).finally(() => { evActive--; pumpEvidence(); });
+    }
+  }
+
+  /** Fills every photo placeholder under root: from memory at once when it was seen before, otherwise three at a time. */
+  function loadEvidenceThumbs(root) {
+    root.querySelectorAll('.ev-thumb:not([data-state])').forEach(btn => {
+      btn.dataset.state = '1';
+      const done = evDone.get(Number(btn.dataset.ev));
+      if (done) paintThumb(btn, done); else evQueue.push(btn);
+    });
+    pumpEvidence();
+  }
+
+  function openEvidence(btn) {
+    const photo = evDone.get(Number(btn.dataset.ev));
+    if (!photo || !photo.image) return;
+    $('evImage').src = photo.image;
+    $('evTitle').textContent = btn.dataset.evLabel || 'Evidence photo';
+    $('evSub').textContent = btn.dataset.evAt ? fmtDateTime(btn.dataset.evAt) : '';
+    $('evModal').hidden = false;
+  }
+  function closeEvidence() { $('evModal').hidden = true; $('evImage').removeAttribute('src'); }
+
+  /* ---- Shared filter controls ---- */
+  function chipRow(label, name, options, current) {
+    return `<div class="chips" role="group" aria-label="${esc(label)}">${options.map(o =>
+      `<button type="button" class="chip" data-${name}="${esc(o.value)}" aria-pressed="${current === o.value}">${esc(o.label)}${o.count != null ? ` <span class="chip-n">${o.count}</span>` : ''}</button>`).join('')}</div>`;
+  }
+
   /* ---- Activity (audit log) ---- */
   const ACTIVITY = {
     'Entry Recorded': { cls: 'in',     title: 'Entered campus' },
@@ -668,6 +763,30 @@
     out: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
     denied: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
   };
+  const PERIODS = [{ value: 'all', label: 'All time' }, { value: 'today', label: 'Today' }, { value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }];
+  const ACTIVITY_PAGE = 25;
+
+  const activityClass = (a) => (ACTIVITY[a.action] || { cls: 'in' }).cls;
+
+  function inPeriod(at, period) {
+    if (period === 'all') return true;
+    const day = String(at || '').slice(0, 10);
+    if (period === 'today') return day === manilaDay(0);
+    return day >= manilaDay(period === '7' ? -6 : -29);
+  }
+
+  function matchesText(q, parts) {
+    const needle = q.trim().toLowerCase();
+    return !needle || parts.some(p => String(p || '').toLowerCase().includes(needle));
+  }
+
+  function plateOk(plate) { return data.activityFilter === 'all' || normPlate(plate) === normPlate(data.activityFilter); }
+
+  function activityBase() {
+    const f = data.af;
+    return data.activity.filter(a => plateOk(a.plateNumber) && inPeriod(a.loggedAt, f.period)
+      && matchesText(f.q, [a.plateNumber, a.gatePoint, a.driverName, a.note, (ACTIVITY[a.action] || {}).title]));
+  }
 
   function renderActivity() {
     const tab = $('tabActivity');
@@ -677,65 +796,95 @@
     }
     const plates = data.vehicles.map(v => v.plateNumber);
     if (data.activityFilter !== 'all' && !plates.includes(data.activityFilter)) data.activityFilter = 'all';
-    const chips = plates.length > 1
-      ? `<div class="chips" role="group" aria-label="Filter by vehicle">
-          <button type="button" class="chip" data-filter="all" aria-pressed="${data.activityFilter === 'all'}">All</button>
-          ${plates.map(p => `<button type="button" class="chip" data-filter="${esc(p)}" aria-pressed="${data.activityFilter === p}">${esc(p)}</button>`).join('')}
-        </div>`
-      : '';
+    const f = data.af;
+    const base = activityBase();
+    const n = (cls) => base.filter(a => activityClass(a) === cls).length;
+    const vehicleChips = plates.length > 1
+      ? chipRow('Filter by vehicle', 'filter', [{ value: 'all', label: 'All vehicles' }, ...plates.map(p => ({ value: p, label: p }))], data.activityFilter) : '';
+    const filtered = !!(f.q || f.event !== 'all' || f.period !== 'all' || data.activityFilter !== 'all');
 
-    const flags = [...data.alerts.active, ...data.alerts.recent]
-      .filter(a => data.activityFilter === 'all' || normPlate(a.plateNumber) === normPlate(data.activityFilter));
-    const flagCard = flags.length
-      ? `<div class="card"><h2 class="card-title">Stopped at the gate</h2><p class="card-sub">Times a guard held your vehicle. The case itself, and what to do, is on the Cases tab.</p><ul class="history">${flags.map(a => `
-          <li>
-            <div class="row1"><span class="type">${esc(a.reason)}</span><span class="date">${esc(fmtDateTime(a.reportedAt))}</span></div>
-            <div class="desc">${esc(a.plateNumber)} · ${esc(a.gatePoint)}</div>
-            <span class="badge ${a.status === 'Held' ? 'held' : esc(a.status.toLowerCase())}">${a.status === 'Held' ? 'ACTIVE · HELD' : esc(a.status)}</span>
-            <span class="badge dismissed">${esc(a.caseNumber)}</span>
-            ${a.resolvedAt ? `<div class="desc" style="color:var(--muted)">Closed ${esc(fmtDateTime(a.resolvedAt))}</div>` : ''}
-            <div class="tl-actions">${clipButton({ logId: a.logId, plate: a.plateNumber, action: '', gatePoint: a.gatePoint, loggedAt: a.reportedAt }, 'Watch gate clip', 'danger')}</div>
-          </li>`).join('')}</ul></div>`
-      : '';
+    tab.innerHTML = `<div class="tab-wide col">
+      <div class="card toolbar">
+        <div class="tb-row">
+          <label class="tb-search"><span class="sr-only">Search activity</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input id="actSearch" type="search" class="tb-input" placeholder="Search gate, driver or note" value="${esc(f.q)}" autocomplete="off"></label>
+          <label class="tb-select"><span class="sr-only">Period</span>
+            <select id="actPeriod" class="tb-input">${PERIODS.map(p => `<option value="${p.value}"${f.period === p.value ? ' selected' : ''}>${p.label}</option>`).join('')}</select></label>
+          ${filtered ? '<button type="button" class="tb-clear" id="actClear">Clear filters</button>' : ''}
+        </div>
+        ${vehicleChips}
+        ${chipRow('Filter by event', 'event', [
+          { value: 'all', label: 'All', count: base.length }, { value: 'in', label: 'Entries', count: n('in') },
+          { value: 'out', label: 'Exits', count: n('out') }, { value: 'denied', label: 'Refused', count: n('denied') }], f.event)}
+      </div>
+      <div id="actResults" class="col"></div></div>`;
 
-    const rows = data.activity.filter(a => data.activityFilter === 'all' || normPlate(a.plateNumber) === normPlate(data.activityFilter));
+    $('actSearch').addEventListener('input', (e) => { data.af.q = e.target.value; data.af.limit = ACTIVITY_PAGE; renderActivityResults(); });
+    $('actPeriod').addEventListener('change', (e) => { data.af.period = e.target.value; data.af.limit = ACTIVITY_PAGE; renderActivity(); });
+    $('actClear')?.addEventListener('click', () => { data.af = { q: '', event: 'all', period: 'all', limit: ACTIVITY_PAGE }; data.activityFilter = 'all'; renderActivity(); });
+    tab.querySelectorAll('[data-filter]').forEach(c => c.addEventListener('click', () => { data.activityFilter = c.dataset.filter; data.af.limit = ACTIVITY_PAGE; renderActivity(); }));
+    tab.querySelectorAll('[data-event]').forEach(c => c.addEventListener('click', () => { data.af.event = c.dataset.event; data.af.limit = ACTIVITY_PAGE; renderActivity(); }));
+    renderActivityResults();
+  }
+
+  function renderActivityResults() {
+    const host = $('actResults');
+    if (!host) return;
+    const f = data.af;
+    const rows = activityBase().filter(a => f.event === 'all' || activityClass(a) === f.event);
+
+    const flags = [...data.alerts.active, ...data.alerts.recent].filter(a => plateOk(a.plateNumber) && inPeriod(a.reportedAt, f.period)
+      && matchesText(f.q, [a.plateNumber, a.gatePoint, a.reason, a.caseNumber, a.driverName]));
+    const flagTable = flags.length ? `<div class="card table-card">
+        <h2 class="card-title">Stopped at the gate</h2><p class="card-sub">Times a guard held your vehicle. The case itself, and what to do, is on the Cases tab.</p>
+        <div class="dt-wrap"><table class="dt"><thead><tr><th>Reported</th><th>Reason</th><th>Vehicle</th><th>Gate</th><th>Status</th><th>Evidence</th></tr></thead><tbody>
+        ${flags.map(a => `<tr>
+          <td data-label="Reported"><div class="dt-strong">${esc(fmtDateTime(a.reportedAt))}</div>${a.resolvedAt ? `<div class="dt-sub">Closed ${esc(fmtDateTime(a.resolvedAt))}</div>` : ''}</td>
+          <td data-label="Reason"><div class="dt-strong">${esc(a.reason)}</div><div class="dt-sub">${esc(a.caseNumber)}</div></td>
+          <td data-label="Vehicle"><span class="plate">${esc(a.plateNumber)}</span></td>
+          <td data-label="Gate">${esc(a.gatePoint || '')}</td>
+          <td data-label="Status"><span class="status-pill ${a.status === 'Held' ? 'bad' : 'ok'}">${a.status === 'Held' ? 'Held' : esc(a.status)}</span></td>
+          <td data-label="Evidence">${evidenceGallery(a.evidence, 'Evidence photos for ' + a.caseNumber)}
+            <div class="tl-actions">${clipButton({ logId: a.logId, plate: a.plateNumber, action: '', gatePoint: a.gatePoint, loggedAt: a.reportedAt }, 'Watch gate clip', 'danger')}</div></td>
+        </tr>`).join('')}</tbody></table></div></div>` : '';
+
     let log;
     if (!rows.length) {
-      log = '<p class="empty" style="padding:12px 0">No gate activity yet.</p>';
+      log = `<div class="dt-empty"><strong>${data.activity.length ? 'No activity matches these filters' : 'No gate activity yet'}</strong>
+        ${data.activity.length ? '<button type="button" class="tb-clear" data-clear="activity">Clear filters</button>' : 'Entries and exits appear here as they happen.'}</div>`;
     } else {
-      const groups = [];
-      rows.forEach(a => {
+      const shown = rows.slice(0, f.limit);
+      let body = '', day = null;
+      shown.forEach(a => {
         const key = String(a.loggedAt || '').slice(0, 10);
-        let g = groups[groups.length - 1];
-        if (!g || g.key !== key) { g = { key, items: [] }; groups.push(g); }
-        g.items.push(a);
+        if (key !== day) { day = key; body += `<tr class="dt-day"><th colspan="6" scope="colgroup">${esc(dayLabel(key))}</th></tr>`; }
+        const t = ACTIVITY[a.action] || { cls: 'in', title: a.action };
+        const hasDriver = a.driverName && !/^unverified$/i.test(a.driverName);
+        const rel = a.driverRelationship && !/^unverified$/i.test(a.driverRelationship) ? a.driverRelationship : '';
+        body += `<tr class="act-${t.cls}">
+          <td data-label="Time"><span class="dt-strong">${esc(fmtTime(a.loggedAt))}</span></td>
+          <td data-label="Event"><span class="ev-pill ${t.cls}"><svg viewBox="0 0 24 24" aria-hidden="true">${ACTIVITY_ICON[t.cls]}</svg>${esc(t.title)}</span></td>
+          <td data-label="Vehicle"><span class="plate">${esc(a.plateNumber)}</span></td>
+          <td data-label="Gate">${esc(a.gatePoint || '—')}</td>
+          <td data-label="Driver">${hasDriver ? `<div class="dt-strong">${esc(a.driverName)}</div>${rel ? `<div class="dt-sub">${esc(rel)}</div>` : ''}` : '<span class="dt-none">—</span>'}</td>
+          <td data-label="Details">${a.note ? `<div class="tl-note">${esc(a.note)}</div>` : ''}${evidenceGallery(a.evidence, 'Photos from this passage')}
+            <div class="tl-actions">${clipButton({ logId: a.id, plate: a.plateNumber, action: a.action, gatePoint: a.gatePoint, loggedAt: a.loggedAt }, null, t.cls === 'denied' ? 'danger' : '')}</div></td>
+        </tr>`;
       });
-      log = groups.map(g => `
-        <h3 class="day-label">${esc(dayLabel(g.key))}</h3>
-        <ul class="timeline">${g.items.map(a => {
-          const t = ACTIVITY[a.action] || { cls: 'in', title: a.action };
-          const driver = a.driverName && !/^unverified$/i.test(a.driverName)
-            ? `Driver: ${esc(a.driverName)}${a.driverRelationship && !/^unverified$/i.test(a.driverRelationship) ? ' · ' + esc(a.driverRelationship) : ''}`
-            : '';
-          return `<li class="tl ${t.cls}">
-            <span class="tl-icon" aria-hidden="true"><svg viewBox="0 0 24 24">${ACTIVITY_ICON[t.cls]}</svg></span>
-            <div class="tl-body">
-              <div class="tl-row"><span class="tl-title">${esc(t.title)}</span><span class="tl-time">${esc(fmtTime(a.loggedAt))}</span></div>
-              <div class="tl-sub">${esc(a.plateNumber)} · ${esc(a.gatePoint || '')}</div>
-              ${driver ? `<div class="tl-sub">${driver}</div>` : ''}
-              ${a.note ? `<div class="tl-note">${esc(a.note)}</div>` : ''}
-              <div class="tl-actions">${clipButton({ logId: a.id, plate: a.plateNumber, action: a.action, gatePoint: a.gatePoint, loggedAt: a.loggedAt }, null, t.cls === 'denied' ? 'danger' : '')}</div>
-            </div></li>`;
-        }).join('')}</ul>`).join('');
+      log = `<div class="dt-wrap"><table class="dt"><thead><tr><th>Time</th><th>Event</th><th>Vehicle</th><th>Gate</th><th>Driver</th><th>Details</th></tr></thead><tbody>${body}</tbody></table></div>
+        <div class="dt-foot"><span>Showing ${shown.length} of ${rows.length}</span>${rows.length > shown.length ? '<button type="button" class="btn btn-outline btn-sm" data-more="activity">Show more</button>' : ''}</div>`;
     }
 
-    tab.innerHTML = `<div class="tab-narrow col">${chips}${flagCard}
-      <div class="card"><h2 class="card-title">Entries and exits</h2><p class="card-sub">Newest first, with the driver the guard verified.</p>${log}</div></div>`;
-    tab.querySelectorAll('[data-filter]').forEach(c => c.addEventListener('click', () => { data.activityFilter = c.dataset.filter; renderActivity(); }));
+    host.innerHTML = `${flagTable}<div class="card table-card"><h2 class="card-title">Entries and exits</h2><p class="card-sub">Newest first, with the driver the guard verified.</p>${log}</div>`;
+    host.querySelector('[data-more="activity"]')?.addEventListener('click', () => { data.af.limit += ACTIVITY_PAGE; renderActivityResults(); });
+    host.querySelector('[data-clear="activity"]')?.addEventListener('click', () => { data.af = { q: '', event: 'all', period: 'all', limit: ACTIVITY_PAGE }; data.activityFilter = 'all'; renderActivity(); });
+    loadEvidenceThumbs(host);
   }
 
   /* ---- Cases ---- */
   const CASE_STEPS = ['Reported', 'Owner contacted', 'Awaiting clearance', 'Closed'];
+  const CASE_TYPES = [{ value: 'all', label: 'All types' }, { value: 'Violation', label: 'Violation' }, { value: 'Security', label: 'Security' }, { value: 'Overnight', label: 'Overnight parking' }];
 
   function caseStage(c) {
     if (c.status === 'Closed') return 4;
@@ -743,26 +892,80 @@
     return (c.policeReferred || c.contactAttempts > 0) ? 2 : 1;
   }
 
-  function caseCard(c) {
+  const casePill = (c) => c.status === 'Closed' ? ['ok', 'Closed'] : c.status === 'Awaiting clearance' ? ['warn', 'Awaiting clearance'] : ['bad', 'Open'];
+
+  function caseDetail(c) {
     const closed = c.status === 'Closed';
     const stage = caseStage(c);
-    const pill = closed ? ['ok', 'Closed'] : c.status === 'Awaiting clearance' ? ['warn', 'Awaiting clearance'] : ['bad', 'Open'];
     const steps = CASE_STEPS.map((label, i) => {
       const n = i + 1;
       const cls = n < stage || (n === stage && closed) ? 'done' : n === stage ? 'current' : '';
       return `<li class="${cls}${n === 4 ? ' final' : ''}"${n === stage ? ' aria-current="step"' : ''}>${esc(label)}</li>`;
     }).join('');
-    return `<article class="card case" aria-label="${esc(c.title)} on ${esc(c.plateNumber)}">
-      <div class="case-head"><h3 class="case-title">${esc(c.title)}</h3><span class="status-pill ${pill[0]}">${esc(pill[1])}</span></div>
-      <div class="case-meta"><span class="plate">${esc(c.plateNumber)}</span><span class="case-type">${esc(c.type)}</span><span>Opened ${esc(fmtDateTime(c.openedAt))}${closed ? ` · Closed ${esc(fmtDateTime(c.closedAt))}` : ''}</span></div>
-      <ol class="steps" aria-label="Case progress">${steps}</ol>
-      ${c.policeReferred && !closed ? '<span class="flag-police">Referred to the police</span>' : ''}
-      ${closed
-        ? `<p class="case-outcome"><strong>Outcome:</strong> ${esc(c.outcome || 'Closed')}. Your vehicle can enter and leave campus again unless another case is open.</p>`
-        : `<div class="next-step"><strong>What to do</strong><p>${esc(c.nextStep)}</p></div>`}
-      <details class="case-history"><summary>See what happened (${c.timeline.length})</summary>
-        <ol class="case-timeline">${c.timeline.map(t => `<li>${esc(t.label)}<time>${esc(fmtDateTime(t.at))}</time></li>`).join('')}</ol></details>
-    </article>`;
+    const ev = c.evidence || [];
+    return `<div class="case-detail">
+      <div class="case-detail-main">
+        <ol class="steps" aria-label="Case progress">${steps}</ol>
+        ${c.policeReferred && !closed ? '<span class="flag-police">Referred to the police</span>' : ''}
+        ${closed
+          ? `<p class="case-outcome"><strong>Outcome:</strong> ${esc(c.outcome || 'Closed')}. Your vehicle can enter and leave campus again unless another case is open.</p>`
+          : `<div class="next-step"><strong>What to do</strong><p>${esc(c.nextStep)}</p></div>`}
+        <h4 class="mini-title">What happened</h4>
+        <ol class="case-timeline">${c.timeline.map(t => `<li>${esc(t.label)}<time>${esc(fmtDateTime(t.at))}</time></li>`).join('')}</ol>
+      </div>
+      <div class="case-detail-side">
+        <h4 class="mini-title">Evidence${ev.length ? ` (${ev.length})` : ''}</h4>
+        ${ev.length
+          ? `${evidenceGallery(ev, 'Evidence photos for ' + c.title)}<p class="hint">Photos the guard took at the gate. Tap one to enlarge it.</p>`
+          : '<p class="hint">No photos were attached to this case.</p>'}
+      </div>
+    </div>`;
+  }
+
+  function caseMatches(c) {
+    const f = data.cf;
+    if (f.status === 'open' && c.status !== 'Open') return false;
+    if (f.status === 'awaiting' && c.status !== 'Awaiting clearance') return false;
+    if (f.status === 'closed' && c.status !== 'Closed') return false;
+    if (f.type !== 'all' && c.type !== f.type) return false;
+    if (f.plate !== 'all' && normPlate(c.plateNumber) !== normPlate(f.plate)) return false;
+    if (f.photos && !(c.evidence || []).length) return false;
+    return matchesText(f.q, [c.title, c.plateNumber, c.reference, c.type, c.outcome]);
+  }
+
+  function renderCaseResults() {
+    const host = $('caseResults');
+    if (!host) return;
+    const rows = (data.cases || []).filter(caseMatches);
+    if (!rows.length) {
+      host.innerHTML = `<div class="dt-empty">${(data.cases || []).length
+        ? '<strong>No cases match these filters</strong><button type="button" class="tb-clear" data-clear="cases">Clear filters</button>'
+        : `<div class="tick">${ICON_TICK}</div><strong>No cases</strong>Your vehicles are in good standing and can enter and leave campus normally.`}</div>`;
+    } else {
+      host.innerHTML = `<div class="dt-wrap"><table class="dt dt-cases"><thead><tr><th>Case</th><th>Vehicle</th><th>Opened</th><th>Status</th><th>Evidence</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>
+        ${rows.map(c => {
+          const open = data.openCases.has(c.key);
+          const pill = casePill(c);
+          return `<tr class="dt-row case-row${open ? ' is-open' : ''}${c.status === 'Closed' ? '' : ' is-active'}" data-case="${esc(c.key)}">
+            <td data-label="Case"><button type="button" class="dt-toggle" aria-expanded="${open}"><span class="dt-strong">${esc(c.title)}</span></button>
+              <div class="dt-sub">${esc(c.reference || '')}${c.reference ? ' · ' : ''}${esc(c.type)}</div></td>
+            <td data-label="Vehicle"><span class="plate">${esc(c.plateNumber)}</span></td>
+            <td data-label="Opened"><div class="dt-strong">${esc(fmtDateTime(c.openedAt))}</div>${c.status === 'Closed' ? `<div class="dt-sub">Closed ${esc(fmtDateTime(c.closedAt))}</div>` : ''}</td>
+            <td data-label="Status"><span class="status-pill ${pill[0]}">${esc(pill[1])}</span></td>
+            <td data-label="Evidence">${evidenceBadge(c.evidence)}</td>
+            <td class="dt-chev" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></td>
+          </tr>${open ? `<tr class="dt-detail"><td colspan="6">${caseDetail(c)}</td></tr>` : ''}`;
+        }).join('')}</tbody></table></div>
+        <div class="dt-foot"><span>Showing ${rows.length} of ${data.cases.length}</span></div>`;
+    }
+    host.querySelectorAll('[data-case]').forEach(tr => tr.addEventListener('click', (e) => {
+      if (e.target.closest('.ev-thumb, a')) return;
+      const key = tr.dataset.case;
+      if (data.openCases.has(key)) data.openCases.delete(key); else data.openCases.add(key);
+      renderCaseResults();
+    }));
+    host.querySelector('[data-clear="cases"]')?.addEventListener('click', () => { data.cf = { q: '', status: 'all', type: 'all', plate: 'all', photos: false }; renderStrikes(); });
+    loadEvidenceThumbs(host);
   }
 
   function noticeItem(n) {
@@ -777,8 +980,9 @@
   function renderStrikes() {
     const cases = data.cases || [];
     const open = cases.filter(c => c.status !== 'Closed');
-    const closed = cases.filter(c => c.status === 'Closed');
     const notices = data.notices || [];
+    // Open cases start expanded, so their evidence is the first thing the owner sees; closed ones start folded
+    cases.forEach(c => { if (!data.seenCases.has(c.key)) { data.seenCases.add(c.key); if (c.status !== 'Closed') data.openCases.add(c.key); } });
 
     const standing = data.vehicles.length ? data.vehicles.map(v => {
       const n = openCasesFor(v).length;
@@ -787,31 +991,55 @@
         <span class="status-pill ${held ? 'bad' : 'ok'}">${held ? (n ? `On hold · ${n} open case${n === 1 ? '' : 's'}` : 'On hold') : 'Clear to enter and leave'}</span></div>`;
     }).join('') : '<p class="hint">No vehicles registered.</p>';
 
-    const openHtml = open.length
-      ? open.map(caseCard).join('')
-      : `<div class="card empty-good"><div class="tick">${ICON_TICK}</div><strong>No open cases</strong>
-          <p>Your vehicles are in good standing and can enter and leave campus normally.</p></div>`;
-
-    const closedHtml = closed.length
-      ? `<details class="card fold"><summary>Closed cases (${closed.length})</summary>${closed.map(caseCard).join('')}</details>` : '';
-
     const shown = notices.slice(0, 4);
     const older = notices.slice(4);
     const noticesHtml = notices.length
       ? `<ul class="notice-list">${shown.map(noticeItem).join('')}</ul>${older.length ? `<details class="fold" style="padding:12px 0 0"><summary>Older notices (${older.length})</summary><ul class="notice-list" style="margin-top:8px">${older.map(noticeItem).join('')}</ul></details>` : ''}`
       : '<p class="hint">No notices yet.</p>';
 
+    const f = data.cf;
+    const count = (fn) => cases.filter(fn).length;
+    const platesInCases = [...new Set([...data.vehicles.map(v => v.plateNumber), ...cases.map(c => c.plateNumber)])];
+    const filtered = !!(f.q || f.status !== 'all' || f.type !== 'all' || f.plate !== 'all' || f.photos);
+    const withPhotos = count(c => (c.evidence || []).length);
+
     $('tabStrikes').innerHTML = `
-      <div class="cols cols-cases">
-        <div class="col">
-          <section aria-labelledby="openCasesTitle"><h2 id="openCasesTitle" class="section-title">Open cases <span class="count ${open.length ? 'bad' : ''}">${open.length}</span></h2>${openHtml}</section>
-          ${closedHtml}
-        </div>
-        <div class="col">
-          <section class="card"><h2 class="card-title">Your vehicles</h2><p class="card-sub">A vehicle with an open case cannot enter or leave campus.</p><div class="standing-list">${standing}</div></section>
-          <section class="card"><h2 class="card-title">Notices</h2><p class="card-sub">We post here, and e-mail you when we have your address.</p>${noticesHtml}</section>
-        </div>
+      <div class="col cases-page">
+          <section aria-labelledby="openCasesTitle">
+            <h2 id="openCasesTitle" class="section-title">Cases <span class="count ${open.length ? 'bad' : ''}">${open.length} open</span></h2>
+            <div class="card toolbar">
+              <div class="tb-row">
+                <label class="tb-search"><span class="sr-only">Search cases</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                  <input id="caseSearch" type="search" class="tb-input" placeholder="Search by case, plate or reference" value="${esc(f.q)}" autocomplete="off"></label>
+                <label class="tb-select"><span class="sr-only">Type</span>
+                  <select id="caseType" class="tb-input">${CASE_TYPES.map(t => `<option value="${t.value}"${f.type === t.value ? ' selected' : ''}>${t.label}</option>`).join('')}</select></label>
+                ${platesInCases.length > 1 ? `<label class="tb-select"><span class="sr-only">Vehicle</span>
+                  <select id="casePlate" class="tb-input"><option value="all">All vehicles</option>${platesInCases.map(p => `<option value="${esc(p)}"${f.plate === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>` : ''}
+              </div>
+              <div class="tb-row tb-row-chips">
+                ${chipRow('Filter by status', 'cstatus', [
+                  { value: 'all', label: 'All', count: cases.length }, { value: 'open', label: 'Open', count: count(c => c.status === 'Open') },
+                  { value: 'awaiting', label: 'Awaiting clearance', count: count(c => c.status === 'Awaiting clearance') }, { value: 'closed', label: 'Closed', count: count(c => c.status === 'Closed') }], f.status)}
+                <button type="button" class="chip" id="casePhotos" aria-pressed="${f.photos}">${ICON_CAMERA}With photos <span class="chip-n">${withPhotos}</span></button>
+                ${filtered ? '<button type="button" class="tb-clear" id="caseClear">Clear filters</button>' : ''}
+              </div>
+            </div>
+            <div class="card table-card"><div id="caseResults"></div></div>
+          </section>
+          <div class="cases-aside">
+            <section class="card"><h2 class="card-title">Your vehicles</h2><p class="card-sub">A vehicle with an open case cannot enter or leave campus.</p><div class="standing-list">${standing}</div></section>
+            <section class="card"><h2 class="card-title">Notices</h2><p class="card-sub">We post here, and e-mail you when we have your address.</p>${noticesHtml}</section>
+          </div>
       </div>`;
+
+    $('caseSearch').addEventListener('input', (e) => { data.cf.q = e.target.value; renderCaseResults(); });
+    $('caseType').addEventListener('change', (e) => { data.cf.type = e.target.value; renderStrikes(); });
+    $('casePlate')?.addEventListener('change', (e) => { data.cf.plate = e.target.value; renderStrikes(); });
+    $('casePhotos').addEventListener('click', () => { data.cf.photos = !data.cf.photos; renderStrikes(); });
+    $('caseClear')?.addEventListener('click', () => { data.cf = { q: '', status: 'all', type: 'all', plate: 'all', photos: false }; renderStrikes(); });
+    $('tabStrikes').querySelectorAll('[data-cstatus]').forEach(c => c.addEventListener('click', () => { data.cf.status = c.dataset.cstatus; renderStrikes(); }));
+    renderCaseResults();
   }
 
   /* ---- Account ---- */
@@ -846,10 +1074,16 @@
       if (!trigger) return;
       try { openClip(JSON.parse(decodeURIComponent(trigger.getAttribute('data-clip')))); } catch (_) { /* malformed descriptor: ignore */ }
     });
+    document.addEventListener('click', (e) => {
+      const thumb = e.target.closest && e.target.closest('.ev-thumb');
+      if (thumb) openEvidence(thumb);
+    });
+    $('evClose').addEventListener('click', closeEvidence);
+    $('evModal').addEventListener('click', (e) => { if (e.target === $('evModal')) closeEvidence(); });
     $('clipClose').addEventListener('click', closeClip);
     $('clipModal').addEventListener('click', (e) => { if (e.target === $('clipModal')) closeClip(); });
     $('qrZoom').addEventListener('click', () => { $('qrZoom').hidden = true; });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('qrZoom').hidden = true; if (!$('clipModal').hidden) closeClip(); } });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('qrZoom').hidden = true; if (!$('clipModal').hidden) closeClip(); if (!$('evModal').hidden) closeEvidence(); } });
     boot();
   });
 

@@ -18,7 +18,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css?v=20261001b">
 <link rel="stylesheet" href="css/portal.css?v=20261010b">
-<link rel="stylesheet" href="css/portal-layout.css?v=20261011a"></head>
+<link rel="stylesheet" href="css/portal-layout.css?v=20261012f"></head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
   <main id="screenLogin" class="screen auth-screen" hidden>
@@ -142,6 +142,8 @@
           <div id="topbarName" class="topbar-sub"></div>
         </div>
       </div>
+      <div class="workspace-context"><small>NCST &middot; Owner portal</small><strong id="topbarPage" aria-live="polite">My Pass</strong></div>
+      <time id="topbarDate" class="workspace-date"></time>
       <button type="button" class="btn btn-ghost" data-action="logout">Sign out</button>
     </header>
 
@@ -197,25 +199,46 @@
     </main>
 
     <nav class="tabbar" aria-label="Owner portal navigation">
-      <div class="portal-nav-brand">SecurePark<span>.</span><small>NCST · Owner portal</small></div>
-      <button type="button" id="navPass" class="tabbar-btn" data-tab="tabPass" aria-current="page">
+      <div class="sb-brand">
+        <span class="sb-emblem"><img src="assets/ncst-emblem.png" alt="NCST" width="32" height="36"></span>
+        <div class="sb-brand-text"><div class="sb-name">SecurePark<span aria-hidden="true">.</span></div><div class="sb-caption">NCST Owner Portal</div></div>
+      </div>
+      <div class="sb-nav">
+        <div class="sb-group">
+          <div class="sb-label">My vehicle</div>
+        <button type="button" id="navPass" class="tabbar-btn" data-tab="tabPass" aria-current="page">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM14 20h2M20 14v2"/></svg>
         <span>My Pass</span>
       </button>
-      <button type="button" id="navActivity" class="tabbar-btn" data-tab="tabActivity">
+        <button type="button" id="navActivity" class="tabbar-btn" data-tab="tabActivity">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
         <span>Activity</span>
         <span id="activityBadge" class="tabbar-badge" hidden></span>
       </button>
-      <button type="button" id="navStrikes" class="tabbar-btn" data-tab="tabStrikes">
+        <button type="button" id="navStrikes" class="tabbar-btn" data-tab="tabStrikes">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
         <span>Cases</span>
         <span id="strikesBadge" class="tabbar-badge" hidden></span>
       </button>
-      <button type="button" id="navAccount" class="tabbar-btn" data-tab="tabAccount">
+        </div>
+        <div class="sb-group">
+          <div class="sb-label">Profile</div>
+        <button type="button" id="navAccount" class="tabbar-btn" data-tab="tabAccount">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
         <span>Account</span>
       </button>
+        </div>
+      </div>
+      <div class="sb-account">
+        <div class="sb-profile">
+          <div id="sidebarInitials" class="sb-initials">--</div>
+          <div class="sb-who"><div id="sidebarName" class="sb-who-name">Signed out</div><div id="sidebarId" class="sb-who-role">Vehicle owner</div></div>
+        </div>
+        <button type="button" class="sb-logout" data-action="logout" title="Sign out of the owner portal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span>Sign Out</span>
+        </button>
+      </div>
     </nav>
   </div>
 
@@ -243,12 +266,24 @@
     </div>
   </div>
 
+  <!-- Evidence photo viewer -->
+  <div id="evModal" class="clip-modal" hidden role="dialog" aria-modal="true" aria-label="Evidence photo">
+    <div class="clip-box ev-box">
+      <div class="clip-top">
+        <div><div id="evTitle" class="clip-title"></div><div id="evSub" class="clip-subtitle"></div></div>
+        <button type="button" id="evClose" class="btn btn-outline btn-sm">Close</button>
+      </div>
+      <div class="ev-stage"><img id="evImage" alt="Evidence photo from the gate"></div>
+      <p class="clip-note">Photo taken by the guard at the gate. Photos are removed automatically after the retention period.</p>
+    </div>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="js/config.js?v=20261001b"></script>
   <script src="js/aes.js?v=20261001b"></script>
   <script src="js/qrcode.min.js?v=20261001b"></script>
-  <script src="js/api.js?v=20261011b"></script>
+  <script src="js/api.js?v=20261012a"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -266,8 +301,8 @@
     };
   </script>
   <script src="js/alerts.js?v=20261001b"></script>
-  <script src="js/app.js?v=20261011b"></script>
-<script src="js/portal.js?v=20261010c"></script></body>
+  <script src="js/app.js?v=20261012c"></script>
+<script src="js/portal.js?v=20261012a"></script></body>
 </html>
 
 
