@@ -65,6 +65,18 @@ def run():
         check('refused registrations left no vehicle behind', len(refused) == 14 and not (saved & set(refused)), sorted(saved & set(refused)))
         check('the accepted ones were saved', len(saved) >= 12, len(saved))
 
+        # ---- institutional ID: free-form, letters / numbers / hyphens, 3 to 20 characters, stored in capitals
+        for given, stored in (('NCST-2024-58522', 'NCST-2024-58522'), ('ncst-2024-58523', 'NCST-2024-58523'), ('PRES-129', 'PRES-129'), ('EMP-0412', 'EMP-0412'),
+                              ('2024-05182', '2024-05182'), (' abc-1 ', 'ABC-1'), ('A' * 20, 'A' * 20)):
+            c, r = register(ownerIdNumber=given)
+            check(f'id "{given}" is accepted and stored as {stored}', c == 201 and r['data']['ownerIdNumber'] == stored, r)
+        for bad in ('AB', 'A' * 21, 'NCST 2024', 'NCST_2024', 'NCST/2024', '-NCST-2024', 'NCST.2024', 'ID#1'):
+            c, r = register(ownerIdNumber=bad)
+            refused.append(f'FMT{n[0]:03d}')
+            check(f'id "{bad}" is refused', c == 400 and r['data']['code'] == 'INVALID_OWNER_ID', r)
+        c, r = register(ownerIdNumber='')
+        check('a blank id is still refused as missing', c == 400, r)
+
         # ---- editing: new values are checked, values the record already has are accepted unchanged
         c, r = register(ownerPhone='09279100511', authorizedDrivers=[{'fullName': 'Format Driver', 'relationship': 'Designated Driver', 'licenseNo': 'N01-23-456789'}])
         vid = r['data']['id']
@@ -82,6 +94,18 @@ def run():
         check('changing a license to a bad value is refused', c == 400 and r['data']['code'] == 'INVALID_LICENSE', r)
         c, r = req('vehicles.php', {'id': vid, 'authorizedDrivers': [{**legacy_driver, 'licenseNo': 'D12-34-567890'}]}, method='PUT')
         check('changing a license to a good value works', c == 200 and r['data']['authorizedDrivers'][0]['licenseNo'] == 'D12-34-567890', r)
+
+        # ---- editing the institutional ID
+        with closing(sqlite3.connect(s.db)) as db, db:
+            db.execute('UPDATE vehicles SET owner_id_number = ? WHERE id = ?', ('legacy id 7', vid))   # an old record with a space and lower case
+        c, r = req('vehicles.php', {'id': vid, 'ownerIdNumber': 'LEGACY ID 7', 'department': 'Same id, different capitals'}, method='PUT')
+        check('an ID the record already has is accepted (any capitals) and kept exactly as stored', c == 200 and r['data']['ownerIdNumber'] == 'legacy id 7', r)
+        c, r = req('vehicles.php', {'id': vid, 'ownerIdNumber': 'bad id!'}, method='PUT')
+        check('changing the ID to an invalid value is refused', c == 400 and r['data']['code'] == 'INVALID_OWNER_ID', r)
+        c, r = req('vehicles.php', {'id': vid, 'ownerIdNumber': ''}, method='PUT')
+        check('blanking the ID is refused', c == 400 and r['data']['code'] == 'INVALID_OWNER_ID', r)
+        c, r = req('vehicles.php', {'id': vid, 'ownerIdNumber': 'ncst-2025-00042'}, method='PUT')
+        check('changing the ID to a good value works and is stored in capitals', c == 200 and r['data']['ownerIdNumber'] == 'NCST-2025-00042', r)
 
     return results
 

@@ -53,3 +53,18 @@ function driverFormatsOrFail(array $drv, array $legacyLicenses = [], array $lega
     $phone = array_key_exists('phone', $drv) && $drv['phone'] !== null ? formatPhoneOrFail($drv['phone'], "Phone of {$name}", $legacyPhones) : null;
     return [$license, $phone];
 }
+
+/**
+ * Institutional ID (student, employee or other): free-form, but letters, numbers and hyphens only, 3 to 20 characters,
+ * stored in capitals. Returns null when it does not fit.
+ */
+function normalizeInstitutionalId($raw) {
+    $s = strtoupper(trim((string)$raw));
+    return preg_match('/^[A-Z0-9][A-Z0-9-]{2,19}$/', $s) ? $s : null;
+}
+
+function institutionalIdOrFail($value, $label = 'Institutional ID') {
+    $n = normalizeInstitutionalId($value);
+    if ($n === null) sendResponse(400, ['code' => 'INVALID_OWNER_ID'], "{$label} can use letters, numbers and hyphens only, 3 to 20 characters (for example NCST-2024-05182).");
+    return $n;
+}

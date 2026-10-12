@@ -1,7 +1,7 @@
 // Unit tests for web-app-admin/js/inputs.js (Philippine mobile and driver's license rules). Run: node tests/inputs_formats.cjs
 const assert = require('assert');
 const path = require('path');
-const { normalizePhone, normalizeLicense, formatPhoneLive, formatLicenseLive } = require(path.join(__dirname, '..', 'web-app-admin', 'js', 'inputs.js'));
+const { normalizePhone, normalizeLicense, normalizeId, formatPhoneLive, formatLicenseLive, formatIdLive } = require(path.join(__dirname, '..', 'web-app-admin', 'js', 'inputs.js'));
 
 let passed = 0;
 const eq = (name, actual, expected) => { assert.strictEqual(actual, expected, `${name}: got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`); passed++; };
@@ -45,5 +45,21 @@ eq('license empty', formatLicenseLive(''), '');
 // a complete typed value is valid
 eq('typed phone round trip', normalizePhone(formatPhoneLive('09279100511')), '+63 927 910 0511');
 eq('typed license round trip', normalizeLicense(formatLicenseLive('N0123456789')), 'N01-23-456789');
+
+// ---- institutional ID: free-form, but letters / numbers / hyphens only, 3 to 20 characters, capitals
+for (const [given, expected] of [['NCST-2024-58522', 'NCST-2024-58522'], ['ncst-2024-58522', 'NCST-2024-58522'], ['PRES-129', 'PRES-129'], ['EMP-0412', 'EMP-0412'],
+  ['2024-05182', '2024-05182'], ['  abc  ', 'ABC'], ['A'.repeat(20), 'A'.repeat(20)]]) {
+  eq(`id ${given}`, normalizeId(given), expected);
+}
+eq('empty id is left to the required check', normalizeId(''), '');
+for (const bad of ['AB', 'A'.repeat(21), 'NCST 2024', 'NCST_2024', 'NCST/2024', '-NCST-2024', 'NCST.2024', 'ÑCST-2024', 'ID#1']) {
+  eq(`id ${bad} is invalid`, normalizeId(bad), null);
+}
+eq('id typed in lower case shows capitals', formatIdLive('ncst-2024-58522'), 'NCST-2024-58522');
+eq('id drops spaces and symbols while typing', formatIdLive('ncst 2024_/58#522'), 'NCST202458522');
+eq('id is capped at 20 characters', formatIdLive('A'.repeat(30)), 'A'.repeat(20));
+eq('id cannot start with a hyphen', formatIdLive('--ABC'), 'ABC');
+eq('id typing keeps inner hyphens', formatIdLive('EMP-0'), 'EMP-0');
+eq('typed id round trip', normalizeId(formatIdLive('ncst-2024-05182')), 'NCST-2024-05182');
 
 console.log(`${passed} input checks passed`);

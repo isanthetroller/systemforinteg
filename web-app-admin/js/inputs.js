@@ -57,14 +57,28 @@
     return [out.slice(0, 3), out.slice(3, 5), out.slice(5, 11)].filter(Boolean).join('-');
   }
 
-  const api = { normalizePhone, normalizeLicense, formatPhoneLive, formatLicenseLive };
+  /** Institutional ID: letters, numbers and hyphens, 3 to 20 characters, in capitals; "" when empty; null when it does not fit. */
+  function normalizeId(raw) {
+    const s = String(raw == null ? '' : raw).trim().toUpperCase();
+    if (!s) return '';
+    return /^[A-Z0-9][A-Z0-9-]{2,19}$/.test(s) ? s : null;
+  }
+
+  /** What the ID field shows while the user types: capitals, only letters / numbers / hyphens, at most 20, no leading hyphen. */
+  function formatIdLive(value) {
+    return String(value).toUpperCase().replace(/[^A-Z0-9-]/g, '').replace(/^-+/, '').slice(0, 20);
+  }
+
+  const api = { normalizePhone, normalizeLicense, normalizeId, formatPhoneLive, formatLicenseLive, formatIdLive };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.SPInputs = api;
   if (typeof document === 'undefined') return;
 
   const PHONE = '#ownerContact, #editOwnerPhone, .driver-phone, .edit-driver-phone';
   const LICENSE = '.driver-license, .edit-driver-license';
+  const OWNER_ID = '#ownerIdNumber, #editOwnerIdNumber';
   const PHONE_MSG = 'Enter a Philippine mobile number, like 0927 910 0511.';
+  const ID_MSG = 'Use letters, numbers and hyphens only, 3 to 20 characters, like NCST-2024-05182.';
   const LICENSE_MSG = 'License no. looks like N01-23-456789: a letter, then 2, 2 and 6 digits. Leave it blank if there is none.';
 
   function hint(input) {
@@ -85,7 +99,10 @@
     hint(input).textContent = message && input.dataset.touched ? message : '';
   }
 
-  const kind = (el) => (el.matches(PHONE) ? 'phone' : el.matches(LICENSE) ? 'license' : null);
+  const kind = (el) => (el.matches(PHONE) ? 'phone' : el.matches(LICENSE) ? 'license' : el.matches(OWNER_ID) ? 'id' : null);
+  const message = (k) => (k === 'phone' ? PHONE_MSG : k === 'license' ? LICENSE_MSG : ID_MSG);
+  const normalize = (k, v) => (k === 'phone' ? normalizePhone(v) : k === 'license' ? normalizeLicense(v) : normalizeId(v));
+  const live = (k, v) => (k === 'phone' ? formatPhoneLive(v) : k === 'license' ? formatLicenseLive(v) : formatIdLive(v));
   const atEnd = (el) => el.selectionStart === el.value.length;
 
   document.addEventListener('focusin', (e) => {
@@ -102,9 +119,8 @@
     const k = kind(el);
     if (!k) return;
     // Reformat while typing only when the caret is at the end, so fixing a digit in the middle is not disturbed
-    if (atEnd(el)) el.value = k === 'phone' ? formatPhoneLive(el.value) : formatLicenseLive(el.value);
-    const ok = k === 'phone' ? normalizePhone(el.value) !== null : normalizeLicense(el.value) !== null;
-    show(el, ok ? '' : (k === 'phone' ? PHONE_MSG : LICENSE_MSG));
+    if (atEnd(el)) el.value = live(k, el.value);
+    show(el, normalize(k, el.value) !== null ? '' : message(k));
   });
 
   document.addEventListener('focusout', (e) => {
@@ -113,8 +129,8 @@
     const k = kind(el);
     if (!k) return;
     el.dataset.touched = '1';
-    const n = k === 'phone' ? normalizePhone(el.value) : normalizeLicense(el.value);
-    if (n === null) { show(el, k === 'phone' ? PHONE_MSG : LICENSE_MSG); return; }
+    const n = normalize(k, el.value);
+    if (n === null) { show(el, message(k)); return; }
     if (n !== '' || k === 'license') el.value = n;   // tidy a valid value to the stored format
     show(el, '');
   });

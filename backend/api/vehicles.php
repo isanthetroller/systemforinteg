@@ -119,6 +119,7 @@ function handleRegisterVehicle($pdo, $admin) {
     $plateNumber = isset($data['plateNumber']) ? strtoupper(trim($data['plateNumber'])) : '';
     $ownerName = isset($data['ownerName']) ? trim($data['ownerName']) : '';
     $ownerIdNumber = isset($data['ownerIdNumber']) ? trim($data['ownerIdNumber']) : '';
+    if ($ownerIdNumber !== '') $ownerIdNumber = institutionalIdOrFail($ownerIdNumber);
 
     if ($plateNumber === '' || $ownerName === '' || $ownerIdNumber === '') {
         sendResponse(400, null, "Missing required fields: plateNumber, ownerName, and ownerIdNumber are required.");
@@ -350,6 +351,13 @@ function handleUpdateVehicle($pdo, $admin) {
     $params = [];
 
     $stored = findVehicleById($pdo, $id);
+    foreach (['ownerIdNumber', 'owner_id_number'] as $idKey) {
+        if (array_key_exists($idKey, $data)) {
+            $newId = trim((string)$data[$idKey]);
+            // The ID the record already has (in any capitals) is kept exactly as stored, so nobody's portal login changes
+            $data[$idKey] = $stored && strcasecmp($newId, (string)$stored['owner_id_number']) === 0 ? $stored['owner_id_number'] : institutionalIdOrFail($newId);
+        }
+    }
     foreach (['ownerPhone', 'owner_phone'] as $phoneKey) {
         if (array_key_exists($phoneKey, $data)) {
             $data[$phoneKey] = formatPhoneOrFail($data[$phoneKey], 'Contact phone', [$stored['owner_phone'] ?? '']);
