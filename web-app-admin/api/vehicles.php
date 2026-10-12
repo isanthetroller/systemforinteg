@@ -13,6 +13,7 @@
  */
 
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../lib/formats.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/vehicles.php';
 require_once __DIR__ . '/../lib/students.php';
@@ -160,6 +161,10 @@ function handleRegisterVehicle($pdo, $admin) {
     $ownerRole = isset($data['ownerRole']) ? $data['ownerRole'] : 'Student';
     $department = isset($data['department']) ? $data['department'] : '';
     $ownerPhone = isset($data['ownerPhone']) ? $data['ownerPhone'] : (isset($data['owner_phone']) ? $data['owner_phone'] : '');
+    $ownerPhone = formatPhoneOrFail($ownerPhone, 'Contact phone');
+    foreach ((array)($data['authorizedDrivers'] ?? $data['authorized_drivers'] ?? []) as $drv) {
+        if (is_array($drv)) driverFormatsOrFail($drv);
+    }
     $ownerEmail = isset($data['ownerEmail']) ? $data['ownerEmail'] : (isset($data['owner_email']) ? $data['owner_email'] : '');
     $ownerPhoto = isset($data['ownerPhoto']) ? $data['ownerPhoto'] : (isset($data['owner_photo']) ? $data['owner_photo'] : null);
     $vehiclePhoto = isset($data['vehiclePhoto']) ? $data['vehiclePhoto'] : (isset($data['vehicle_photo']) ? $data['vehicle_photo'] : null);
@@ -229,8 +234,7 @@ function handleRegisterVehicle($pdo, $admin) {
             $name = isset($drv['fullName']) ? trim($drv['fullName']) : (isset($drv['full_name']) ? trim($drv['full_name']) : '');
             if ($name === '') continue;
             $rel = isset($drv['relationship']) ? trim($drv['relationship']) : 'Designated Driver';
-            $lic = isset($drv['licenseNo']) ? trim($drv['licenseNo']) : (isset($drv['license_no']) ? trim($drv['license_no']) : 'N/A');
-            $ph = isset($drv['phone']) ? trim($drv['phone']) : null;
+            [$lic, $ph] = driverFormatsOrFail($drv);
             $pic = isset($drv['photoUrl']) ? $drv['photoUrl'] : (isset($drv['photo_url']) ? $drv['photo_url'] : null);
             if (!$pic && (stripos($rel, 'self') !== false || stripos($rel, 'owner') !== false || strtolower($name) === strtolower($ownerName))) {
                 $pic = $ownerPhoto;
@@ -344,6 +348,13 @@ function handleUpdateVehicle($pdo, $admin) {
     // Full detail update
     $fields = [];
     $params = [];
+
+    $stored = findVehicleById($pdo, $id);
+    foreach (['ownerPhone', 'owner_phone'] as $phoneKey) {
+        if (array_key_exists($phoneKey, $data)) {
+            $data[$phoneKey] = formatPhoneOrFail($data[$phoneKey], 'Contact phone', [$stored['owner_phone'] ?? '']);
+        }
+    }
 
     $updatable = [
         'plate_number' => ['plateNumber', 'plate_number'],
@@ -494,6 +505,21 @@ function handleUpdateVehicle($pdo, $admin) {
         sendResponse(400, null, "No fields provided to update");
     }
 
+    // Driver licenses and phones are checked before anything is written; a value the record already has is accepted unchanged
+    $legacyLicenses = [];
+    $legacyPhones = [$stored['owner_phone'] ?? ''];
+    if ($drivers !== null) {
+        $legacy = $pdo->prepare("SELECT `license_no`, `phone` FROM `authorized_drivers` WHERE `vehicle_id` = ?");
+        $legacy->execute([$id]);
+        foreach ($legacy->fetchAll() as $row) {
+            $legacyLicenses[] = $row['license_no'];
+            $legacyPhones[] = $row['phone'];
+        }
+        foreach ($drivers as $drv) {
+            if (is_array($drv)) driverFormatsOrFail($drv, $legacyLicenses, $legacyPhones);
+        }
+    }
+
     $pdo->beginTransaction();
     try {
         if (!empty($fields)) {
@@ -532,8 +558,7 @@ function handleUpdateVehicle($pdo, $admin) {
                 $name = isset($drv['fullName']) ? trim($drv['fullName']) : (isset($drv['full_name']) ? trim($drv['full_name']) : '');
                 if ($name === '') continue;
                 $rel = isset($drv['relationship']) ? trim($drv['relationship']) : 'Designated Driver';
-                $lic = isset($drv['licenseNo']) ? trim($drv['licenseNo']) : (isset($drv['license_no']) ? trim($drv['license_no']) : 'N/A');
-                $ph = isset($drv['phone']) ? trim($drv['phone']) : null;
+                [$lic, $ph] = driverFormatsOrFail($drv, $legacyLicenses, $legacyPhones);
                 $pic = isset($drv['photoUrl']) ? $drv['photoUrl'] : (isset($drv['photo_url']) ? $drv['photo_url'] : null);
                 if (!$pic && (stripos($rel, 'self') !== false || stripos($rel, 'owner') !== false || strtolower($name) === strtolower($ownerName))) {
                     $pic = $ownerPhoto;

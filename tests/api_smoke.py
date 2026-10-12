@@ -546,7 +546,7 @@ def test_overnight(admin):
     code, res = report('2026-09-20 19:00:00')
     items = {i['plateNumber']: i for i in res['data']['items']}
     check('before curfew: long stay listed as overtime only', 'OVN 1001' not in items and items.get('OVT 2002', {}).get('category') == 'overtime', res['data'])
-    check('list includes owner phone and elapsed hours', items['OVT 2002']['ownerPhone'] == '0917 555 0000' and items['OVT 2002']['elapsedHours'] == 13.0, items)
+    check('list includes owner phone and elapsed hours', items['OVT 2002']['ownerPhone'] == '+63 917 555 0000' and items['OVT 2002']['elapsedHours'] == 13.0, items)
     check('list has no strike counter', 'warningCount' not in items['OVT 2002'] and items['OVT 2002']['onHold'] is False, items['OVT 2002'])
 
     code, res = report('2026-09-20 23:00:00', 'POST')
@@ -1348,7 +1348,7 @@ def test_offline_sync(admin):
         code, res = call('PUT', 'vehicles.php', {'id': inside['id'], 'ownerPhone': '0917 999 0000', 'status': bad_status}, admin)
     v = vehicle('SYN 4002')
     check('an edit that sends a status (even an empty one) does not change it', code == 200 and v['status'] == 'Inside Campus', v['status'])
-    check('  ...while the other fields in the same edit are saved', v['ownerPhone'] == '0917 999 0000', v)
+    check('  ...while the other fields in the same edit are saved', v['ownerPhone'] == '+63 917 999 0000', v)
     code, res = call('GET', 'oncampus.php', token=guard)
     check('  ...and the vehicle is still on the On Campus list', any(x['plateNumber'] == 'SYN 4002' for x in res['data']['vehicles']), res['data']['counts'])
 
@@ -1684,10 +1684,10 @@ def test_owner_notices(admin):
     db.close()
     code, v = verify({'plate': 'NTC 1001', 'gate_type': 'Ingress'}, guard)
     oc = v.get('onCampus') or {}
-    check('scanning a vehicle already inside returns where it is and who to call', v.get('currentlyInside') is True and oc.get('ownerPhone') == '0917 123 4567'
+    check('scanning a vehicle already inside returns where it is and who to call', v.get('currentlyInside') is True and oc.get('ownerPhone') == '+63 917 123 4567'
           and oc.get('enteredBy') == 'Nina Notice' and oc.get('admittedBy') == 'Officer Reyes' and oc.get('gatePoint') == 'Gate 1 (Main Ingress)'
           and 2.5 <= (oc.get('hoursInside') or 0) <= 3.5, v)
-    check('  ...the vehicle record carries the contact number and department', v['vehicle']['ownerPhone'] == '0917 123 4567' and v['vehicle']['department'] == 'BSIT', v['vehicle'])
+    check('  ...the vehicle record carries the contact number and department', v['vehicle']['ownerPhone'] == '+63 917 123 4567' and v['vehicle']['department'] == 'BSIT', v['vehicle'])
     code, v = verify({'plate': 'NTC 2002', 'gate_type': 'Ingress'}, guard)
     check('a vehicle that is not inside has no on-campus block', v.get('onCampus') is None, v.get('onCampus'))
     if smtp:

@@ -3498,7 +3498,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div>
           <label class="block text-[11px] font-medium text-slate-600 mb-1">Phone</label>
-          <input type="text" class="edit-driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="+63 9XX XXX XXXX" value="${escapeHtml(driverData.phone || '')}">
+          <input type="text" class="edit-driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" placeholder="0927 910 0511" value="${escapeHtml(driverData.phone || '')}">
         </div>
       </div>
     `;
@@ -3974,7 +3974,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           <div>
             <label class="block text-[11px] font-medium text-slate-600 mb-1">Phone</label>
-            <input type="text" class="driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="+63 9XX XXX XXXX">
+            <input type="text" class="driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="0927 910 0511">
           </div>
         </div>
       `;
@@ -4031,7 +4031,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           <div>
             <label class="block text-[11px] font-medium text-slate-600 mb-1">Phone</label>
-            <input type="text" class="driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="+63 9XX XXX XXXX">
+            <input type="text" class="driver-phone w-full px-2.5 py-1.5 rounded bg-white border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy font-mono" placeholder="0927 910 0511">
           </div>
         </div>
       </div>

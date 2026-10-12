@@ -617,3 +617,8 @@
   #visitorsView .sp-filter-grid > div:last-child:has(button) { grid-column:auto; align-self:end; justify-self:start; }
   #visitorsView #resetVisitorFiltersBtn { height:44px; padding-left:18px; padding-right:18px; }
 }
+
+/* ---- Field checks (js/inputs.js): the message under a phone / license field, and the red border ---- */
+.sp-field-error { margin:4px 0 0; color:#b42336; font-size:11px; line-height:1.45; }
+.sp-field-error:empty { display:none; }
+input[aria-invalid="true"] { border-color:#b42336 !important; }
