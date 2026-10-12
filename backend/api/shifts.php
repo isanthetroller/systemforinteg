@@ -4,6 +4,9 @@
  *
  * GET  /api/shifts.php                      Guards on duty now + my open shift + the latest handover note (staff)
  * GET  /api/shifts.php?scope=report         Per-guard activity for a period: from, to (YYYY-MM-DD, default last 7 days) (admin)
+ * GET  /api/shifts.php?scope=timeline       Every shift touching a period (from, to; default today) with what was done during each, off-shift
+ *                                           activity and gate coverage right now (admin)
+ * GET  /api/shifts.php?scope=shift&id=N     One shift: handover note + everything that guard did during it, in order (admin)
  * POST /api/shifts.php {action:'start', gate}
  *                                           Go on duty at a gate. Ends any shift of yours still open. Returns the previous
  *                                           guard's handover note for that gate.
@@ -43,6 +46,164 @@ function latestHandover($pdo, $userId, $gate) {
     $stmt = $pdo->prepare($base . " ORDER BY `ended_at` DESC, `id` DESC LIMIT 1");
     $stmt->execute([$since, $userId]);
     return $stmt->fetch() ?: null;
+}
+
+/** How a shift ended: open, manual (the guard ended it), auto (closed by the maintenance job), moved (the guard started another gate). */
+function shiftEndKind($r) {
+    if (empty($r['ended_at'])) return 'open';
+    $n = (string)($r['handover_notes'] ?? '');
+    if (strpos($n, '(shift closed automatically') === 0) return 'auto';
+    if ($n === '(moved to another gate)') return 'moved';
+    return 'manual';
+}
+
+/**
+ * What staff did, from every place it is recorded, between two timestamps (YYYY-MM-DD HH:MM:SS):
+ * [userId, ts, type, label, plate]. type = entry | exit | denied | violation | incident | photo | visitor.
+ */
+function shiftEvents($pdo, $from, $to, $limit = 20000) {
+    $ev = [];
+    $push = function ($uid, $at, $type, $label, $plate) use (&$ev) {
+        $ts = strtotime($at);
+        if ($uid !== null && $ts) $ev[] = ['userId' => (int)$uid, 'ts' => $ts, 'at' => $at, 'type' => $type, 'label' => $label, 'plate' => $plate];
+    };
+    $stmt = $pdo->prepare("SELECT `logged_by_user_id` AS uid, `logged_at` AS at, `action`, `plate_number`, `gate_point`, `driver_name` FROM `gate_logs`
+        WHERE `logged_at` BETWEEN ? AND ? AND `logged_by_user_id` IS NOT NULL ORDER BY `logged_at` ASC LIMIT {$limit}");
+    $stmt->execute([$from, $to]);
+    foreach ($stmt->fetchAll() as $r) {
+        $type = $r['action'] === 'Entry Recorded' ? 'entry' : ($r['action'] === 'Exit Approved' ? 'exit' : 'denied');
+        $label = ($type === 'entry' ? 'Entry recorded' : ($type === 'exit' ? 'Exit approved' : $r['action'])) . ' · ' . $r['plate_number']
+            . ($r['gate_point'] ? ' at ' . $r['gate_point'] : '');
+        $push($r['uid'], $r['at'], $type, $label, $r['plate_number']);
+    }
+    $stmt = $pdo->prepare("SELECT `logged_by_user_id` AS uid, `created_at` AS at, `violation_type`, `plate_number` FROM `vehicle_violations`
+        WHERE `created_at` BETWEEN ? AND ? AND `logged_by_user_id` IS NOT NULL ORDER BY `created_at` ASC LIMIT {$limit}");
+    $stmt->execute([$from, $to]);
+    foreach ($stmt->fetchAll() as $r) $push($r['uid'], $r['at'], 'violation', 'Violation issued · ' . $r['plate_number'] . ' · ' . $r['violation_type'], $r['plate_number']);
+    $stmt = $pdo->prepare("SELECT `logged_by_user_id` AS uid, `reported_at` AS at, `case_number`, `reason`, `plate_number` FROM `security_incidents`
+        WHERE `reported_at` BETWEEN ? AND ? AND `logged_by_user_id` IS NOT NULL ORDER BY `reported_at` ASC LIMIT {$limit}");
+    $stmt->execute([$from, $to]);
+    foreach ($stmt->fetchAll() as $r) $push($r['uid'], $r['at'], 'incident', 'Vehicle held · ' . $r['plate_number'] . ' · ' . $r['reason'] . ' (' . $r['case_number'] . ')', $r['plate_number']);
+    $stmt = $pdo->prepare("SELECT `taken_by_user_id` AS uid, `created_at` AS at, `kind`, `plate_number` FROM `evidence_photos`
+        WHERE `created_at` BETWEEN ? AND ? AND `taken_by_user_id` IS NOT NULL ORDER BY `created_at` ASC LIMIT {$limit}");
+    $stmt->execute([$from, $to]);
+    foreach ($stmt->fetchAll() as $r) $push($r['uid'], $r['at'], 'photo', 'Evidence photo (' . $r['kind'] . ') · ' . $r['plate_number'], $r['plate_number']);
+    $stmt = $pdo->prepare("SELECT `created_by_user_id` AS uid, `created_at` AS at, `pass_code`, `plate_number`, `visitor_name` FROM `visitor_passes`
+        WHERE `created_at` BETWEEN ? AND ? AND `created_by_user_id` IS NOT NULL ORDER BY `created_at` ASC LIMIT {$limit}");
+    $stmt->execute([$from, $to]);
+    foreach ($stmt->fetchAll() as $r) $push($r['uid'], $r['at'], 'visitor', 'Visitor day pass issued · ' . $r['plate_number'] . ' · ' . $r['visitor_name'], $r['plate_number']);
+    usort($ev, fn($a, $b) => $a['ts'] <=> $b['ts']);
+    return $ev;
+}
+
+const SP_SHIFT_GATES = ['Gate 1 (Main Ingress)', 'Gate 2 (Main Egress)', 'Patrol / Other'];
+const SP_LONG_SHIFT_HOURS = 12;
+
+/** Timeline: every shift that touches the period, what was done during each, and who is where right now. (admin) */
+if ($method === 'GET' && ($_GET['scope'] ?? '') === 'timeline') {
+    requireStaff($pdo, ['admin']);
+    $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['from'] ?? '') ? $_GET['from'] : date('Y-m-d');
+    $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['to'] ?? '') ? $_GET['to'] : $from;
+    if ($to < $from) [$from, $to] = [$to, $from];
+    if (strtotime($to) - strtotime($from) > 62 * 86400) sendResponse(400, null, 'Choose a period of at most 62 days.');
+    $startTs = strtotime("{$from} 00:00:00");
+    $endTs = strtotime("{$to} 23:59:59");
+    $nowTs = time();
+
+    $stmt = $pdo->prepare("SELECT * FROM `guard_shifts` WHERE `started_at` <= ? AND (`ended_at` IS NULL OR `ended_at` >= ?) ORDER BY `started_at` ASC, `id` ASC LIMIT 1000");
+    $stmt->execute([date('Y-m-d H:i:s', $endTs), date('Y-m-d H:i:s', $startTs)]);
+    $rows = $stmt->fetchAll();
+
+    $windowStart = $startTs;
+    foreach ($rows as $r) $windowStart = min($windowStart, strtotime($r['started_at']));
+    $events = shiftEvents($pdo, date('Y-m-d H:i:s', $windowStart), date('Y-m-d H:i:s', $endTs));
+
+    $byUser = [];
+    foreach ($rows as $i => $r) $byUser[(int)$r['user_id']][] = $i;
+    $blank = fn() => ['entry' => 0, 'exit' => 0, 'denied' => 0, 'violation' => 0, 'incident' => 0, 'photo' => 0, 'visitor' => 0];
+    $counts = array_fill(0, count($rows), $blank());
+    $offShift = [];
+    foreach ($events as $e) {
+        $hit = null;
+        foreach ($byUser[$e['userId']] ?? [] as $i) {
+            $s = strtotime($rows[$i]['started_at']);
+            $f = $rows[$i]['ended_at'] ? strtotime($rows[$i]['ended_at']) : $nowTs;
+            if ($e['ts'] >= $s && $e['ts'] <= $f) { $hit = $i; break; }
+        }
+        if ($hit !== null) { $counts[$hit][$e['type']]++; continue; }
+        if ($e['ts'] >= $startTs && $e['ts'] <= $endTs) $offShift[$e['userId']] = ($offShift[$e['userId']] ?? 0) + 1;
+    }
+
+    $users = [];
+    $stmt = $pdo->prepare("SELECT `id`, `full_name`, `badge_number`, `role`, `gate_assigned` FROM `system_users` WHERE `role` = 'guard' ORDER BY `full_name`");
+    $stmt->execute();
+    foreach ($stmt->fetchAll() as $u) $users[(int)$u['id']] = ['userId' => (int)$u['id'], 'guard' => actorLabel($u), 'role' => $u['role'], 'assignedGate' => $u['gate_assigned'],
+        'shifts' => 0, 'hours' => 0.0, 'offShiftActions' => 0];
+
+    $shifts = [];
+    $summary = ['onDuty' => 0, 'shifts' => 0, 'hours' => 0.0, 'autoClosed' => 0, 'longShifts' => 0, 'offShiftActions' => array_sum($offShift), 'actions' => 0];
+    foreach ($rows as $i => $r) {
+        $uid = (int)$r['user_id'];
+        $s = strtotime($r['started_at']);
+        $f = $r['ended_at'] ? strtotime($r['ended_at']) : $nowTs;
+        $kind = shiftEndKind($r);
+        $hours = max(0, ($f - $s) / 3600);
+        $inRange = max(0, (min($f, $endTs, $nowTs) - max($s, $startTs)) / 3600);
+        if (!isset($users[$uid])) $users[$uid] = ['userId' => $uid, 'guard' => $r['guard_label'], 'role' => 'staff', 'assignedGate' => null, 'shifts' => 0, 'hours' => 0.0, 'offShiftActions' => 0];
+        $users[$uid]['shifts']++;
+        $users[$uid]['hours'] += $inRange;
+        $c = $counts[$i];
+        $total = array_sum($c);
+        $long = $hours > SP_LONG_SHIFT_HOURS;
+        $summary['shifts']++;
+        $summary['hours'] += $inRange;
+        $summary['actions'] += $total;
+        if ($kind === 'open') $summary['onDuty']++;
+        if ($kind === 'auto') $summary['autoClosed']++;
+        if ($long) $summary['longShifts']++;
+        $shifts[] = ['id' => (int)$r['id'], 'userId' => $uid, 'guard' => $r['guard_label'], 'gate' => $r['gate'], 'startedAt' => $r['started_at'], 'endedAt' => $r['ended_at'],
+            'durationMinutes' => (int)round($hours * 60), 'endKind' => $kind, 'long' => $long, 'handoverNotes' => $r['handover_notes'],
+            'counts' => $c, 'actions' => $total];
+    }
+    foreach ($users as $uid => &$u) { $u['hours'] = round($u['hours'], 1); $u['offShiftActions'] = $offShift[$uid] ?? 0; }
+    unset($u);
+    $summary['hours'] = round($summary['hours'], 1);
+
+    // Who is covering which gate right now (independent of the chosen period)
+    $stmt = $pdo->prepare("SELECT * FROM `guard_shifts` WHERE `ended_at` IS NULL ORDER BY `started_at` ASC");
+    $stmt->execute();
+    $open = $stmt->fetchAll();
+    $coverage = [];
+    foreach (SP_SHIFT_GATES as $g) $coverage[$g] = [];
+    foreach ($open as $r) {
+        $g = $r['gate'] ?: 'Other';
+        $coverage[$g][] = ['shiftId' => (int)$r['id'], 'userId' => (int)$r['user_id'], 'guard' => $r['guard_label'], 'startedAt' => $r['started_at'],
+            'minutes' => (int)round(max(0, $nowTs - strtotime($r['started_at'])) / 60)];
+    }
+    $coverageList = [];
+    foreach ($coverage as $g => $list) $coverageList[] = ['gate' => $g, 'guards' => $list];
+
+    sendResponse(200, ['from' => $from, 'to' => $to, 'now' => date('Y-m-d H:i:s', $nowTs), 'summary' => $summary, 'guards' => array_values($users),
+        'shifts' => $shifts, 'coverage' => $coverageList, 'longShiftHours' => SP_LONG_SHIFT_HOURS]);
+}
+
+/** One shift in detail: the handover note and everything that guard did while it ran, in time order. (admin) */
+if ($method === 'GET' && ($_GET['scope'] ?? '') === 'shift') {
+    requireStaff($pdo, ['admin']);
+    $stmt = $pdo->prepare("SELECT * FROM `guard_shifts` WHERE `id` = ?");
+    $stmt->execute([(int)($_GET['id'] ?? 0)]);
+    $r = $stmt->fetch();
+    if (!$r) sendResponse(404, null, 'Shift not found.');
+    $uid = (int)$r['user_id'];
+    $to = $r['ended_at'] ?: date('Y-m-d H:i:s');
+    $activity = [];
+    foreach (shiftEvents($pdo, $r['started_at'], $to, 2000) as $e) {
+        if ($e['userId'] === $uid) $activity[] = ['at' => $e['at'], 'type' => $e['type'], 'label' => $e['label'], 'plate' => $e['plate']];
+    }
+    $shift = shiftView($r);
+    $shift['endKind'] = shiftEndKind($r);
+    $shift['durationMinutes'] = (int)round(max(0, (strtotime($to) - strtotime($r['started_at'])) / 60));
+    sendResponse(200, ['shift' => $shift, 'activity' => array_slice($activity, 0, 500), 'truncated' => count($activity) > 500]);
 }
 
 if ($method === 'GET' && ($_GET['scope'] ?? '') === 'report') {

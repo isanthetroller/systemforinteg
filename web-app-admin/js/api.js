@@ -294,6 +294,8 @@ const ApiClient = (function() {
     getSettings: async () => (await request('settings.php?scope=all')).data,
     saveSettings: async (values) => (await request('settings.php', { method: 'PUT', body: values })).data,
     getShifts: async () => (await request('shifts.php')).data,
+    getShiftTimeline: async (from = '', to = '') => (await request(`shifts.php?scope=timeline${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
+    getShiftDetail: async (id) => (await request(`shifts.php?scope=shift&id=${encodeURIComponent(id)}`)).data,
     getShiftReport: async (from = '', to = '') => (await request(`shifts.php?scope=report${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
     getEvidence: async (params) => (await request('evidence.php?' + new URLSearchParams(params))).data,
     getEvidencePhoto: async (id) => (await request(`evidence.php?id=${id}`)).data,
