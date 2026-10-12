@@ -95,10 +95,30 @@ def run():
         # --- Report a record discrepancy -----------------------------------------------------------------------
         c, r = req('movements.php', {'action': 'report_discrepancy', 'plate': 'LNE100', 'direction': 'IN', 'recorded': 'INSIDE', 'note': 'Left by the side gate'}, g1)
         check('guard can report a record discrepancy', c == 201 and r['data']['reported'], r)
+        # Report opens a real case (same as Block) without telling the owner their vehicle was blocked
+        with closing(sqlite3.connect(s.db)) as db:
+            notices_before = db.execute('SELECT COUNT(*) FROM owner_notices').fetchone()[0]
+        c, r = req('incidents.php', {'plateNumber': 'LNE200', 'driverName': 'Lane Owner', 'reason': 'Record check: Vehicle already left',
+                                     'gatePoint': 'Gate 1 (Main Ingress)', 'notes': 'Left by the side gate', 'report': True}, g1)
+        check('report opens a case', c == 201 and r['data']['caseNumber'] and r['data']['status'] == 'Held', r)
+        check('report message says the vehicle is held for review', 'held until an admin reviews' in r['message'], r)
+        with closing(sqlite3.connect(s.db)) as db:
+            notices_after = db.execute('SELECT COUNT(*) FROM owner_notices').fetchone()[0]
+        check('a report does not send the owner a blocked notice', notices_after == notices_before, (notices_before, notices_after))
+        c, log2 = req('audit.php?action=record.discrepancy', method='GET')
+        check('the case report is in the admin activity log', c == 200 and 'LNE200' in json.dumps(log2), log2)
+        c, cases = req('cases.php?status=open', method='GET')
+        check('the case shows up in the admin Cases list', c == 200 and 'LNE200' in json.dumps(cases), cases)
+        c, plain = req('incidents.php', {'plateNumber': 'LNE200', 'driverName': 'Lane Owner', 'reason': 'Unauthorized / Unregistered Driver',
+                                         'gatePoint': 'Gate 1 (Main Ingress)'}, g1)
+        with closing(sqlite3.connect(s.db)) as db:
+            notices_block = db.execute('SELECT COUNT(*) FROM owner_notices').fetchone()[0]
+        check('a normal block still notifies the owner', c == 201 and notices_block > notices_after, (notices_after, notices_block))
         check('report needs a plate', req('movements.php', {'action': 'report_discrepancy', 'direction': 'IN'}, g1)[0] == 400)
         c, log = req('audit.php?action=record.discrepancy', method='GET')
         check('admin sees the report in the activity log', c == 200 and any('LNE100' in json.dumps(row) for row in log['data'].get('rows', log['data'].get('entries', log['data'])) ) , log)
-        check('a report never holds the vehicle', prepare(v, g1, 'IN')['result'] in ('ALREADY_INSIDE', 'NOT_ON_CAMPUS', 'VALID'))
+        check('the audit-only report endpoint never holds the vehicle', prepare(v, g1, 'IN')['result'] in ('ALREADY_INSIDE', 'NOT_ON_CAMPUS', 'VALID'))
+        check('a report case holds the vehicle until an admin reviews it', prepare(v2, g1, 'IN')['result'] == 'BANNED')
 
     return results
 

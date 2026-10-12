@@ -41,7 +41,7 @@ ScanResultView resultView(
   bool invalidated = false,
   void Function(int?, bool)? onAllow,
   void Function(BlockDecision, String, String)? onBlock,
-  VoidCallback? onReport,
+  void Function(BlockDecision)? onReport,
   VoidCallback? onDetails,
   VoidCallback? onIssueViolation,
   ValueChanged<dynamic>? onEvidenceChanged,
@@ -260,10 +260,20 @@ void main() {
     expect(find.byKey(const Key('reportRecord')), findsOneWidget);
     await tester.tap(find.byKey(const Key('reportRecord')));
     await tester.pumpAndSettle();
+    expect(find.text('Report a problem with TEST 123'), findsOneWidget, reason: 'same sheet as Block');
+    await tester.tap(find.byKey(const Key('reason_Vehicle already left (exit was not scanned)')));
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('blockNote')), 'Left by the side gate');
+    await tester.tap(find.text('Report and open case'));
+    await tester.pumpAndSettle();
     final report = requests.last;
-    expect(report['action'], 'report_discrepancy');
-    expect(report['recorded'], 'INSIDE');
-    expect(report['plate'], 'TEST 123');
+    expect(report['report'], true, reason: 'opens a case without the owner "blocked" notice');
+    expect(report['reason'], 'Record check: Vehicle already left (exit was not scanned)');
+    expect(report['plateNumber'], 'TEST 123');
+    expect(report['notes'], contains('Left by the side gate'));
+    expect(report['notes'], contains('inside campus'));
+    expect(find.text('Reported'), findsOneWidget, reason: 'the follow-up screen stays for Call owner / Issue violation');
+    expect(find.byKey(const Key('savedNext')), findsOneWidget);
   });
 
   testWidgets('ordinary pass: the owner is preselected and one tap saves', (tester) async {

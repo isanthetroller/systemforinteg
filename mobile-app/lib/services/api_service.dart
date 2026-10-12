@@ -879,6 +879,9 @@ class ApiService {
     String gatePoint = 'Gate 1 (Main Ingress)',
     String officer = 'Gate Security Officer',
     String notes = '',
+    // A record-check report (for example after an anti-passback refusal): same case and hold as a block, but the owner is
+    // not sent a "your vehicle was blocked" notice.
+    bool reportOnly = false,
   }) async {
     final clientRef = SyncQueueService.newClientRef();
     final occurredAt = DateTime.now();
@@ -890,6 +893,7 @@ class ApiService {
       'officer': officer,
       'notes': notes,
       'client_ref': clientRef,
+      if (reportOnly) 'report': true,
     };
 
     final outcome = await _postForOutcome(

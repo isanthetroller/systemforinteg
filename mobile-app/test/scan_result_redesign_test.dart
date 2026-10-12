@@ -41,7 +41,7 @@ Widget view(
   Map<String, dynamic> data, {
   void Function(int?, bool)? onAllow,
   void Function(BlockDecision, String, String)? onBlock,
-  VoidCallback? onReport,
+  void Function(BlockDecision)? onReport,
 }) => MaterialApp(
   home: Scaffold(
     body: ScanResultView(
@@ -184,14 +184,59 @@ void main() {
   testWidgets('passback shows Report and where the vehicle entered', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    var reported = false;
+    BlockDecision? reported;
     final data = refused('ALREADY_INSIDE', inside: true)
       ..['onCampus'] = {'entryTime': '2026-10-09 07:42:00', 'gatePoint': 'Gate 1 (Main Ingress)', 'ownerPhone': '0917 000 0000'};
-    await tester.pumpWidget(view(data, onReport: () => reported = true));
+    await tester.pumpWidget(view(data, onReport: (d) => reported = d));
     expect(find.text('Already on campus'), findsOneWidget);
     expect(find.text('Gate 1 (Main Ingress)'), findsOneWidget);
     await tester.tap(find.byKey(const Key('reportRecord')));
-    expect(reported, isTrue);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reason_Pass used by another vehicle or driver')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('confirmBlock')));
+    await tester.pumpAndSettle();
+    expect(reported!.reason, 'Pass used by another vehicle or driver');
+  });
+
+  group('Report sheet', () {
+    Future<void> openReport(WidgetTester tester, String result, {void Function(BlockDecision)? onReport}) async {
+      await tester.binding.setSurfaceSize(const Size(390, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(view(refused(result, inside: result == 'ALREADY_INSIDE'), onReport: onReport ?? (_) {}));
+      await tester.tap(find.byKey(const Key('reportRecord')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('says the vehicle is held, offers note and photo, and the report button', (tester) async {
+      await openReport(tester, 'ALREADY_INSIDE');
+      expect(find.text('Report a problem with ABC 1234'), findsOneWidget);
+      expect(find.textContaining('held until an admin reviews it'), findsOneWidget);
+      expect(find.byKey(const Key('blockNote')), findsOneWidget);
+      expect(find.text('Photo of vehicle / plate'), findsOneWidget);
+      expect(find.text('Report and open case'), findsOneWidget);
+      expect(find.text('Block and log'), findsNothing);
+    });
+
+    testWidgets('the first reason matches which way the record is wrong', (tester) async {
+      await openReport(tester, 'ALREADY_INSIDE');
+      expect(find.byKey(const Key('reason_Vehicle already left (exit was not scanned)')), findsOneWidget);
+      expect(find.byKey(const Key('reason_Vehicle is on campus (entry was not scanned)')), findsNothing);
+    });
+
+    testWidgets('a reason is required, and Other needs a description', (tester) async {
+      BlockDecision? sent;
+      await openReport(tester, 'ALREADY_INSIDE', onReport: (d) => sent = d);
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pump();
+      expect(find.text('Pick a reason.'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('reason_Other')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('confirmBlock')));
+      await tester.pump();
+      expect(find.text('Describe the reason in the note.'), findsOneWidget);
+      expect(sent, isNull);
+    });
   });
 
   group('Block sheet', () {

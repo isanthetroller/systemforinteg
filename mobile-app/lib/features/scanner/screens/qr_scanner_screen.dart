@@ -602,25 +602,55 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     );
   }
 
-  /// "Report" on an anti-passback refusal: the guard says the recorded state is wrong; an admin is asked to correct it.
-  Future<void> _reportDiscrepancy() async {
+  /// "Report" on an anti-passback refusal: opens an admin case (reason, note and photo like Block, but no passage is
+  /// refused and the owner is not told their vehicle was blocked). The vehicle is held until an admin reviews it.
+  Future<void> _reportDiscrepancy(BlockDecision decision) async {
     final preview = _refusedPreview;
-    if (preview == null) return;
+    if (preview == null || _isSubmitting) return;
     final record = Map<String, dynamic>.from((preview['vehicle'] ?? preview['visitor']) as Map);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await ApiService.movementRequest({
-        'action': 'report_discrepancy',
-        'plate': '${record['plateNumber'] ?? record['plate_number'] ?? ''}',
-        'direction': _lane.code,
-        'recorded': preview['currentlyInside'] == true ? 'INSIDE' : 'OUTSIDE',
-      });
-      messenger.showSnackBar(const SnackBar(content: Text('Reported. An admin will check the record.')));
-    } on MovementApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('Could not send the report. Check the connection and try again.')));
+    final isVisitor = preview['vehicle'] is! Map;
+    final plate = '${record['plateNumber'] ?? record['plate_number'] ?? ''}';
+    final owner = '${record['ownerName'] ?? record['visitorName'] ?? ''}';
+    final onCampus = preview['onCampus'] is Map ? Map<String, dynamic>.from(preview['onCampus'] as Map) : const <String, dynamic>{};
+    final phone = '${record['ownerPhone'] ?? record['owner_phone'] ?? onCampus['ownerPhone'] ?? record['contactNumber'] ?? ''}'.replaceAll('null', '');
+    final lane = _lane;
+    final gate = _laneConfig.gateFor(lane);
+    final gatePoint = gate == 'Gate 2' ? 'Gate 2 (Main Egress)' : 'Gate 1 (Main Ingress)';
+    final inside = preview['currentlyInside'] == true;
+    final vehicle = isVisitor ? null : VehicleRecord.fromQrJson(record, isSyncedWithDb: true);
+    final context0 = '${lane == ScanLane.entry ? 'Entry' : 'Exit'} lane scan refused by anti-passback '
+        '(the record says the vehicle is ${inside ? 'inside' : 'outside'} campus).';
+    setState(() => _isSubmitting = true);
+    final ok = await ApiService.reportIncident(
+      plateNumber: plate,
+      driverName: owner,
+      reason: 'Record check: ${decision.reason}',
+      gatePoint: gatePoint,
+      notes: decision.note.isEmpty ? context0 : '$context0 ${decision.note}',
+      reportOnly: true,
+    );
+    final incidentId = ok ? int.tryParse('${ApiService.lastResponseData?['id'] ?? ''}') : null;
+    final photo = decision.photo;
+    if (photo != null && incidentId != null) {
+      unawaited(EvidenceService.upload(photo, kind: 'incident', plate: plate, incidentId: incidentId));
     }
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ApiService.lastWriteError ?? 'Could not send the report. Check the connection and try again.')),
+      );
+      return;
+    }
+    _showSaved(
+      blocked: true,
+      title: 'Reported',
+      plate: plate,
+      detail: '${decision.text} · case opened for an admin',
+      ownerName: owner,
+      ownerPhone: phone,
+      vehicle: vehicle,
+    );
   }
 
   /// "View details or report incident" from the result screen: opens the on-campus inspection view for this vehicle.

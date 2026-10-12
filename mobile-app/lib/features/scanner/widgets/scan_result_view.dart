@@ -19,6 +19,16 @@ final List<String> kBlockReasons = [
   'Other',
 ];
 
+/// Reasons for a record-check report after an anti-passback refusal. The first one depends on which way the record is wrong.
+List<String> reportReasonsFor(String result) => [
+  result == 'NOT_ON_CAMPUS' ? 'Vehicle is on campus (entry was not scanned)' : 'Vehicle already left (exit was not scanned)',
+  'Pass used by another vehicle or driver',
+  'Plate & Vehicle Profile Mismatch',
+  'Unauthorized / Unregistered Driver',
+  'Suspicious behavior',
+  'Other',
+];
+
 /// What the guard entered in the Block sheet.
 class BlockDecision {
   final String reason;
@@ -49,8 +59,8 @@ class ScanResultView extends StatefulWidget {
   final void Function(BlockDecision decision, String driverName, String relationship) onBlock;
   final VoidCallback onScanNext;
 
-  /// Offered on a passback refusal: the guard says the recorded state is wrong.
-  final VoidCallback? onReport;
+  /// Offered on a passback refusal: opens the same sheet as Block (reason, note, photo) and then an admin case.
+  final void Function(BlockDecision decision)? onReport;
   final VoidCallback? onDetails;
   final VoidCallback? onIssueViolation;
   final ValueChanged<PendingEvidence?>? onEvidenceChanged;
@@ -505,7 +515,7 @@ class _ScanResultViewState extends State<ScanResultView> {
           Expanded(
             child: SizedBox(
               height: 60,
-              child: OutlinedButton(key: const Key('reportRecord'), onPressed: widget.onReport, child: const Text('Report', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+              child: OutlinedButton(key: const Key('reportRecord'), onPressed: locked ? null : _report, child: const Text('Report', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
             ),
           ),
         ],
@@ -543,6 +553,22 @@ class _ScanResultViewState extends State<ScanResultView> {
       return;
     }
     widget.onAllow(_driverId, hasItems);
+  }
+
+  Future<void> _report() async {
+    final decision = await showModalBottomSheet<BlockDecision>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => BlockSheet(
+        plate: _plate.isEmpty ? (_visitorPass?.plateNumber ?? '') : _plate,
+        lane: _shownLane,
+        report: true,
+        result: '${widget.data['result']}',
+      ),
+    );
+    if (decision == null || !mounted) return;
+    widget.onReport?.call(decision);
   }
 
   Future<void> _block() async {
@@ -634,7 +660,11 @@ class _BigButton extends StatelessWidget {
 class BlockSheet extends StatefulWidget {
   final String plate;
   final ScanLane lane;
-  const BlockSheet({super.key, required this.plate, required this.lane});
+
+  /// Report mode: reasons about the record, and the result opens a case instead of blocking a passage.
+  final bool report;
+  final String result;
+  const BlockSheet({super.key, required this.plate, required this.lane, this.report = false, this.result = ''});
 
   @override
   State<BlockSheet> createState() => _BlockSheetState();
@@ -674,11 +704,19 @@ class _BlockSheetState extends State<BlockSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Block ${widget.lane.verb} for ${widget.plate}?', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: NcstColors.crimson)),
+            Text(
+              widget.report ? 'Report a problem with ${widget.plate}' : 'Block ${widget.lane.verb} for ${widget.plate}?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: widget.report ? NcstColors.navy : NcstColors.crimson),
+            ),
             const SizedBox(height: 4),
-            const Text('The vehicle is held and a security incident is logged.', style: TextStyle(color: NcstColors.slate600)),
+            Text(
+              widget.report
+                  ? 'An admin case is opened and the vehicle is held until an admin reviews it.'
+                  : 'The vehicle is held and a security incident is logged.',
+              style: const TextStyle(color: NcstColors.slate600),
+            ),
             const SizedBox(height: 8),
-            for (final r in kBlockReasons)
+            for (final r in widget.report ? reportReasonsFor(widget.result) : kBlockReasons)
               ListTile(
                 key: Key('reason_$r'),
                 dense: true,
@@ -721,9 +759,9 @@ class _BlockSheetState extends State<BlockSheet> {
                     height: 52,
                     child: FilledButton(
                       key: const Key('confirmBlock'),
-                      style: FilledButton.styleFrom(backgroundColor: NcstColors.crimson),
+                      style: FilledButton.styleFrom(backgroundColor: widget.report ? NcstColors.navy : NcstColors.crimson),
                       onPressed: _submit,
-                      child: const Text('Block and log', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                      child: Text(widget.report ? 'Report and open case' : 'Block and log', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                     ),
                   ),
                 ),

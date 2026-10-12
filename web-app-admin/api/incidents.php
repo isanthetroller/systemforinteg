@@ -10,6 +10,7 @@ require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../lib/auth.php';
 require_once __DIR__ . '/../lib/records.php';
 require_once __DIR__ . '/../lib/vehicles.php';
+require_once __DIR__ . '/../lib/audit.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -83,6 +84,9 @@ function handleCreateIncident($pdo, $actor) {
 
     $plateNumber = isset($data['plateNumber']) ? strtoupper(trim($data['plateNumber'])) : '';
     $reason = isset($data['reason']) ? trim($data['reason']) : 'Security Verification';
+    // A guard's record-check report (for example an anti-passback refusal). Same case and hold as a block, but the owner is
+    // not sent a "your vehicle was blocked" notice: it is for the admin to review.
+    $isReport = !empty($data['report']);
 
     if ($plateNumber === '') {
         sendResponse(400, null, "Plate number is required to flag vehicle");
@@ -141,16 +145,26 @@ function handleCreateIncident($pdo, $actor) {
         // Security standing is represented by the incident; physical presence is unchanged.
 
         // The registered owner is told (portal notice + e-mail); an unregistered plate has no owner to tell
-        noticeVehicleBlocked($pdo, $plateNumber, $reason, $gatePoint, $caseNumber, (int)$newId);
+        if (!$isReport) {
+            noticeVehicleBlocked($pdo, $plateNumber, $reason, $gatePoint, $caseNumber, (int)$newId);
+        }
 
         $pdo->commit();
 
+        if ($isReport) {
+            auditLog($pdo, $actor, 'record.discrepancy', [
+                'entityType' => 'incident', 'entityId' => (int)$newId, 'plate' => $plateNumber,
+                'detail' => "Case {$caseNumber}: {$reason}" . ($notes !== '' ? " ({$notes})" : ''),
+            ]);
+        }
         sendResponse(201, [
             'id' => (int)$newId,
             'caseNumber' => $caseNumber,
             'plateNumber' => $plateNumber,
             'status' => 'Held'
-        ], "Vehicle {$plateNumber} flagged and held under case {$caseNumber}");
+        ], $isReport
+            ? "Reported. Case {$caseNumber} is open and {$plateNumber} is held until an admin reviews it."
+            : "Vehicle {$plateNumber} flagged and held under case {$caseNumber}");
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         sendResponse(500, null, "Failed to create incident: " . $e->getMessage());
