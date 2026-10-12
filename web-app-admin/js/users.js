@@ -110,6 +110,12 @@
     $('staffRole').value = editing ? user.role : 'guard';
     $('staffBadge').value = editing ? (user.badgeNumber || '') : '';
     $('staffGate').value = editing ? (user.gateAssigned || 'Gate 1 (Main Ingress)') : 'Gate 1 (Main Ingress)';
+    // An account saved with a gate that is no longer offered (the old "Gate 3") must not open blank and save as blank:
+    // match Gate 1 / Gate 2 by number, anything else works at every gate
+    if (editing && $('staffGate').value !== user.gateAssigned) {
+      const n = String(user.gateAssigned || '').match(/gate\s*([12])\b/i);
+      $('staffGate').value = n ? (n[1] === '1' ? 'Gate 1 (Main Ingress)' : 'Gate 2 (Main Egress)') : 'All Gates';
+    }
     $('staffModalTitle').textContent = editing ? `Edit ${user.username}` : 'New Staff Account';
     $('staffModalHint').textContent = editing
       ? 'Username cannot be changed. Use Reset Password to issue a new temporary password.'
