@@ -7,6 +7,7 @@
      note and a time-ordered log of what that guard did (entries, exits, refusals, violations, held vehicles, photos,
      visitor passes). Shifts closed automatically, shifts over 12 hours and scans made while not on duty are flagged.
      The period can be today, yesterday, 7 or 30 days, or any dates, and the list exports to CSV.
+   - The Admin Center "Guard duty" tab is removed (its per-guard counts moved into the Guard Shifts tab). Approvals stays.
    - The mobile app's "Go on duty" / "End shift" buttons already record shifts; no APK change is needed.
   No database change.
 
@@ -34,6 +35,7 @@ $files = @(
     @('web-app-admin/api/shifts.php',     'htdocs/api/shifts.php'),
     @('web-app-admin/js/api.js',          'htdocs/js/api.js'),
     @('web-app-admin/js/shifts.js',       'htdocs/js/shifts.js'),
+    @('web-app-admin/js/center.js',       'htdocs/js/center.js'),
     @('web-app-admin/js/workspace.js',    'htdocs/js/workspace.js'),
     @('web-app-admin/css/workspace.css',  'htdocs/css/workspace.css'),
     @('web-app-admin/index.html',         'htdocs/index.html')

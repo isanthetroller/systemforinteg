@@ -2,18 +2,18 @@
  * SecurePark - Admin Center (admin only)
  *
  * Activity log (who did what, to which record, and why), second-administrator approvals,
- * guard duty (who is on which gate + each guard's activity), and the system settings.
+ * and the system settings. Guard duty (who is on which gate, hours and each guard's activity) has its own
+ * Guard Shifts tab (js/shifts.js).
  * All rules are enforced by the server; this screen only shows and submits.
  */
 (function () {
   const $ = (id) => document.getElementById(id);
   const esc = (v) => (window.SP ? SP.escapeHtml(v == null ? '' : String(v)) : String(v == null ? '' : v));
 
-  const TABS = ['log', 'approvals', 'duty', 'settings'];
+  const TABS = ['log', 'approvals', 'settings'];
   let tab = 'log';
   let logPage = 1;
   let logFilter = { q: '', action: '', from: '', to: '' };
-  let dutyRange = { from: '', to: '' };
   let ticket = 0;
 
   function fmt(value) {
@@ -49,7 +49,7 @@
     const body = $('centerBody');
     body.innerHTML = '<div class="px-4 py-8 text-center text-slate-400 text-xs">Loading…</div>';
     try {
-      const html = await ({ log: renderLog, approvals: renderApprovals, duty: renderDuty, settings: renderSettings }[tab])();
+      const html = await ({ log: renderLog, approvals: renderApprovals, settings: renderSettings }[tab])();
       if (mine !== ticket) return;
       body.innerHTML = html;
       wire();
@@ -139,31 +139,6 @@
       if (window.ApiClient?.isFresh?.()) throw err; SP.showToast(err.message, 'error'); }
   }
 
-  /* ---------------------------------------------------------------- Guard duty */
-  async function renderDuty() {
-    const [now, report] = await Promise.all([ApiClient.getShifts(), ApiClient.getShiftReport(dutyRange.from, dutyRange.to)]);
-    dutyRange = { from: report.from, to: report.to };
-    const onRows = now.onDuty.map(s => `<tr><td class="px-4 py-2.5 font-semibold text-slate-800">${esc(s.guard)}</td><td class="px-4 py-2.5">${esc(s.gate || '—')}</td><td class="px-4 py-2.5 whitespace-nowrap">${fmt(s.startedAt)}</td></tr>`).join('');
-    const pct = (n) => n ? `${n}%` : '—';
-    const repRows = report.guards.map(g => `<tr class="hover:bg-slate-50/60">
-        <td class="px-4 py-2.5 font-semibold text-slate-800">${esc(g.guard)}</td>
-        <td class="px-4 py-2.5">${g.shifts} · ${g.hoursOnDuty} h</td>
-        <td class="px-4 py-2.5">${g.entries}</td><td class="px-4 py-2.5">${g.exits}</td>
-        <td class="px-4 py-2.5 ${g.denialRate >= 25 ? 'text-ncst-crimson font-bold' : ''}">${g.denials} <span class="text-slate-400">(${pct(g.denialRate)})</span></td>
-        <td class="px-4 py-2.5 ${g.manualRate >= 25 ? 'text-amber-700 font-bold' : ''}">${g.manualLookups} <span class="text-slate-400">(${pct(g.manualRate)})</span></td>
-        <td class="px-4 py-2.5">${g.violationsIssued}</td><td class="px-4 py-2.5">${g.photos}</td></tr>`).join('');
-    return `<h2 class="text-sm font-bold text-slate-800">On duty now</h2>
-      ${table(th('Guard') + th('Gate') + th('Since'), onRows || empty(3, 'Nobody has gone on duty.'))}
-      <div class="flex flex-wrap items-end gap-2 pt-2">
-        <h2 class="text-sm font-bold text-slate-800 mr-2">Guard activity</h2>
-        <label class="text-[11px] text-slate-500">From <input id="dutyFrom" type="date" value="${esc(dutyRange.from)}" class="${input}"></label>
-        <label class="text-[11px] text-slate-500">To <input id="dutyTo" type="date" value="${esc(dutyRange.to)}" class="${input}"></label>
-        <button type="button" id="dutyApply" class="${navy}">Show</button>
-      </div>
-      ${table(th('Guard') + th('Shifts') + th('Entries') + th('Exits') + th('Denied') + th('Manual lookups') + th('Violations') + th('Photos'), repRows || empty(8, 'No guard accounts.'))}
-      <p class="text-[11px] text-slate-500">A high share of denied passages or manual plate lookups is worth a conversation: it can mean a trouble spot at the gate, or passes being waved through without a scan.</p>`;
-  }
-
   /* ---------------------------------------------------------------- Settings */
   const HELP = {
     event_gate_mode: 'Normal: Gate 1 entry and Gate 2 exit. Event: entry and exit at both gates. A reason is required when changing mode.',
@@ -185,13 +160,7 @@
           ${s.key === 'event_gate_mode' ? `<select id="set_event_gate_mode" name="event_gate_mode" class="${input}"><option value="0" ${s.value === 0 ? 'selected' : ''}>Normal operation</option><option value="1" ${s.value === 1 ? 'selected' : ''}>Event: both directions at both gates</option></select>` : `<input id="set_${esc(s.key)}" name="${esc(s.key)}" type="number" min="${s.min}" max="${s.max}" step="1" value="${s.value}" class="${input} w-28 text-right">`}
         </div>`).join('')}
         <div class="px-4 py-3"><label for="gateModeReason" class="text-xs font-bold">Reason for changing gate operation</label><input id="gateModeReason" name="reason" maxlength="500" class="${input} w-full" placeholder="Required when switching normal/event operation"></div>
-        <div class="px-4 py-3 flex justify-end"><button type="submit" class="${navy}">Save settings</button></div></form>
-      <div class="bg-white border border-slate-200 rounded-lg shadow-2xs px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2">
-        <div class="flex-1 min-w-0"><div class="text-xs font-bold text-slate-800">E-mail to owners</div>
-          <div class="text-[11px] text-slate-500">Violation and blocked notices, passage alerts and renewal reminders go out by e-mail. Send yourself a test to check that the server can reach the mail account.</div></div>
-        <input id="mailTestTo" type="email" placeholder="you@example.com" aria-label="Send the test e-mail to" class="${input} w-full sm:w-60">
-        <button type="button" id="mailTestBtn" class="${plain}">Send test e-mail</button>
-      </div>`;
+        <div class="px-4 py-3 flex justify-end"><button type="submit" class="${navy}">Save settings</button></div></form>`;
   }
 
   async function saveSettings(form) {
@@ -227,26 +196,7 @@
     }
     document.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', () => decide(Number(b.dataset.approve), true)));
     document.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', () => decide(Number(b.dataset.reject), false)));
-    if ($('dutyApply')) $('dutyApply').addEventListener('click', () => { dutyRange = { from: $('dutyFrom').value, to: $('dutyTo').value }; load(); });
     if ($('settingsForm')) $('settingsForm').addEventListener('submit', (e) => { e.preventDefault(); saveSettings(e.target); });
-    if ($('mailTestBtn')) $('mailTestBtn').addEventListener('click', async () => {
-      const to = $('mailTestTo').value.trim();
-      if (!to) { SP.showToast('Type the address to send the test to.', 'warning'); return; }
-      const btn = $('mailTestBtn');
-      btn.disabled = true;
-      btn.textContent = 'Sending…';
-      try {
-        const res = await ApiClient.sendTestMail(to);
-        SP.showToast(res.message, 'success');
-      } catch (err) {
-      if (window.ApiClient?.isFresh?.()) throw err;
-        if (window.Swal) Swal.fire({ icon: 'error', title: 'The test e-mail did not go out', text: err.message, confirmButtonColor: '#253475' });
-        else SP.showToast(err.message, 'error');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send test e-mail';
-      }
-    });
   }
 
   async function refreshPending() {
@@ -272,8 +222,8 @@
     if (!window.SPAuth?.hasRole('admin')) return;
     if (changed.includes('approvals')) await refreshPending();
     if (!$('centerView').classList.contains('active')) return;
-    const domain = {log:'activity', approvals:'approvals', duty:'shifts', settings:'settings'}[tab];
-    if (!changed.includes(domain) && !(tab === 'duty' && changed.includes('movements'))) return;
+    const domain = {log:'activity', approvals:'approvals', settings:'settings'}[tab];
+    if (!changed.includes(domain)) return;
     if (tab === 'settings' && $('settingsForm')?.dataset.dirty === 'true') { SP.showToast('Settings changed elsewhere. Reload before saving.', 'warning'); return; }
     await load();
   });
