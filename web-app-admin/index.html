@@ -218,7 +218,7 @@
       }
     }
   </style>
-<link rel="stylesheet" href="css/workspace.css?v=20261012d">
+<link rel="stylesheet" href="css/workspace.css?v=20261013j">
 <link rel="stylesheet" href="css/login.css?v=20261007d"></head>
 <body class="sp-auth-pending h-full font-sans text-slate-900 antialiased bg-slate-50 overflow-x-hidden">
   <div id="authLoading" role="status" aria-live="polite">
@@ -393,7 +393,7 @@
               <span id="shiftsSidebarCount" class="sp-sidebar-count hidden" title="Guards on duty now">0</span>
             </button>
 
-            <!-- Admin Center: activity log, approvals, guard duty, settings -->
+            <!-- Admin Center: activity log, approvals, settings -->
             <button type="button" id="navCenterBtn" class="admin-only nav-item w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-semibold text-slate-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer">
               <svg class="w-4 h-4 text-slate-200 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -454,18 +454,33 @@
       <section id="gateView" class="view-panel space-y-4">
         <div class="sp-gate-heading">
           <div><h1 class="text-2xl font-bold tracking-tight text-slate-900">Gate Monitor</h1><p>Check the pass and driver before allowing entry or exit.</p></div>
-          <div id="gateModeToggle" role="radiogroup" aria-label="Choose entry or exit" class="sp-gate-mode">
-            <button type="button" role="radio" data-mode="Ingress" class="gate-mode-btn">Entry</button>
-            <button type="button" role="radio" data-mode="Egress" class="gate-mode-btn">Exit</button>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button type="button" id="gateSoundBtn" class="sp-gate-tool" aria-pressed="true" title="Sound and vibration when a scan is cleared or refused">Scan sound: on</button>
+            <div id="gateModeToggle" role="radiogroup" aria-label="Choose entry or exit" class="sp-gate-mode">
+              <button type="button" role="radio" data-mode="Ingress" class="gate-mode-btn">Entry</button>
+              <button type="button" role="radio" data-mode="Egress" class="gate-mode-btn">Exit</button>
+            </div>
           </div>
         </div>
+
+        <!-- Guard duty (who is on this gate, the previous guard's handover note) and today's numbers: js/guardpost.js -->
+        <div id="gateDutyBar" class="role-guard-only"></div>
+        <div id="gateKpis" class="sp-gate-kpis" aria-label="Today at the gate"></div>
+        <div id="gateTabs" class="sp-gate-tabs" role="tablist" aria-label="Gate monitor sections">
+          <button type="button" role="tab" data-gate-tab="Scan" aria-selected="true">Scan IN / OUT</button>
+          <button type="button" role="tab" data-gate-tab="Visitors" aria-selected="false">Visitors</button>
+          <button type="button" role="tab" data-gate-tab="Cases" aria-selected="false">Cases <span id="gateCasesCount" class="sp-gate-tab-count hidden"></span></button>
+          <button type="button" role="tab" data-gate-tab="Activity" aria-selected="false">Activity</button>
+        </div>
+
+        <div id="gatePaneScan" class="space-y-4" role="tabpanel">
         <ol class="sp-gate-steps" aria-label="Steps for a gate check">
           <li><span>1</span>Check the pass</li><li><span>2</span>Confirm the driver or items</li><li><span>3</span>Save entry or exit</li>
         </ol>
         <div class="sp-gate-layout">
           <div class="sp-gate-main">
             <section class="sp-gate-card sp-gate-scan" aria-labelledby="gateScanTitle">
-              <div class="sp-gate-card-heading"><div><h2 id="gateScanTitle">Check a vehicle</h2><p id="gateModeHint">Checking vehicles at the entry gate</p></div><button type="button" id="gateCameraBtn" class="sp-gate-camera-button">Scan with Camera</button></div>
+              <div class="sp-gate-card-heading"><div><h2 id="gateScanTitle">Check a vehicle</h2><p id="gateModeHint">Checking vehicles at the entry gate</p></div><div class="flex items-center gap-2 flex-wrap"><button type="button" id="gateTorchBtn" class="sp-gate-tool hidden" aria-pressed="false">Flashlight</button><button type="button" id="gateFlipBtn" class="sp-gate-tool hidden">Flip camera</button><button type="button" id="gateCameraBtn" class="sp-gate-camera-button">Scan with Camera</button></div></div>
               <div class="sp-gate-scan-body">
                 <form id="gateManualForm" autocomplete="off">
                   <label for="gateManualInput">Plate number or QR code</label>
@@ -486,6 +501,14 @@
             <section class="sp-gate-card sp-gate-recent" aria-labelledby="gateRecentTitle"><div class="sp-gate-card-heading"><div><h2 id="gateRecentTitle">Recent gate checks</h2><p>Latest 8 saved records</p></div></div><ul id="gateRecentList"></ul></section>
           </aside>
         </div>
+        </div>
+
+        <!-- Visitors: day passes (issue, find, open the QR pass). Scanning a visitor's pass or plate is on the Scan tab. -->
+        <div id="gatePaneVisitors" class="hidden space-y-3" role="tabpanel"></div>
+        <!-- Cases: what is holding vehicles right now; open one to log a contact attempt or add a note. -->
+        <div id="gatePaneCases" class="hidden space-y-3" role="tabpanel"></div>
+        <!-- Activity: every passage with search and filter. -->
+        <div id="gatePaneActivity" class="hidden space-y-3" role="tabpanel"></div>
       </section>
 
       <!-- ==================== VIEW 1: DASHBOARD ==================== -->
@@ -1062,11 +1085,9 @@
             </div>
           </div>
 
-          <!-- Bottom Row: Filter Dropdowns Strip -->
+          <!-- Filter dropdowns: one strip; custom dates / times appear below only when chosen -->
           <div class="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100 text-xs">
             <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Filter by:</span>
-            
-            <!-- Event Type Filter -->
             <select id="auditEventTypeFilter" aria-label="Event type" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
               <option value="All">All Event Types</option>
               <option value="Entry">Entry Recorded</option>
@@ -1075,15 +1096,11 @@
               <option value="EntryDenied">Entry Denied</option>
               <option value="SecurityHold">Security Holds &amp; Alerts</option>
             </select>
-
-            <!-- Gate Filter -->
             <select id="auditGateFilter" aria-label="Gate" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
               <option value="All">All Gates</option>
               <option value="Gate 1">Gate 1</option>
               <option value="Gate 2">Gate 2</option>
             </select>
-
-            <!-- Date Filter -->
             <select id="auditDateFilter" aria-label="Date preset" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
               <option value="All">All Dates</option>
               <option value="Today">Today</option>
@@ -1093,6 +1110,18 @@
               <option value="ThisMonth">This Month</option>
               <option value="Custom">Custom Dates</option>
             </select>
+            <select id="auditTimePreset" aria-label="Time of day" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors">
+              <option value="">All day</option>
+              <option value="06:00-12:00">Morning (6 AM to 12 PM)</option>
+              <option value="12:00-18:00">Afternoon (12 PM to 6 PM)</option>
+              <option value="18:00-22:00">Evening (6 PM to 10 PM)</option>
+              <option value="22:00-06:00">Overnight (10 PM to 6 AM)</option>
+              <option value="custom">Custom time…</option>
+            </select>
+            <select id="auditOfficerFilter" aria-label="Officer" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors"><option value="">All officers</option></select>
+            <select id="auditSourceFilter" aria-label="Recorded through" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors"><option value="All">Online &amp; offline</option><option value="online">Online only</option><option value="offline">Synced from offline</option></select>
+            <select id="auditSortFilter" aria-label="Sort by" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select>
+            <select id="auditPageSize" aria-label="Rows per page" class="h-8 px-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-white text-slate-700 font-medium text-xs focus:outline-none focus:border-ncst-navy cursor-pointer transition-colors"><option value="10">10 rows</option><option value="25" selected>25 rows</option><option value="50">50 rows</option><option value="100">100 rows</option></select>
 
             <!-- Reset Filters Button -->
             <button type="button" id="auditResetFiltersBtn" class="hidden h-8 px-2.5 rounded-md border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1">
@@ -1101,21 +1130,23 @@
             </button>
           </div>
 
-        </div>
-
-        <div class="gate-record-date-panel bg-white rounded-lg border border-slate-200 p-3 shadow-xs">
-          <div class="gate-record-filter-grid">
-            <label>From date<input id="auditDateFrom" type="date" min="1000-01-01" max="9999-12-30" class="gate-record-input"></label>
-            <label>To date<input id="auditDateTo" type="date" min="1000-01-01" max="9999-12-30" class="gate-record-input"></label>
-            <label>From time<input id="auditTimeFrom" type="time" step="60" class="gate-record-input"></label>
-            <label>To time<input id="auditTimeTo" type="time" step="60" class="gate-record-input"></label>
-            <label>Officer<select id="auditOfficerFilter" aria-label="Officer" class="gate-record-input"><option value="">All officers</option></select></label>
-            <label>Recorded through<select id="auditSourceFilter" aria-label="Recorded through" class="gate-record-input"><option value="All">Online &amp; offline</option><option value="online">Online</option><option value="offline">Synced from offline</option></select></label>
-            <label>Sort by<select id="auditSortFilter" aria-label="Sort by" class="gate-record-input"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
-            <label>Rows per page<select id="auditPageSize" aria-label="Rows per page" class="gate-record-input"><option value="10">10</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+          <div id="auditCustomRow" class="hidden flex items-end gap-x-3 gap-y-2 flex-wrap text-[11px] font-semibold text-slate-600">
+            <span id="auditCustomDates" class="hidden flex items-end gap-2">
+              <label class="flex flex-col gap-1">From date<input id="auditDateFrom" type="date" min="1000-01-01" max="9999-12-30" class="gate-record-input"></label>
+              <label class="flex flex-col gap-1">To date<input id="auditDateTo" type="date" min="1000-01-01" max="9999-12-30" class="gate-record-input"></label>
+            </span>
+            <span id="auditCustomTimes" class="hidden flex items-end gap-2">
+              <label class="flex flex-col gap-1">From time<input id="auditTimeFrom" type="time" step="60" class="gate-record-input"></label>
+              <label class="flex flex-col gap-1">To time<input id="auditTimeTo" type="time" step="60" class="gate-record-input"></label>
+            </span>
           </div>
-          <p id="auditTimeHint" class="text-xs text-slate-500 mt-2">All dates and times use Manila time (UTC+8). Time filters apply to each selected date; 22:00–06:00 includes late evening and early morning.</p>
-          <div class="flex items-center gap-2 mt-2"><p id="auditFilterMessage" role="status" aria-live="polite" class="text-xs text-slate-600"></p><button id="auditFilterRetryBtn" type="button" class="hidden text-xs font-semibold underline">Retry</button></div>
+
+          <div class="flex items-center gap-x-2 gap-y-0.5 flex-wrap text-[11px] text-slate-500">
+            <p id="auditFilterMessage" role="status" aria-live="polite" class="text-slate-600"></p>
+            <button id="auditFilterRetryBtn" type="button" class="hidden font-semibold underline">Retry</button>
+            <span id="auditTimeHint" title="Time filters apply to each selected date; 22:00 to 06:00 includes late evening and early morning.">· Dates and times are Manila time (UTC+8).</span>
+          </div>
+
         </div>
 
         <!-- Full Audit Table with Institutional Header -->
@@ -1218,7 +1249,6 @@
                   <option value="Faculty">Faculty</option>
                   <option value="Staff">Staff</option>
                   <option value="Student" selected>Student</option>
-                  <option value="Visitor">Visitor</option>
                 </select>
               </div>
 
@@ -1399,7 +1429,7 @@
         <!-- RIGHT: Digital Gate Pass & QR Creation Technology Panel -->
         <div class="lg:col-span-5 space-y-4 lg:sticky lg:top-4">
           
-          <div class="sp-preview-heading"><h2>Pass preview</h2><p>Sample details appear until you complete the form.</p></div>
+          <div class="sp-preview-heading"><h2>Pass preview</h2><p>Sample details appear until you complete the form. This is a preview only, not a valid pass.</p></div>
           <!-- Pass Hologram Decal Container -->
           <div id="printableGatePass" class="bg-white rounded-xl border border-slate-300 shadow-sm overflow-hidden transition-all">
             
@@ -1428,23 +1458,17 @@
                 </div>
               </div>
 
-              <!-- QR Code (Direct, Sized Up with Zoom Control) -->
+              <!-- No QR here: the signed pass is created by the server when the fee is paid (or at once for free / VIP passes) -->
               <div class="flex flex-col items-center justify-center py-2">
-                <div class="relative p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
-                  <div id="qrCodeContainer" class="w-[220px] h-[220px] flex items-center justify-center overflow-hidden cursor-pointer rounded-lg border border-slate-100 hover:border-ncst-navy/40 transition-all p-1" title="Official scannable QR gate pass">
-                    <!-- Rendered by QRCode library -->
-                  </div>
-                </div>
-                <p class="mt-1.5 text-[10px] text-slate-500 text-center max-w-[220px]">Scannable official QR pass — click or tap to enlarge.</p>
-                <button type="button" id="zoomPreviewQrBtn" class="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white hover:bg-ncst-navy hover:text-white text-slate-700 text-xs font-semibold border border-slate-300 transition-all shadow-2xs cursor-pointer">
-                  <svg class="w-3.5 h-3.5 text-ncst-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    <line x1="11" y1="8" x2="11" y2="14"></line>
-                    <line x1="8" y1="11" x2="14" y2="11"></line>
+                <div id="qrCodeContainer" class="hidden" aria-hidden="true"></div>
+                <div id="qrPendingNote" class="w-[220px] min-h-[150px] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 px-4 py-5 text-center">
+                  <svg class="w-8 h-8 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect>
+                    <path d="M14 14h3v3h-3zM20 14v.01M14 20v.01M20 20v.01"></path>
                   </svg>
-                  <span>Zoom / Enlarge QR Code</span>
-                </button>
+                  <div class="text-xs font-bold text-slate-700">QR pass is issued after payment</div>
+                  <p class="text-[11px] text-slate-500 leading-snug">It is signed by the server and appears in the vehicle record once the fee is paid. Free and VIP passes are issued when you save.</p>
+                </div>
               </div>
 
               <!-- Attached Personnel Thumbnails -->
@@ -1500,38 +1524,7 @@
                 </div>
               </div>
 
-              <!-- Gate Pass Action Buttons -->
-              <div class="space-y-2 pt-1">
-                <!-- Primary Action: Save Full Pass Badge with Attached Photo & QR -->
-                <button type="button" id="downloadPassBadgeBtn" class="w-full px-3.5 py-2.5 rounded-md bg-ncst-navy hover:bg-ncst-navyDark text-xs font-bold text-white shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer">
-                  <svg class="w-4 h-4 text-ncst-gold flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                    <polyline points="21 15 16 10 5 21"></polyline>
-                  </svg>
-                  <span>Save Gate Pass with Photo (PNG)</span>
-                </button>
-
-                <div class="flex items-center gap-2">
-                  <button type="button" id="downloadQrBtn" class="flex-1 px-3 py-1.5 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-[11px] font-semibold text-slate-700 shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer">
-                    <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="7 10 12 15 17 10"></polyline>
-                      <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
-                    <span>Save QR Only</span>
-                  </button>
-                  
-                  <button type="button" id="printGatePassBtn" class="flex-1 px-3 py-1.5 rounded-md bg-white border border-slate-300 hover:bg-slate-50 text-[11px] font-semibold text-slate-700 shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer">
-                    <svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="6 9 6 2 18 2 18 9"></polyline>
-                      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-                      <rect x="6" y="14" width="12" height="8"></rect>
-                    </svg>
-                    <span>Print Pass</span>
-                  </button>
-                </div>
-              </div>
+              <p class="text-[11px] text-slate-500 text-center pt-1">After saving, print the pass from the vehicle record. Only the signed pass is valid at the gate.</p>
 
             </div>
           </div>
@@ -1570,7 +1563,7 @@
                   <th scope="col" class="text-left font-bold px-4 py-2.5">Assigned Gate</th>
                   <th scope="col" class="text-left font-bold px-4 py-2.5">Status</th>
                   <th scope="col" class="text-left font-bold px-4 py-2.5">Last Login</th>
-                  <th scope="col" class="text-right font-bold px-4 py-2.5">Actions</th>
+                  <th scope="col" class="text-center font-bold px-4 py-2.5">Actions</th>
                 </tr>
               </thead>
               <tbody id="staffTableBody" class="divide-y divide-slate-100">
@@ -1760,19 +1753,18 @@
         </div>
       </section>
 
-      <!-- ==================== ADMIN CENTER: activity log, approvals, guard duty, settings ==================== -->
+      <!-- ==================== ADMIN CENTER: activity log, approvals, settings ==================== -->
       <section id="centerView" class="admin-only view-panel space-y-4">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div>
             <h1 class="text-2xl font-bold tracking-tight text-slate-900">Admin Center</h1>
-            <p class="text-xs text-slate-500 mt-1">Who did what and why, requests waiting for a second administrator, guard duty and system settings</p>
+            <p class="text-xs text-slate-500 mt-1">Who did what and why, requests waiting for a second administrator, and system settings</p>
           </div>
           <button type="button" id="centerRefreshBtn" class="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors cursor-pointer self-start sm:self-auto">Refresh</button>
         </div>
         <div class="flex border-b border-slate-200 overflow-x-auto" role="tablist" aria-label="Admin Center sections">
           <button type="button" role="tab" id="centerTabLog" data-tab="log" class="px-3.5 py-2 text-xs font-bold border-b-2 whitespace-nowrap cursor-pointer">Activity log</button>
           <button type="button" role="tab" id="centerTabApprovals" data-tab="approvals" class="px-3.5 py-2 text-xs font-bold border-b-2 whitespace-nowrap cursor-pointer">Approvals <span id="centerApprovalsCount" class="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] hidden">0</span></button>
-          <button type="button" role="tab" id="centerTabDuty" data-tab="duty" class="px-3.5 py-2 text-xs font-bold border-b-2 whitespace-nowrap cursor-pointer">Guard duty</button>
           <button type="button" role="tab" id="centerTabSettings" data-tab="settings" class="px-3.5 py-2 text-xs font-bold border-b-2 whitespace-nowrap cursor-pointer">Settings</button>
         </div>
         <div id="centerBody" class="space-y-3"></div>
@@ -2224,13 +2216,12 @@
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
-            <div>
+            <div id="editOwnerRoleField">
               <label for="editOwnerRole" class="block font-medium text-slate-700 mb-1">Affiliation <span class="text-rose-500">*</span></label>
               <select id="editOwnerRole" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
                 <option value="Faculty">Faculty</option>
                 <option value="Staff">Staff</option>
                 <option value="Student">Student</option>
-                <option value="Visitor">Visitor</option>
                 <option value="VIP">VIP</option>
               </select>
             </div>
@@ -2246,7 +2237,8 @@
             </div>
 
             <div>
-              <label for="editOwnerIdNumber" class="block font-medium text-slate-700 mb-1">Institutional ID <span class="text-rose-500">*</span></label>
+              <label for="editOwnerIdNumber" class="block font-medium text-slate-700 mb-1"><span id="editOwnerIdLabel">Institutional ID</span> <span class="text-rose-500">*</span></label>
+              <p id="editOwnerIdAutoNote" class="hidden text-[11px] text-slate-500 mb-1">Generated for this VIP. It is also their portal login ID.</p>
               <input type="text" id="editOwnerIdNumber" placeholder="NCST-2024-05182" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
             </div>
 
@@ -2255,17 +2247,17 @@
               <input type="text" id="editOwnerFullName" placeholder="Juan C. Dela Cruz" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
             </div>
 
-            <div>
+            <div id="editDepartmentField">
               <label for="editDepartment" class="block font-medium text-slate-700 mb-1">Department / Course <span class="text-rose-500">*</span></label>
               <input type="text" id="editDepartment" placeholder="BS Information Technology" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy" required>
             </div>
 
             <div>
-              <label for="editOwnerPhone" class="block font-medium text-slate-700 mb-1">Contact Phone</label>
+              <label for="editOwnerPhone" class="block font-medium text-slate-700 mb-1">Contact Phone <span id="editOwnerPhoneReq" class="text-rose-500 hidden">*</span></label>
               <input type="text" id="editOwnerPhone" placeholder="0927 910 0511" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 font-mono focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
             </div>
 
-            <div>
+            <div id="editOwnerEmailField">
               <label for="editOwnerEmail" class="block font-medium text-slate-700 mb-1">Email Address</label>
               <input type="email" id="editOwnerEmail" placeholder="user@ncst.edu.ph" class="w-full px-3 py-2 rounded-md border border-slate-300 text-xs text-slate-800 focus:ring-1 focus:ring-ncst-navy focus:border-ncst-navy">
             </div>
@@ -2733,6 +2725,7 @@
           <label for="flagNotes" class="block text-[11px] font-bold text-slate-600 mb-1">Notes</label>
           <textarea id="flagNotes" rows="3" class="w-full px-3 py-2 rounded-md border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-ncst-navy/30" placeholder="What happened, where and when?"></textarea>
         </div>
+        <div id="flagPhotoSlot"></div>
         <p id="flagHoldHint" class="text-[11px] font-semibold text-ncst-crimson bg-ncst-crimsonLight border border-ncst-crimson/30 rounded px-2.5 py-1.5"></p>
         <p id="flagError" class="hidden text-[11px] font-semibold text-ncst-crimson bg-ncst-crimsonLight border border-ncst-crimson/30 rounded px-2.5 py-1.5" role="alert"></p>
         <div class="flex items-center justify-end gap-2 pt-1">
@@ -2909,8 +2902,8 @@
   <!-- Scripts -->
   <script src="js/qrcode.min.js?v=20260930c"></script>
   <script src="js/data.js?v=20260930c"></script>
-  <script src="js/api.js?v=20261012b"></script>
-  <script src="js/inputs.js?v=20261012b"></script>
+  <script src="js/api.js?v=20261013a"></script>
+  <script src="js/inputs.js?v=20261013a"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script>window.Swal || document.write('<script src="js/sweetalert2.all.min.js?v=20260930c"><\/script>');</script>
   <script>
@@ -2942,17 +2935,19 @@
   <script src="js/login.js?v=20261007a"></script>
   <script src="js/live.js?v=20261011audit"></script>
   <script src="js/auth.js?v=20261007g"></script>
-  <script src="js/app.js?v=20261012d"></script>
-  <script src="js/users.js?v=20261012b"></script>
+  <script src="js/app.js?v=20261013d"></script>
+  <script src="js/users.js?v=20261013a"></script>
   <script src="js/payments.js?v=20261012a"></script>
   <script src="js/ops.js?v=20261011dashboard1"></script>
   <script src="js/cases.js?v=20261012b"></script>
-  <script src="js/center.js?v=20261012a"></script>
-  <script src="js/shifts.js?v=20261012b"></script>
+  <script src="js/center.js?v=20261013a"></script>
+  <script src="js/shifts.js?v=20261013c"></script>
   <script src="js/cctv.js?v=20261007a"></script>
   <script src="js/cctvclip.js?v=20261007f"></script>
-  <script src="js/gate.js?v=20261012b"></script>
-  <script src="js/violations.js?v=20261009a"></script>
+  <script src="js/guardtools.js?v=20261013a"></script>
+  <script src="js/gate.js?v=20261013a"></script>
+  <script src="js/guardpost.js?v=20261013a"></script>
+  <script src="js/violations.js?v=20261013a"></script>
   <script src="js/overnight.js?v=20261009a"></script>
   <script src="js/visitors.js?v=20261012a"></script>
   <script src="js/oncampus.js?v=20261009a"></script>

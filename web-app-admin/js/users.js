@@ -63,14 +63,32 @@
         <td class="px-4 py-2.5">${statusBadge(u)}</td>
         <td class="px-4 py-2.5 whitespace-nowrap">${formatDateTime(u.lastLogin)}</td>
         <td class="px-4 py-2.5">
-          <div class="flex items-center justify-end gap-1.5">
-            <button type="button" data-act="edit" class="sp-btn sp-btn-sm sp-btn-secondary">Edit</button>
-            <button type="button" data-act="reset" class="sp-btn sp-btn-sm sp-btn-secondary">Reset Password</button>
-            ${isSelf ? '' : (u.status === 'Active'
-              ? '<button type="button" data-act="deactivate" class="sp-btn sp-btn-sm sp-btn-danger">Deactivate</button>'
-              : '<button type="button" data-act="activate" class="sp-btn sp-btn-sm sp-btn-success">Activate</button>')}
+          <div class="flex items-center justify-end">
+            <div class="relative inline-block text-left overflow-menu-container">
+              <button type="button" class="overflow-menu-btn sp-btn sp-btn-sm sp-btn-secondary" aria-haspopup="true" aria-expanded="false" title="Account actions">
+                <span>Manage</span>
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
+              <div class="overflow-menu-dropdown hidden absolute right-0 mt-1 w-48 rounded-lg bg-white border border-slate-200 shadow-lg py-1 z-30" role="menu">
+                <button type="button" role="menuitem" data-act="edit" class="w-full px-3 py-2 text-slate-700 hover:bg-slate-50 text-left text-xs font-medium cursor-pointer">Edit account</button>
+                <button type="button" role="menuitem" data-act="reset" class="w-full px-3 py-2 text-slate-700 hover:bg-slate-50 text-left text-xs font-medium cursor-pointer">Reset password</button>
+                ${isSelf ? '' : (u.status === 'Active'
+                  ? '<button type="button" role="menuitem" data-act="deactivate" class="w-full px-3 py-2 border-t border-slate-100 text-rose-700 hover:bg-rose-50 text-left text-xs font-medium cursor-pointer">Deactivate account</button>'
+                  : '<button type="button" role="menuitem" data-act="activate" class="w-full px-3 py-2 border-t border-slate-100 text-emerald-700 hover:bg-emerald-50 text-left text-xs font-medium cursor-pointer">Activate account</button>')}
+              </div>
+            </div>
           </div>
         </td>`;
+      // Open / close the Manage menu (layers.js positions it above the table); choosing an item closes it
+      const menu = tr.querySelector('.overflow-menu-dropdown');
+      const menuBtn = tr.querySelector('.overflow-menu-btn');
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const opening = menu.classList.contains('hidden');
+        document.querySelectorAll('#staffTableBody .overflow-menu-dropdown').forEach(d => d.classList.add('hidden'));
+        if (opening) menu.classList.remove('hidden');
+      });
+      menu.addEventListener('click', () => menu.classList.add('hidden'));
       tr.querySelector('[data-act="edit"]').addEventListener('click', () => openModal(u));
       tr.querySelector('[data-act="reset"]').addEventListener('click', () => resetPassword(u));
       const toggle = tr.querySelector('[data-act="deactivate"], [data-act="activate"]');

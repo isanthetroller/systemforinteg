@@ -29,21 +29,24 @@
     return m ? m[1] + '-' + m[2] + '-' + m[3] : null;
   }
 
-  /** What the phone field shows while the user types: only digits (and a leading +), capped, grouped. */
+  /**
+   * What the phone field shows while the user types: a Philippine mobile number that starts with 09 (0927 910 0511) or
+   * +63 (+63 927 910 0511). A number typed without the 0 (927...) gets it; digits that cannot start a mobile number are dropped.
+   */
   function formatPhoneLive(value) {
     const plus = String(value).trim().startsWith('+');
     let d = String(value).replace(/\D/g, '');
-    const international = plus || d.startsWith('63');
-    if (international) {
+    if (plus || d.startsWith('6')) {
+      if (d.length > 1 && d[1] !== '3') d = d.slice(0, 1);          // 63...
+      if (d.length > 2 && d[2] !== '9') d = d.slice(0, 2);          // 639...
       d = d.slice(0, 12);
       return '+' + [d.slice(0, 2), d.slice(2, 5), d.slice(5, 8), d.slice(8, 12)].filter(Boolean).join(' ');
     }
-    if (d.startsWith('0')) {
-      d = d.slice(0, 11);
-      return [d.slice(0, 4), d.slice(4, 7), d.slice(7, 11)].filter(Boolean).join(' ');
-    }
-    d = d.slice(0, 10);
-    return [d.slice(0, 3), d.slice(3, 6), d.slice(6, 10)].filter(Boolean).join(' ');
+    if (d.startsWith('9')) d = '0' + d;
+    if (!d.startsWith('0')) return '';
+    if (d.length > 1 && d[1] !== '9') d = '0';                      // 09...
+    d = d.slice(0, 11);
+    return [d.slice(0, 4), d.slice(4, 7), d.slice(7, 11)].filter(Boolean).join(' ');
   }
 
   /** What the license field shows while the user types: one letter first, then digits only, grouped as X99-99-999999. */
@@ -109,7 +112,7 @@
     const el = e.target;
     if (!(el instanceof HTMLInputElement)) return;
     const k = kind(el);
-    if (k === 'phone') { el.inputMode = 'tel'; el.autocomplete = 'off'; }
+    if (k === 'phone') { el.inputMode = 'tel'; el.autocomplete = 'off'; if (!el.value && !el.readOnly) el.value = '09'; }   // start the number for them
     if (k === 'license') { el.autocomplete = 'off'; el.setAttribute('autocapitalize', 'characters'); }
   });
 
@@ -129,6 +132,7 @@
     const k = kind(el);
     if (!k) return;
     el.dataset.touched = '1';
+    if (k === 'phone' && /^(09?|\+(6|63)?)$/.test(el.value.trim())) el.value = '';   // only the starter was left: leave the field empty
     const n = normalize(k, el.value);
     if (n === null) { show(el, message(k)); return; }
     if (n !== '' || k === 'license') el.value = n;   // tidy a valid value to the stored format

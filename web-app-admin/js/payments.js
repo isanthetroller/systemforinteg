@@ -446,7 +446,7 @@
       table{width:100%;border-collapse:collapse;font-size:13px}td{padding:5px 0;border-bottom:1px dashed #cbd5e1}.k{color:#64748b;width:38%}.v{font-weight:600;text-align:right}
       .foot{margin-top:18px;font-size:11px;color:#64748b;text-align:center}</style></head><body>
       <h1>NCST SecurePark</h1><p>${p.purpose === 'Renewal' ? 'Pass renewal' : 'Vehicle registration fee'} – official receipt</p>
-      <table>${rows}</table><div class="foot">Keep this receipt. Your QR pass is available in the SecurePark student portal.</div>
+      <table>${rows}</table><div class="foot">Keep this receipt. Your QR pass is available in the SecurePark owner portal.</div>
       <script>window.onload=function(){window.print();}<\/script></body></html>`);
     w.document.close();
   }

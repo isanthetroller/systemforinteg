@@ -239,10 +239,7 @@
 .sp-incident-filters { padding:20px 24px; display:grid; grid-template-columns:minmax(0,1fr) 200px; gap:16px; border-bottom:1px solid var(--workspace-line); }
 .sp-incident-filters label { display:block; margin-bottom:8px; }
 .sp-incident-filters input, .sp-incident-filters select { width:100%; padding:10px 14px; border:1px solid #d7deea; }
-:is(#vehiclesView,#visitorsView) .sp-filter-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
-:is(#vehiclesView,#visitorsView) .sp-filter-grid > div:first-child { grid-column:1 / -1; }
-:is(#vehiclesView,#visitorsView) .sp-filter-grid > div:last-child:has(button) { grid-column:1 / -1; justify-self:start; }
-:is(#vehiclesView,#visitorsView) > .bg-white:first-of-type { padding:22px; }
+:is(#vehiclesView,#visitorsView) > .bg-white:first-of-type { padding:14px 16px; }
 :is(#vehiclesView,#visitorsView) > div:first-child > div > .flex { flex-wrap:wrap; }
 .view-panel button:disabled { cursor:not-allowed; box-shadow:none; }
 .view-panel button:not(:disabled), .view-panel a { transition:background-color .18s ease,border-color .18s ease,color .18s ease; }
@@ -266,13 +263,12 @@
 #ocTableCard { border-radius:16px; border-color:var(--workspace-line); }
 #violWatchList { max-height:320px; overflow:auto; }
 .view-panel .bg-ncst-gold { background:#fff3d1; color:#745217; }
-@media (max-width:1199px) { :is(#vehiclesView,#visitorsView) .sp-filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:1023px) { #accountView > .grid { grid-template-columns:minmax(0,1fr); } #accountView > .grid > div { position:static; } }
 @media (max-width:639px) {
   .sp-dashboard-alerts > div:first-child { padding:18px; gap:12px; flex-wrap:wrap; }
   .sp-incident-filters { padding:18px; grid-template-columns:minmax(0,1fr); }
-  :is(#vehiclesView,#visitorsView) .sp-filter-grid { grid-template-columns:minmax(0,1fr); }
-  :is(#vehiclesView,#visitorsView) > .bg-white:first-of-type { padding:18px; }
+  :is(#vehiclesView,#visitorsView) > .bg-white:first-of-type { padding:14px; }
+  :is(#vehiclesView,#visitorsView) .sp-filter-grid > div { flex:1 1 100% !important; }
   :is(#auditView,#onCampusView,#violationsView) > .grid > div { padding:16px; }
   #ocFilter { display:flex; width:100%; gap:4px; }
   #ocFilter > button { flex:1; white-space:nowrap; min-height:40px; }
@@ -315,12 +311,15 @@
 #gateView h2 { font-size:14px; letter-spacing:0; text-transform:none; }
 #gateView > .grid > div:first-child > .bg-white { padding:20px; }
 
-#staffView table { min-width:1040px; }
+#staffView table { min-width:900px; }
 #staffView td:nth-child(1) { min-width:150px; }
 #staffView td:nth-child(4) { white-space:nowrap; }
 #staffView td:nth-child(6) { min-width:145px; }
-#staffView td:last-child { min-width:200px; }
-#staffView td:last-child .flex { flex-wrap:wrap; gap:6px; }
+/* Staff accounts: one compact "Manage" button, centred in a narrow Actions column */
+#staffView :is(th,td):last-child:not([colspan]) { width:120px; min-width:120px; padding:8px 14px; text-align:center; }
+#staffView td:last-child .flex { justify-content:center; }
+#staffView td { padding-top:11px; padding-bottom:11px; }
+#staffView td:last-child .sp-btn { min-height:34px; padding:0 12px; gap:6px; }
 
 @media (max-height:740px) { #appSidebar nav > div + div { margin-top:10px; } }
 
@@ -613,10 +612,6 @@
 /* Visitor Day Passes has only two filters: Reset Filters sits in the same row as Pass Status and Date Scope on wide
    screens (the Vehicle Directory has four filters, so its Reset stays on its own row). On narrower screens it keeps
    taking its own row. */
-@media (min-width:1200px) {
-  #visitorsView .sp-filter-grid > div:last-child:has(button) { grid-column:auto; align-self:end; justify-self:start; }
-  #visitorsView #resetVisitorFiltersBtn { height:44px; padding-left:18px; padding-right:18px; }
-}
 
 /* ---- Field checks (js/inputs.js): the message under a phone / license field, and the red border ---- */
 .sp-field-error { margin:4px 0 0; color:#b42336; font-size:11px; line-height:1.45; }
@@ -624,10 +619,77 @@
 input[aria-invalid="true"] { border-color:#b42336 !important; }
 
 /* ---- Guard Shifts timeline (js/shifts.js) ---- */
-.sh-bar { position:absolute; top:8px; bottom:8px; min-width:4px; border:0; border-radius:5px; cursor:pointer; opacity:.92; box-shadow:0 1px 2px rgba(15,23,42,.25); transition:opacity .15s, transform .15s; }
-.sh-bar:hover, .sh-bar:focus-visible { opacity:1; transform:scaleY(1.12); outline:2px solid #0f172a; outline-offset:1px; }
-.sh-auto { background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.55) 0 4px, transparent 4px 8px) !important; }
+.sh-bar { position:absolute; min-width:4px; border:0; cursor:pointer; opacity:.95; box-shadow:0 1px 2px rgba(15,23,42,.25); transition:opacity .15s, transform .15s; }
+.sh-bar:hover, .sh-bar:focus-visible { opacity:1; transform:translateY(-1px); outline:2px solid #0f172a; outline-offset:1px; z-index:5; }
+.sh-seg { display:flex; align-items:center; overflow:hidden; padding:0 8px; color:#fff; font-size:11px; font-weight:700; line-height:1; white-space:nowrap; text-align:left; }
+.sh-seg-text { overflow:hidden; text-overflow:ellipsis; text-shadow:0 1px 1px rgba(0,0,0,.35); }
+.sh-grid { background-image:repeating-linear-gradient(to right, #e6ebf3 0 1px, transparent 1px 12.5%); }
+.sh-auto { background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.4) 0 4px, transparent 4px 8px) !important; }
 .sh-long { box-shadow:0 0 0 2px #e11d48, 0 1px 2px rgba(15,23,42,.25); }
-.sh-open { background-image:linear-gradient(90deg, rgba(255,255,255,0) 60%, rgba(255,255,255,.45)); animation:sh-pulse 2s ease-in-out infinite; }
-@keyframes sh-pulse { 50% { opacity:.65; } }
+.sh-open { background-image:linear-gradient(90deg, rgba(255,255,255,0) 60%, rgba(255,255,255,.4)); animation:sh-pulse 2s ease-in-out infinite; }
+@keyframes sh-pulse { 50% { opacity:.7; } }
 @media (prefers-reduced-motion:reduce) { .sh-open { animation:none; } }
+
+/* ---- Compact filter toolbars (Vehicle Directory, Visitor Day Passes, Gate Records) ----
+   Search, dropdowns and the reset button sit on one row with smaller controls; the rows wrap on narrow screens. */
+:is(#vehiclesView,#visitorsView) .sp-filter-grid { display:flex; flex-direction:row; flex-wrap:wrap; align-items:flex-end; gap:10px 12px; }
+:is(#vehiclesView,#visitorsView) .sp-filter-grid > div { flex:0 1 150px; width:auto; min-width:0; }
+:is(#vehiclesView,#visitorsView) .sp-filter-grid > div:first-child { flex:1 1 260px; min-width:200px; grid-column:auto; }
+:is(#vehiclesView,#visitorsView) .sp-filter-grid > div:last-child:has(button) { flex:0 0 auto; }
+:is(#vehiclesView,#visitorsView) .sp-filter-grid label { margin-bottom:4px; font-size:10.5px; }
+:is(#vehiclesView,#visitorsView) .sp-filter-grid :is(input,select) { min-height:36px; height:36px; font-size:13px; border-radius:8px; }
+:is(#vehiclesView,#visitorsView) .sp-filter-grid button { min-height:36px; height:36px; padding:0 12px; font-size:12px; border-radius:8px; white-space:nowrap; }
+#auditView > .bg-white:has(#auditPillsContainer) { padding:12px 14px; }
+#auditView .audit-filter-pill { min-height:30px; padding:0 12px; font-size:12px; border-radius:8px; }
+#auditView #fullAuditSearchInput { min-height:34px; height:34px; font-size:13px; border-radius:8px; }
+#auditView > .bg-white > div.flex:has(select) { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+#auditView > .bg-white > div.flex:has(select) > select { flex:0 0 auto; width:auto; min-width:0; min-height:32px; height:32px; font-size:12px; border-radius:8px; }
+#auditView #auditResetFiltersBtn { min-height:32px; height:32px; padding:0 10px; font-size:12px; border-radius:8px; }
+/* Page-header actions (Register Vehicle, Export CSV, New Day Pass...) */
+.view-panel > div:first-child button { min-height:36px; padding:6px 14px; font-size:12px; }
+#auditView #auditCustomRow .gate-record-input { width:auto; min-height:32px; height:32px; font-size:12px; border-radius:8px; }
+#auditView #auditCustomRow label { font-size:11px; }
+
+/* ---- Guard post inside the Gate Monitor (js/guardpost.js): duty, today's numbers, sub-tabs, visitors / cases / activity ---- */
+body:not(.role-guard) .role-guard-only { display:none; }
+.sp-gate-tool { display:inline-flex; align-items:center; justify-content:center; min-height:34px; padding:0 12px; border:1px solid #d6deeb; border-radius:8px; background:#fff; color:#253475; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.sp-gate-tool:hover { background:#f7f9fe; }
+.sp-gate-tool[aria-pressed="false"]:not(#gateTorchBtn) { color:#60708b; }
+.sp-gate-tool-primary { background:#253475; border-color:#253475; color:#fff; }
+.sp-gate-tool-primary:hover { background:#1b275b; }
+.sp-duty { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 14px; border-radius:12px; border:1px solid; }
+.sp-duty-on { background:#edf7f1; border-color:#d3e9dc; }
+.sp-duty-off { background:#fff7e6; border-color:#f1d9a3; }
+.sp-duty-title { font-size:13px; font-weight:700; color:#17233f; }
+.sp-duty-select { min-height:34px; padding:0 10px; border:1px solid #d6deeb; border-radius:8px; background:#fff; font-size:12px; }
+.sp-duty-note { margin-top:8px; padding:10px 14px; border-radius:12px; border:1px solid #cfe0f3; background:#f0f6fd; font-size:12px; color:#17233f; }
+.sp-duty-note p { margin:4px 0 6px; white-space:pre-wrap; }
+.sp-duty-note button { font-size:11px; font-weight:700; color:#253475; text-decoration:underline; cursor:pointer; }
+.sp-gate-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+.sp-gate-kpi { padding:10px 14px; border:1px solid var(--workspace-line); border-radius:12px; background:#fff; }
+.sp-gate-kpi div { font-size:11px; font-weight:600; color:#60708b; }
+.sp-gate-kpi strong { display:block; margin-top:2px; font-family:"JetBrains Mono",monospace; font-size:22px; color:#17233f; }
+.sp-gate-kpi.ok strong { color:#166534; }
+.sp-gate-kpi.bad strong { color:#b42336; }
+.sp-gate-tabs { display:flex; gap:4px; border-bottom:1px solid var(--workspace-line); overflow-x:auto; }
+.sp-gate-tabs button { padding:10px 16px; font-size:13px; font-weight:600; color:#60708b; border-bottom:3px solid transparent; margin-bottom:-1px; white-space:nowrap; cursor:pointer; }
+.sp-gate-tabs button[aria-selected="true"] { color:#253475; border-bottom-color:#253475; }
+.sp-gate-tab-count { display:inline-block; min-width:18px; padding:0 5px; margin-left:4px; border-radius:9px; background:#b42336; color:#fff; font-size:10px; font-weight:700; text-align:center; line-height:18px; }
+.sp-gate-pane-tools { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 14px; }
+.sp-gate-search { flex:1 1 220px; min-height:36px !important; height:36px; padding:0 12px; border:1px solid #d6deeb; border-radius:8px; font-size:13px !important; }
+.sp-gate-chips { display:flex; gap:6px; flex-wrap:wrap; }
+.sp-gate-chips button { min-height:32px !important; padding:0 12px; border:1px solid #d6deeb; border-radius:16px; background:#fff; font-size:12px !important; font-weight:600; color:#35435f; cursor:pointer; }
+.sp-gate-chips button[aria-pressed="true"] { background:#253475; border-color:#253475; color:#fff; }
+.sp-gate-pane-note { padding:0 14px 8px; font-size:12px; color:#60708b; }
+.sp-gate-rows { list-style:none; margin:0; padding:0; }
+.sp-gate-rows li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; border-top:1px solid var(--workspace-line); }
+.sp-gate-empty { padding:28px 14px; text-align:center; font-size:13px; color:#8a97ad; }
+@media (max-width:760px) { .sp-gate-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+/* A guard works from the Gate Monitor: it leads the sidebar and is where they land after signing in */
+body.role-guard .space-y-1:has(> #navGateBtn) { display:flex; flex-direction:column; }
+body.role-guard #navGateBtn { order:-1; margin-top:0 !important; }
+body.role-guard #navDashboardBtn { margin-top:4px !important; }
+
+/* ---- Guard Shifts: shift drawer filter chips ---- */
+.sh-logchip { padding:2px 9px; border:1px solid #d6deeb; border-radius:12px; background:#fff; font-size:10px; font-weight:700; color:#35435f; cursor:pointer; white-space:nowrap; }
+.sh-logchip[aria-pressed="true"] { box-shadow:0 0 0 2px #253475; }

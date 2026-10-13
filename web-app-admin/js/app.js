@@ -163,6 +163,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const auditSortFilter = document.getElementById('auditSortFilter');
   const auditPageSize = document.getElementById('auditPageSize');
   const auditFilterMessage = document.getElementById('auditFilterMessage');
+  const auditTimePreset = document.getElementById('auditTimePreset');
+  const auditCustomRow = document.getElementById('auditCustomRow');
+  const auditCustomDates = document.getElementById('auditCustomDates');
+  const auditCustomTimes = document.getElementById('auditCustomTimes');
+  // Custom date / time pickers are shown only while "Custom" is chosen in their dropdown
+  function syncAuditCustomRows() {
+    const dates = state.auditFilter.dateRange === 'Custom';
+    const times = !!auditTimePreset && auditTimePreset.value === 'custom';
+    auditCustomDates?.classList.toggle('hidden', !dates);
+    auditCustomTimes?.classList.toggle('hidden', !times);
+    auditCustomRow?.classList.toggle('hidden', !dates && !times);
+  }
   const auditFilterRetryBtn = document.getElementById('auditFilterRetryBtn');
   const auditResetFiltersBtn = document.getElementById('auditResetFiltersBtn');
 
@@ -2524,6 +2536,22 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.target.value !== 'Custom') {state.auditFilter.dateFrom = ''; state.auditFilter.dateTo = '';}
       else {state.auditFilter.dateFrom = auditDateFrom.value; state.auditFilter.dateTo = auditDateTo.value;}
       state.auditFilter.page = 1;
+      syncAuditCustomRows();
+      requestGateRecords();
+    });
+  }
+
+  // Time of day: a few presets, or "Custom time…" which reveals the two time pickers
+  if (auditTimePreset) {
+    auditTimePreset.addEventListener('change', () => {
+      const v = auditTimePreset.value;
+      if (v !== 'custom') {
+        const [from, to] = v ? v.split('-') : ['', ''];
+        auditTimeFrom.value = from; auditTimeTo.value = to;
+        state.auditFilter.timeFrom = from; state.auditFilter.timeTo = to;
+      }
+      state.auditFilter.page = 1;
+      syncAuditCustomRows();
       requestGateRecords();
     });
   }
@@ -2541,13 +2569,14 @@ document.addEventListener('DOMContentLoaded', () => {
       state.auditFilter.officer = ''; state.auditFilter.source = 'All';
       state.auditFilter.sort = 'newest';
 
-      [auditDateFrom, auditDateTo, auditTimeFrom, auditTimeTo, auditOfficerFilter].forEach(el => {if (el) el.value = '';});
+      [auditDateFrom, auditDateTo, auditTimeFrom, auditTimeTo, auditOfficerFilter, auditTimePreset].forEach(el => {if (el) el.value = '';});
       if (auditSourceFilter) auditSourceFilter.value = 'All';
       if (auditSortFilter) auditSortFilter.value = 'newest';
       if (fullAuditSearchInput) fullAuditSearchInput.value = '';
       if (auditEventTypeFilter) auditEventTypeFilter.value = 'All';
       if (auditGateFilter) auditGateFilter.value = 'All';
       if (auditDateFilter) auditDateFilter.value = 'All';
+      syncAuditCustomRows();
 
       const activeClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold bg-ncst-navy text-white shadow-xs transition-colors cursor-pointer";
       const inactiveClass = "audit-filter-pill px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer";
@@ -2592,6 +2621,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (key === 'dateFrom' || key === 'dateTo') {
       state.auditFilter.dateFrom = auditDateFrom.value; state.auditFilter.dateTo = auditDateTo.value;
       state.auditFilter.dateRange = 'Custom'; if (auditDateFilter) auditDateFilter.value = 'Custom';
+      syncAuditCustomRows();
     }
     requestGateRecords();
   }));
@@ -2999,7 +3029,7 @@ document.addEventListener('DOMContentLoaded', () => {
         `<button id="drawerFlagBtn" type="button" class="sp-btn sp-btn-danger" title="Issue a violation: the vehicle cannot enter or leave until it is resolved">Issue Violation</button>`,
       ],
       more: [
-        `<button id="drawerStudentLoginBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Create or reset the owner's student portal login">Student Login</button>`,
+        `<button id="drawerStudentLoginBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Create or reset the owner's portal login (students, faculty, staff and VIPs)">Account Login</button>`,
         `<button id="drawerReissueBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Issue a new signed pass; all previous QR codes for this vehicle stop working">Replace Pass</button>`,
         v.standing?.releaseEligible ? `<button id="drawerReleaseBtn" type="button" role="menuitem" class="admin-only sp-menu-item" title="Let this vehicle leave once. It stays on hold.">Release one exit</button>` : '',
         v.isRetired ? '' : `<button id="drawerRetireBtn" type="button" role="menuitem" class="admin-only sp-menu-item danger" title="The owner sold or no longer uses this vehicle. History is kept.">Retire vehicle</button>`,
@@ -3078,24 +3108,24 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!v.ownerIdNumber) return showToast('This vehicle has no owner ID number.', 'warning');
       const confirmed = window.SPAlert
         ? await SPAlert.confirm({
-            title: 'Issue Student Portal Login?',
-            text: `Create or reset the login for owner ID ${v.ownerIdNumber}. If the student already has an account, their password will be reset and other sessions will be signed out.`,
+            title: 'Issue Account Login?',
+            text: `Create or reset the login for owner ID ${v.ownerIdNumber}. If the owner already has an account, their password will be reset and other sessions will be signed out.`,
             confirmText: 'Issue Login',
             icon: 'question'
           })
-        : confirm(`Issue a student portal login for owner ID ${v.ownerIdNumber}?\n\nIf the owner already has one, the password is reset and they are signed out everywhere.`);
+        : confirm(`Issue an account login for owner ID ${v.ownerIdNumber}?\n\nIf the owner already has one, the password is reset and they are signed out everywhere.`);
       if (!confirmed) return;
       try {
         const res = await ApiClient.issueStudentLogin(v.ownerIdNumber);
         if (window.SPAlert && typeof SPAlert.tempPassword === 'function') {
           await SPAlert.tempPassword({
-            title: 'Student Portal Login Created',
+            title: 'Account Login Created',
             username: `Owner ID: ${res.ownerIdNumber}`,
             password: res.tempPassword,
-            subtext: `Student login ready for ${v.ownerName || 'vehicle owner'} (${res.ownerIdNumber})`
+            subtext: `Account login ready for ${v.ownerName || 'vehicle owner'} (${res.ownerIdNumber})`
           });
         } else if (window.SPTempPassword) {
-          SPTempPassword(`Student portal login for owner ID ${res.ownerIdNumber}`, res.tempPassword);
+          SPTempPassword(`Account login for owner ID ${res.ownerIdNumber}`, res.tempPassword);
         }
       } catch (err) {
         showToast(`Could not issue login: ${err.message}`, 'error');
@@ -3536,6 +3566,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  /* A VIP owner is neither student nor staff: like the registration form, the edit form hides the affiliation,
+     department / course and e-mail, and the generated VIP ID cannot be changed (it is the owner's portal login). */
+  function applyEditVipOwnerMode() {
+    const vip = !!editOwnerRole && editOwnerRole.value === 'VIP';
+    ['editOwnerRoleField', 'editDepartmentField', 'editOwnerEmailField'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', vip));
+    if (editOwnerRole) editOwnerRole.required = !vip;
+    if (editDepartment) editDepartment.required = !vip;
+    if (editOwnerIdNumber) editOwnerIdNumber.readOnly = vip;
+    document.getElementById('editOwnerIdLabel').textContent = vip ? 'VIP ID' : 'Institutional ID';
+    document.getElementById('editOwnerIdAutoNote')?.classList.toggle('hidden', !vip);
+    if (editOwnerPhone) editOwnerPhone.required = vip;
+    document.getElementById('editOwnerPhoneReq')?.classList.toggle('hidden', !vip);
+  }
+  if (editOwnerRole) editOwnerRole.addEventListener('change', applyEditVipOwnerMode);
+  if (editDriversContainer) {
+    editDriversContainer.addEventListener('change', (e) => {
+      if (!e.target.matches('.edit-driver-rel')) return;
+      const card = e.target.closest('.edit-driver-entry-card');
+      if (e.target.value === 'Self (Owner)') setSelfDriver(card, '.edit-driver-name', (editOwnerFullName?.value || '').trim());
+      else clearSelfDriver(card, '.edit-driver-name');
+    });
+  }
+  if (editOwnerFullName) editOwnerFullName.addEventListener('input', () => {
+    editDriversContainer?.querySelectorAll('.edit-driver-name[data-self]').forEach(n => { n.value = editOwnerFullName.value.trim(); });
+  });
+
   function openEditModal(v) {
     if (!editModalOverlay) return;
     v = normalizeVehicle(v);
@@ -3544,15 +3600,14 @@ document.addEventListener('DOMContentLoaded', () => {
     editModalPlate.textContent = `Plate: ${v.plateNumber} • ${v.ownerName} • Sticker ${v.stickerYear || '2026'}`;
     
     // Section 1: Owner
+    if (editOwnerRole && v.ownerRole && ![...editOwnerRole.options].some(o => o.value === v.ownerRole)) editOwnerRole.add(new Option(v.ownerRole, v.ownerRole));
     if (editOwnerRole) editOwnerRole.value = v.ownerRole || 'Student';
     if (editOwnerIdNumber) editOwnerIdNumber.value = v.ownerIdNumber || '';
     if (editOwnerFullName) editOwnerFullName.value = v.ownerName || '';
-    if (editDepartment) {
-      editDepartment.value = v.department || '';
-      editDepartment.required = (v.ownerRole || '') !== 'VIP';   // a VIP owner has no department / course
-    }
+    if (editDepartment) editDepartment.value = v.department || '';
     if (editOwnerPhone) editOwnerPhone.value = v.ownerPhone || '';
     if (editOwnerEmail) editOwnerEmail.value = v.ownerEmail || '';
+    applyEditVipOwnerMode();
 
     // Section 1: Owner Photo
     editOwnerPhotoDataUrl = v.ownerPhoto || v.owner_photo || null;
@@ -3922,13 +3977,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Zoom preview QR button and container click
-  if (zoomPreviewQrBtn) {
-    zoomPreviewQrBtn.addEventListener('click', () => openZoomQrModal());
-  }
-  if (qrCodeContainer) {
-    qrCodeContainer.addEventListener('click', () => openZoomQrModal());
-  }
 
   /* ==========================================================================
      9. Vehicle Registration Form Controller (Duplicate Checking & Dynamic Roster)
@@ -4059,7 +4107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
     state.driverCounter = 1;
     syncDriverLimit(addDriverBtn, driversContainer, '.driver-entry-card');
-    triggerQrUpdate(10);
+    syncSelfDrivers();
   }
 
   // Client-side image compressor: scales images down to max 640px and quality 0.8 (~35KB-50KB)
@@ -4252,10 +4300,68 @@ document.addEventListener('DOMContentLoaded', () => {
     el('ownerContact').required = vip;
     el('ownerContactReq').classList.toggle('hidden', !vip);
     el('ownerPhotoReq').classList.toggle('hidden', !vip);
+    if (!vip) applyIdTag();
     triggerQrUpdate(10);
   }
   if (vipToggle) vipToggle.addEventListener('change', applyVipMode);
   if (vehicleForm) vehicleForm.addEventListener('reset', () => setTimeout(applyVipMode, 0));
+
+  /* Institutional ID tags: the affiliation sets how the ID starts (Student NCST-, Staff STAFF-, Faculty EMP-).
+     The tag is put in front automatically, cannot be backspaced away, and is swapped when the affiliation changes. */
+  const ID_TAGS = { Student: 'NCST-', Staff: 'STAFF-', Faculty: 'EMP-' };
+  const ID_EXAMPLES = { Student: 'NCST-2024-05182', Staff: 'STAFF-0001', Faculty: 'EMP-0001' };
+  function applyIdTag() {
+    const idInput = document.getElementById('ownerIdNumber');
+    const roleSelect = document.getElementById('ownerRole');
+    if (!idInput || !roleSelect || isVipRegistration()) return;
+    const tag = ID_TAGS[roleSelect.value] || '';
+    idInput.placeholder = ID_EXAMPLES[roleSelect.value] || '';
+    if (!tag) return;
+    let v = idInput.value.toUpperCase();
+    if (!v.startsWith(tag)) {
+      v = tag.startsWith(v) ? '' : v.replace(/^(NCST|STAFF|EMP)-/, '');   // backspaced into the tag, or another affiliation's tag
+      v = tag + v;
+    }
+    if (idInput.value !== v) idInput.value = v;
+  }
+  document.getElementById('ownerRole')?.addEventListener('change', applyIdTag);
+  document.getElementById('ownerIdNumber')?.addEventListener('input', applyIdTag);
+  applyIdTag();
+
+  /* "Self (Owner)" fills the driver's name with the owner's name and keeps it in step with the owner field. */
+  const SELF_DRIVER = 'Self (Owner)';
+  function setSelfDriver(card, nameSelector, ownerName) {
+    const name = card.querySelector(nameSelector);
+    if (!name) return;
+    name.value = ownerName;
+    name.readOnly = true;
+    name.dataset.self = '1';
+    name.classList.add('bg-slate-100');
+    name.title = "Same as the owner's name";
+  }
+  function clearSelfDriver(card, nameSelector) {
+    const name = card.querySelector(nameSelector);
+    if (!name || !name.dataset.self) return;
+    name.value = '';
+    name.readOnly = false;
+    delete name.dataset.self;
+    name.classList.remove('bg-slate-100');
+    name.removeAttribute('title');
+  }
+  function syncSelfDrivers(refresh = true) {
+    if (!driversContainer) return;
+    const ownerName = (document.getElementById('ownerFullName')?.value || '').trim();
+    driversContainer.querySelectorAll('.driver-entry-card').forEach(card => {
+      const rel = card.querySelector('.driver-rel');
+      if (rel && rel.value === SELF_DRIVER) setSelfDriver(card, '.driver-name', ownerName);
+      else clearSelfDriver(card, '.driver-name');
+    });
+    if (refresh) triggerQrUpdate(10);
+  }
+  if (driversContainer) driversContainer.addEventListener('change', (e) => { if (e.target.matches('.driver-rel')) syncSelfDrivers(); });
+  document.getElementById('ownerFullName')?.addEventListener('input', syncSelfDrivers);
+  if (vehicleForm) vehicleForm.addEventListener('reset', () => setTimeout(syncSelfDrivers, 0));
+  syncSelfDrivers(false);   // first paint: the starting driver is Self
 
   // Handle Form Submission
   if (vehicleForm) {
@@ -4286,6 +4392,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const ownerRole = isVip ? 'VIP' : document.getElementById('ownerRole').value;
       const department = isVip ? '' : document.getElementById('department').value.trim();
       const ownerIdNumber = isVip ? '' : document.getElementById('ownerIdNumber').value.trim();
+      if (!isVip && ID_TAGS[ownerRole] && ownerIdNumber === ID_TAGS[ownerRole]) {
+        showToast(`Enter the ID number after ${ownerIdNumber}`, 'warning');
+        document.getElementById('ownerIdNumber').focus();
+        return;
+      }
       const ownerContact = document.getElementById('ownerContact').value.trim();
       const ownerEmail = isVip ? '' : document.getElementById('ownerEmail').value.trim();
       const vehicleCategory = document.getElementById('vehicleCategory').value;
@@ -4391,7 +4502,7 @@ document.addEventListener('DOMContentLoaded', () => {
           openVehicleDrawer(newVehicle);
           const acct = res && res.studentAccount;
           if (acct && acct.tempPassword && window.SPTempPassword) {
-            SPTempPassword(`Student portal login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
+            SPTempPassword(`Account login for owner ID ${acct.ownerIdNumber} (new account)`, acct.tempPassword);
           } else if (acct?.error) {
             showToast(`${plateNumber} was registered, but the owner login was not created. Issue it from the vehicle record.`, 'warning');
           }
@@ -4567,27 +4678,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (qrVehiclePlaceholder) qrVehiclePlaceholder.classList.remove('hidden');
     }
 
-    // Render QR Code using QRCode library
-    if (typeof QRCode !== 'undefined') {
-      try {
-        if (!qrCodeInstance) {
-          qrCodeContainer.innerHTML = '';
-          qrCodeInstance = new QRCode(qrCodeContainer, {
-            text: payloadString,
-            width: 220,
-            height: 220,
-            colorDark: "#0F172A",
-            colorLight: "#ffffff",
-            correctLevel: QRCode.CorrectLevel.L
-          });
-        } else {
-          qrCodeInstance.clear();
-          qrCodeInstance.makeCode(payloadString);
-        }
-      } catch (err) {
-        console.warn('QRCode generation fallback notice:', err);
-      }
-    }
+    // No QR is drawn here on purpose: the preview is not a pass. The signed QR exists only after the server issues it.
 
     lastPreviewPassInfo = {
       payload: payloadString,
@@ -5031,30 +5122,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof v.qrPayload === 'string' && v.qrPayload.startsWith('{')) {
       return v.qrPayload;
     }
-    const plate = v.plateNumber || v.plate_number || '';
-    if (!plate) return null;
-    return JSON.stringify({
-      v: 1,
-      plateNumber: plate,
-      plate_number: plate,
-      ownerFullName: v.ownerName || v.owner_name || 'Registered Owner',
-      owner_name: v.ownerName || v.owner_name || 'Registered Owner',
-      ownerRole: v.ownerRole || v.owner_role || 'Student',
-      owner_role: v.ownerRole || v.owner_role || 'Student',
-      ownerStudentId: v.ownerIdNumber || v.owner_id_number || 'N/A',
-      owner_id_number: v.ownerIdNumber || v.owner_id_number || 'N/A',
-      vehicleCategory: v.vehicleType || v.vehicle_type || '4-Wheel',
-      vehicle_type: v.vehicleType || v.vehicle_type || '4-Wheel',
-      makeModelColor: v.makeModelColor || v.make_model_color || 'Vehicle',
-      make_model_color: v.makeModelColor || v.make_model_color || 'Vehicle',
-      stickerYear: v.stickerYear || v.sticker_year || '2026',
-      sticker_year: v.stickerYear || v.sticker_year || '2026',
-      authorizedDrivers: (v.authorizedDrivers || []).map(d => ({
-        fullName: d.fullName || d.full_name || '',
-        relationship: d.relationship || 'Self (Owner)',
-        licenseNo: d.licenseNo || d.license_no || 'N/A'
-      }))
-    });
+    // No client-made QR: only the server's signed payload is a valid pass (an unsigned copy would not match it)
+    return null;
   }
 
   function applyServerPass(target, serverVehicle) {
