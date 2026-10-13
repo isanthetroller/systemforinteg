@@ -18,7 +18,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css?v=20261001b">
 <link rel="stylesheet" href="css/portal.css?v=20261010b">
-<link rel="stylesheet" href="css/portal-layout.css?v=20261012f"></head>
+<link rel="stylesheet" href="css/portal-layout.css?v=20261013c"></head>
 <body>
   <!-- ==================== SIGN IN ==================== -->
   <main id="screenLogin" class="screen auth-screen" hidden>
@@ -34,12 +34,12 @@
 
         <form id="loginForm" novalidate autocomplete="on" class="auth-form">
           <div class="form-group">
-            <label for="loginId" class="input-label">Student / Employee ID</label>
+            <label for="loginId" class="input-label">Account ID</label>
             <div class="input-wrap">
               <span class="input-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               </span>
-              <input id="loginId" name="username" type="text" autocomplete="username" inputmode="text" placeholder="Enter your ID" required>
+              <input id="loginId" name="username" type="text" autocomplete="username" inputmode="text" placeholder="Student, employee or VIP ID" required>
             </div>
           </div>
 
@@ -183,16 +183,6 @@
             <button id="passwordBtn" type="submit" class="btn btn-primary">Update Password</button>
           </form>
         </div>
-        <div class="card">
-          <h2 class="card-title">How your pass works</h2>
-          <ul class="bullets">
-            <li>Show the QR on the <strong>My Pass</strong> tab at the gate when entering and leaving campus.</li>
-            <li>The guard confirms that the driver is on your authorized drivers list.</li>
-            <li>If your vehicle is given a <strong>violation</strong>, it cannot enter or leave campus until the Security Office resolves it.</li>
-            <li>Parking overnight or past curfew (22:00): the guard will try to contact you first.</li>
-            <li>Changes to your vehicle or drivers are done at the Security Office. A new pass replaces the old one.</li>
-          </ul>
-        </div>
           </div>
         </div>
       </section>
@@ -301,7 +291,7 @@
     };
   </script>
   <script src="js/alerts.js?v=20261001b"></script>
-  <script src="js/app.js?v=20261012c"></script>
+  <script src="js/app.js?v=20261013c"></script>
 <script src="js/portal.js?v=20261012a"></script></body>
 </html>
 

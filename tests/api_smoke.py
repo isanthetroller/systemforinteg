@@ -945,6 +945,13 @@ def test_vip_passes(admin):
     code, res = register('VIP 0001', 'Dr. Rosa President', passClass='VIP')
     check('admin registers a VIP vehicle -> 201', code == 201 and res['data']['isVip'] is True and res['data']['passClass'] == 'VIP', res)
     vip = res['data']
+    # A VIP registered with no ID gets a generated VIP-YYYY-NNNN ID, and that ID is a working portal login
+    code, res2 = call('POST', 'vehicles.php', {'plateNumber': 'VIP 0007', 'ownerName': 'Gen Erated', 'ownerRole': 'VIP', 'passClass': 'VIP', 'ownerPhone': '09271234567',
+                                              'reason': 'Board guest', 'authorizedDrivers': [{'fullName': 'Gen Erated', 'relationship': 'Self (Owner)', 'licenseNo': 'N01-11-111111'}]}, admin)
+    vip_acct = (res2.get('data') or {}).get('studentAccount') or {}
+    check('a VIP with a generated ID gets a portal login', code == 201 and re.match(r'^VIP-\d{4}-\d{4}$', str(vip_acct.get('ownerIdNumber', ''))) and vip_acct.get('created') and vip_acct.get('tempPassword'), res2)
+    code, res2 = login(vip_acct.get('ownerIdNumber', ''), vip_acct.get('tempPassword', ''), realm='student')
+    check('  ...which signs in to the owner portal', code == 200 and res2['data']['student']['mustChangePassword'] is True, res2)
     check('  ...who granted it and when is recorded', bool(vip.get('vipGrantedBy')) and len(vip.get('vipGrantedAt') or '') == 19, vip)
     payload = json.loads(vip['qrPayload'])
     check('  ...the class is NOT in the signed QR', set(payload) == {'v', 'pid', 'plate_number', 'type', 'valid', 'sig'} and payload['type'] == 'permanent', payload)

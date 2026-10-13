@@ -427,6 +427,67 @@
     </div>`;
   }
 
+  /* ---- My Pass: detail cards ---- */
+  const imgOk = (src) => /^(data:image\/|https?:\/\/)/i.test(String(src || ''));
+  /** rows = [label, value] (null / '' hides the row); a value may be { html } for markup that is already escaped. */
+  function infoList(rows) {
+    const shown = rows.filter(r => r[1] !== null && r[1] !== undefined && r[1] !== '');
+    return shown.length ? `<dl class="info-list">${shown.map(([k, val]) => `<div><dt>${esc(k)}</dt><dd>${val && val.html !== undefined ? val.html : esc(val)}</dd></div>`).join('')}</dl>` : '';
+  }
+  function validityText(v) {
+    if (!v.passValidUntil) return null;
+    const days = Math.round((new Date(`${v.passValidUntil}T12:00:00+08:00`) - new Date(`${manilaDay(0)}T12:00:00+08:00`)) / 86400000);
+    const plural = (n) => `${n} day${n === 1 ? '' : 's'}`;
+    const note = days < 0 ? `expired ${plural(-days)} ago` : days === 0 ? 'expires today' : `${plural(days)} left`;
+    return `${fmtDate(v.passValidUntil)} (${note})`;
+  }
+  /** Pass, vehicle and owner in ONE compact card (two columns of facts) so the details are in view without scrolling far. */
+  function detailsCard(v, st) {
+    const vip = v.isVip || v.ownerRole === 'VIP';
+    const fee = v.paymentStatus === 'Waived' ? 'No fee'
+      : v.feeAmount > 0 ? `Paid ${peso(v.feeAmount)}${v.paidAt ? ' on ' + fmtDate(String(v.paidAt).slice(0, 10)) : ''}` : 'Paid';
+    const mono = (t) => ({ html: `<span class="mono">${esc(t)}</span>` });
+    const lastGate = v.lastEntryTime ? `${fmtDateTime(v.lastEntryTime)}${v.lastGatePoint && v.lastGatePoint !== '—' ? ' · ' + v.lastGatePoint : ''}` : null;
+    return `<div class="card details-card">
+      <section class="info-sec"><h3>Pass</h3>${infoList([
+        ['Pass ID', v.passId ? mono(v.passId) : null],
+        ['Valid until', validityText(v)],
+        ['Registration fee', fee],
+        ['Pass type', v.isVip ? 'VIP pass' : null],
+        ['Registration', v.registrationStatus && v.registrationStatus !== 'Active' ? v.registrationStatus : null],   // the banner already says Active
+      ])}</section>
+      <section class="info-sec"><h3>Vehicle</h3>
+        <div class="info-head">${imgOk(v.vehiclePhoto) ? `<img class="info-thumb" src="${esc(v.vehiclePhoto)}" alt="Photo of ${esc(v.plateNumber)}">` : ''}
+          <div class="min-w-0"><div class="name">${esc(v.makeModelColor || v.vehicleType || v.plateNumber)}</div><div class="sub">${esc([v.vehicleType, v.stickerYear ? 'Sticker ' + v.stickerYear : ''].filter(Boolean).join(' · '))}</div></div></div>
+        ${infoList([
+          ['Registered on', v.registeredAt ? fmtDate(String(v.registeredAt).slice(0, 10)) : null],
+          ['Last at the gate', lastGate],
+        ])}</section>
+      <section class="info-sec"><h3>Registered owner</h3>
+        <div class="info-head">${imgOk(v.ownerPhoto) ? `<img class="info-thumb info-thumb-sq" src="${esc(v.ownerPhoto)}" alt="Photo of ${esc(v.ownerName)}">` : `<span class="owner-avatar">${esc(initials(v.ownerName))}</span>`}
+          <div class="min-w-0"><div class="name">${esc(v.ownerName)}</div><div class="sub">${esc(vip ? 'VIP' : v.ownerRole || '')}</div></div></div>
+        ${infoList([
+          ['ID number', v.ownerIdNumber ? mono(v.ownerIdNumber) : null],
+          ['Department / course', vip ? null : v.department],
+          ['Contact phone', v.ownerPhone],
+          ['Email', v.ownerEmail],
+        ])}</section>
+      <p class="hint">To change any of these details, visit the Campus Security Office.</p>
+    </div>`;
+  }
+  function recentActivityCard(v) {
+    const rows = (data.activity || []).filter(a => normPlate(a.plateNumber) === normPlate(v.plateNumber))
+      .sort((a, b) => String(b.loggedAt).localeCompare(String(a.loggedAt))).slice(0, 4);
+    if (!rows.length) return `<div class="card"><h2 class="card-title">Recent gate activity</h2><p class="hint">No gate activity yet. Entries and exits appear here as they happen.</p></div>`;
+    return `<div class="card"><h2 class="card-title">Recent gate activity</h2>
+      <ul class="act-mini">${rows.map(a => {
+        const meta = ACTIVITY[a.action] || { cls: 'in', title: a.action };
+        return `<li class="${meta.cls}"><svg viewBox="0 0 24 24" aria-hidden="true">${ACTIVITY_ICON[meta.cls]}</svg>
+          <div><div class="name">${esc(meta.title)}</div><div class="sub">${esc(fmtDateTime(a.loggedAt))}${a.gatePoint ? ' · ' + esc(a.gatePoint) : ''}</div></div></li>`;
+      }).join('')}</ul>
+      <button type="button" class="btn btn-outline btn-sm" data-goto="tabActivity">See all activity</button></div>`;
+  }
+
   /* ---- My Pass ---- */
   function renderPass() {
     const tab = $('tabPass');
@@ -475,16 +536,15 @@
           </div>
           <dl class="pass-meta">
             <div><dt>Valid until</dt><dd>${esc(fmtDate(v.passValidUntil))}</dd></div>
-            <div><dt>Sticker year</dt><dd>${esc(v.stickerYear || '—')}</dd></div>
-            <div><dt>Registration fee</dt><dd>${v.paymentStatus === 'Waived' ? 'No fee' : v.feeAmount > 0 ? `Paid ${peso(v.feeAmount)}` : 'Paid'}</dd></div>
-            <div><dt>Violations</dt><dd>${v.isBanned ? 'On hold (unresolved)' : v.isVip ? 'Not applied to VIP' : 'None pending'}</dd></div>
             <div><dt>Campus status</dt><dd>${(v.status || '').toLowerCase().includes('inside') ? '<span class="status-on">On Campus</span>' : '<span class="status-off">Outside Campus</span>'}</dd></div>
+            <div><dt>Violations</dt><dd>${v.isBanned ? 'On hold (unresolved)' : v.isVip ? 'Not applied to VIP' : 'None pending'}</dd></div>
           </dl>
         </div>
       </article>
       </div><div class="col">
       ${renewalCard(v)}
-      <div class="card gate-help"><h2 class="card-title">At the gate</h2><p class="card-sub">Three quick steps every time you drive in or out.</p><ol><li><span>1</span><div><strong>Open your pass</strong><p>Tap Show at Gate to make the QR code larger.</p></div></li><li><span>2</span><div><strong>Show it to the guard</strong><p>Keep your screen bright enough to scan.</p></div></li><li><span>3</span><div><strong>${v.isVip ? 'Wait for approval' : 'Confirm the driver'}</strong><p>${v.isVip ? 'The guard checks your pass before entry or exit.' : 'The guard checks the driver before entry or exit.'}</p></div></li></ol></div>
+      ${detailsCard(v, st)}
+      ${recentActivityCard(v)}
       <div class="card">
         <h2 class="card-title">Authorized drivers</h2>
         <p class="card-sub">The only people the guard will let drive this vehicle through.</p>

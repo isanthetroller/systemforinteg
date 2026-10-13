@@ -286,8 +286,8 @@ function handleRegisterVehicle($pdo, $admin) {
         // Student portal login for the owner (created once per owner ID; the temporary
         // password is returned only in this response and shown to the admin once)
         try {
-            // A generated VIP ID is not a student / employee ID: there is no portal login for it
-            $newVeh['studentAccount'] = $idGenerated ? null : ensureStudentAccount($pdo, $ownerIdNumber, $ownerName, $ownerEmail);
+            // Every owner gets a portal login, a VIP included (the generated VIP-2026-0001 is the username)
+            $newVeh['studentAccount'] = ensureStudentAccount($pdo, $ownerIdNumber, $ownerName, $ownerEmail);
         } catch (Exception $e) {
             // The vehicle is saved; the admin can issue the login later from the dossier
             $newVeh['studentAccount'] = ['ownerIdNumber' => $ownerIdNumber, 'created' => false, 'tempPassword' => null, 'error' => 'Portal account could not be created.'];
