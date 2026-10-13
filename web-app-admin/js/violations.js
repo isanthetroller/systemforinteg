@@ -84,6 +84,13 @@
     $('flagNotes').value = options.context ? options.context + '. ' : '';
     updateHoldHint();
     setError('flagError', '');
+    // Optional photo of what was seen (parked in a fire lane, ...): the same evidence the phone sends
+    if (window.SPPhoto) {
+      view.flagPhoto = view.flagPhoto || SPPhoto.field('Add photo evidence');
+      view.flagPhoto.reset();
+      const slot = $('flagPhotoSlot');
+      if (slot && !slot.contains(view.flagPhoto.el)) slot.appendChild(view.flagPhoto.el);
+    }
     showModal('flagModal');
     setTimeout(() => $('flagType').focus(), 50);
   }
@@ -106,9 +113,12 @@
     $('flagSubmitBtn').disabled = true;
     try {
       const res = await ApiClient.createViolation({ vehicle_id: v.id, type, notes });
+      const photo = view.flagPhoto ? view.flagPhoto.get() : null;
+      const photoProblem = photo ? await SPPhoto.send('violation', v.plateNumber, photo, { violationId: res.violation && res.violation.id }) : null;
       hideModal('flagModal');
       applyVehicleUpdate(res.vehicle);
       SP.showToast(res.message);
+      if (photoProblem) SP.showToast(`The violation is saved, but the photo was not sent: ${photoProblem}`, 'warning');
       if (typeof view.flagOptions.onDone === 'function') view.flagOptions.onDone(res);
       refreshAfterChange();
     } catch (err) {

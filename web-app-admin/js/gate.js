@@ -15,9 +15,19 @@
     'Plate & Vehicle Profile Mismatch',
     'Expired Campus Parking Sticker',
     'Invalid / Revoked QR Pass',
-    'Security Officer Intervention'
+    'Security Officer Intervention',
+    'Suspicious behavior',
+    'Other'
   ];
-  const DENY_LABELS = ['Driver is not allowed', 'Plate does not match the vehicle', 'Parking sticker has expired', 'QR pass is invalid or cancelled', 'Stopped by a security officer'];
+  const DENY_LABELS = ['Driver is not allowed', 'Plate does not match the vehicle', 'Parking sticker has expired', 'QR pass is invalid or cancelled', 'Stopped by a security officer', 'Suspicious behavior', 'Other'];
+  // After an anti-passback refusal the guard reports that the record looks wrong (the same list the phone offers)
+  function reportReasons(result) {
+    return [
+      result === 'NOT_ON_CAMPUS' ? 'Vehicle is on campus (entry was not scanned)' : 'Vehicle already left (exit was not scanned)',
+      'Pass used by another vehicle or driver', 'Plate & Vehicle Profile Mismatch', 'Unauthorized / Unregistered Driver', 'Suspicious behavior', 'Other'
+    ];
+  }
+  const PASSBACK = ['ALREADY_INSIDE', 'NOT_ON_CAMPUS'];
 
   const gate = {
     mode: readMode(),
@@ -28,11 +38,15 @@
     result: null,       // verify.php response data
     driverId: null,     // selected authorized driver id
     itemsChecked: false, // guard confirmed a visitor's declared items
+    lookup: 'manual',    // how the guard identified the vehicle: qr (camera / scanner) or manual (typed)
+    photos: {},          // optional photo fields of the current check (approve / deny / report), kept while the card redraws
     decisionRef: null, // stable across a manual retry when a write's reply is lost
     busy: false,
     cctv: null,
     scanner: null,      // Html5Qrcode instance
-    cameraOn: false
+    cameraOn: false,
+    cameras: [],         // available cameras, for Flip
+    cameraIndex: 0
   };
 
   function readMode() {
@@ -123,21 +137,28 @@
   /* ------------------------------------------------------------------------
      Verification
      ------------------------------------------------------------------------ */
-  async function verify(raw) {
+  async function verify(raw, lookup) {
     const value = (raw || '').trim();
     if (!value || gate.busy || !gate.policy?.allowedDirections.includes(gate.mode)) return;
     gate.busy = true;
     gate.input = value;
+    gate.lookup = lookup || (value.startsWith('{') ? 'qr' : 'manual');
     gate.driverId = null;
     gate.itemsChecked = false;
     gate.decisionRef = null;
+    gate.photos = {};
     renderLoading(value);
     pauseCamera();
     try {
-      // Server decides whether the text is a signed pass, legacy pass, pass code or plate
-      gate.result = await ApiClient.verifyPass({ qrCode: value, checkpoint: gate.policy.checkpoint }, gate.mode);
+      // The same two steps the phone uses: this call only checks (nothing is saved); "Record" confirms it once.
+      // The server decides whether the text is a signed pass, legacy pass, pass code or plate, and refuses a lane that
+      // contradicts where the vehicle is recorded (anti-passback).
+      gate.result = await ApiClient.prepareMovement({
+        qr_code: value, checkpoint: gate.policy.checkpoint, direction: gate.mode === 'Ingress' ? 'IN' : 'OUT', lookup_method: gate.lookup
+      });
       autoSelectDriver();
       renderResult();
+      if (window.SPFeedback) SPFeedback.play(!gate.result.accepted ? 'deny' : (gate.result.severity === 'ok' ? 'ok' : 'warn'));
     } catch (err) {
       gate.result = null;
       renderError(err.message || 'Verification failed. Check the connection and try again.');
@@ -159,6 +180,7 @@
     gate.driverId = null;
     gate.itemsChecked = false;
     gate.decisionRef = null;
+    gate.photos = {};
     renderIdle();
     if ($('gateManualInput')) {
       $('gateManualInput').value = '';
@@ -219,8 +241,66 @@
   const RESULT_LABELS = {
     VALID: 'Valid QR pass', LEGACY: 'Older pass', MANUAL: 'Plate number check', FORGED: 'Fake or changed pass',
     REVOKED: 'Cancelled pass', EXPIRED: 'Expired pass', EXPIRED_TEMP: 'Expired day pass', NOT_YET_VALID: 'Pass not active yet',
-    BANNED: 'Violation hold', SUSPENDED: 'Registration on hold', NOT_FOUND: 'Not found'
+    BANNED: 'Violation hold', SUSPENDED: 'Registration on hold', NOT_FOUND: 'Not found',
+    ALREADY_INSIDE: 'Already inside', NOT_ON_CAMPUS: 'Not on campus', UNPAID: 'Fee unpaid', RETIRED: 'Vehicle retired',
+    GATE_DIRECTION_DENIED: 'Lane not allowed'
   };
+
+  /* ------------------------------------------------------------------------
+     Notices next to a result (parking nearly full, a released exit, the case holding the vehicle) and the
+     "already inside" details
+     ------------------------------------------------------------------------ */
+  function clock(value) {
+    const t = new Date(String(value || '').replace(' ', 'T'));
+    return isNaN(t) ? '' : t.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function noticeStrip(r) {
+    const notes = [];
+    if (r.exitRelease) {
+      const until = clock(r.exitRelease.expiresAt);
+      notes.push(['warning', `Exit released by ${r.exitRelease.releasedBy || 'an administrator'}${until ? ' until ' + until : ''}`,
+        `Let it out once. It stays on hold and cannot come back in. Reason: ${r.exitRelease.reason || '-'}`]);
+    }
+    const occ = r.occupancy;
+    if (occ && (occ.level === 'full' || occ.level === 'nearly_full') && occ.message) {
+      notes.push([occ.level === 'full' ? 'danger' : 'warning', occ.message,
+        occ.level === 'full' ? 'Entry is still your decision (emergency or VIP vehicles may need to be let in).' : '']);
+    }
+    if (r.case) {
+      notes.push(['info', `Case: ${r.case.title || 'open case'} (${r.case.step || 'open'})${r.case.policeReferred ? ' · referred to the police' : ''}`,
+        'The vehicle stays on hold until an administrator closes the case.', r.case.key]);
+    }
+    if (!notes.length) return '';
+    const tint = { info: 'border-sky-300 bg-sky-50 text-sky-950', warning: 'border-amber-300 bg-amber-50 text-amber-950', danger: 'border-rose-300 bg-rose-50 text-rose-950' };
+    return `<div class="px-5 pt-3 space-y-2" data-notices>${notes.map(([level, title, detail, key]) => `
+      <div class="rounded-lg border ${tint[level]} px-3 py-2 text-xs"><div class="font-bold">${esc(title)}</div>
+        ${detail ? `<div class="mt-0.5 opacity-90">${esc(detail)}</div>` : ''}
+        ${key ? `<button type="button" data-open-case="${esc(key)}" class="mt-1 text-[11px] font-bold underline cursor-pointer">Open the case</button>` : ''}</div>`).join('')}</div>`;
+  }
+
+  /** Where a vehicle that is already inside is, and who to call. */
+  function onCampusBlock(o) {
+    if (!o) return '';
+    const rows = [
+      o.entryTime ? ['Came in', `${clock(o.entryTime)}${o.hoursInside != null ? ' (' + o.hoursInside + ' h ago)' : ''}${o.gatePoint ? ' at ' + o.gatePoint : ''}`] : null,
+      o.enteredBy ? ['Driven in by', o.enteredBy] : null,
+      o.admittedBy ? ['Admitted by', o.admittedBy] : null,
+      o.ownerPhone ? ['Owner phone', { html: `<a class="font-bold text-ncst-navy underline" href="tel:${esc(o.ownerPhone)}">${esc(o.ownerPhone)}</a>` }] : null,
+    ].filter(Boolean);
+    return `<div class="mx-5 mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-950">
+      <div class="font-extrabold uppercase tracking-wider text-[10px] mb-1">This vehicle is inside campus</div>
+      <dl class="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5">${rows.map(([k, v]) => `<dt class="opacity-75">${esc(k)}</dt><dd class="font-semibold">${v && v.html ? v.html : esc(v)}</dd>`).join('')}</dl></div>`;
+  }
+
+  /** A photo field that survives the card being redrawn (choosing a driver redraws it). */
+  function photoSlot(box, name, label) {
+    const slot = box.querySelector(`[data-photo-slot="${name}"]`);
+    if (!slot || !window.SPPhoto) return;
+    gate.photos[name] = gate.photos[name] || SPPhoto.field(label);
+    slot.replaceWith(gate.photos[name].el);
+  }
+  const photoOf = (name) => (gate.photos[name] ? gate.photos[name].get() : null);
 
   function setCheckStatus(text, state) {
     const status = $('gateCheckStatus');
@@ -244,9 +324,11 @@
     const warnings = (r.warnings || []).map(w => `
       <li class="flex gap-2 items-start"><span aria-hidden="true" class="mt-0.5 text-ncst-goldDark">&#9888;</span><span>${esc(w)}</span></li>`).join('');
 
+    const passback = PASSBACK.includes(r.result);
     let subject = '';
     if (r.vehicle) subject = vehicleBlock(r.vehicle, r);
     else if (r.visitor) subject = visitorBlock(r.visitor);
+    if (passback && r.onCampus) subject = onCampusBlock(r.onCampus) + subject;
 
     let actions = '';
     if (r.accepted) {
@@ -268,6 +350,7 @@
             ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">Issue Violation</button>' : ''}
             <button type="button" data-act="reset" class="ml-auto px-3 py-2 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer">Cancel</button>
           </div>
+          <div data-photo-slot="approve"></div>
           <div id="gateDenyPanel" class="hidden rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight/70 p-3 space-y-2">
             <label for="gateDenyReason" class="block text-[11px] font-bold text-slate-700">Why are you blocking this vehicle?</label>
             <select id="gateDenyReason" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs">
@@ -275,6 +358,7 @@
             </select>
             <label for="gateDenyNotes" class="block text-[11px] font-bold text-slate-700">Notes (optional)</label>
             <textarea id="gateDenyNotes" rows="2" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs" placeholder="What did you observe?"></textarea>
+            <div data-photo-slot="deny"></div>
             <div class="flex justify-end gap-2">
               <button type="button" data-act="deny-cancel" class="px-3 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer">Back</button>
               <button type="button" data-act="deny-confirm" class="px-3 py-1.5 rounded bg-ncst-crimson hover:bg-ncst-crimsonDark text-white text-xs font-bold cursor-pointer">Deny &amp; Flag Vehicle</button>
@@ -288,10 +372,22 @@
       actions = `
         <div class="border-t border-slate-100 px-5 py-4 flex flex-wrap items-center gap-3">
           <p class="text-xs text-slate-600 flex-1 min-w-[200px]">${logged}</p>
+          ${passback ? '<button type="button" data-act="report" class="px-3 py-2.5 rounded-md border border-amber-400 bg-amber-50 hover:bg-amber-100 text-sm font-bold text-amber-900 cursor-pointer">Report</button>' : ''}
           ${r.result === 'NOT_FOUND' && r.gateType === 'Ingress' ? '<button type="button" data-act="visitor" class="px-3 py-2.5 rounded-md border border-ncst-navy/20 bg-ncst-navy/5 hover:bg-ncst-navy/10 text-sm font-bold text-ncst-navy cursor-pointer">Issue Visitor Pass</button>' : ''}
           ${r.vehicle && !r.vehicle.isVip ? '<button type="button" data-act="warn" class="px-3 py-2.5 rounded-md border border-ncst-crimson/30 bg-ncst-crimsonLight hover:bg-ncst-crimson/10 text-sm font-bold text-ncst-crimson cursor-pointer">Issue Violation</button>' : ''}
           <button type="button" data-act="reset" class="px-5 py-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold cursor-pointer">Scan Next</button>
-        </div>`;
+        </div>
+        ${passback ? `<div id="gateReportPanel" class="hidden border-t border-slate-100 mx-5 mb-4 rounded-md border border-amber-300 bg-amber-50/70 p-3 space-y-2">
+          <label for="gateReportReason" class="block text-[11px] font-bold text-slate-700">What looks wrong with the record?</label>
+          <select id="gateReportReason" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs">${reportReasons(r.result).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select>
+          <label for="gateReportNotes" class="block text-[11px] font-bold text-slate-700">Notes (optional)</label>
+          <textarea id="gateReportNotes" rows="2" class="w-full px-2.5 py-2 rounded border border-slate-300 bg-white text-xs" placeholder="What did you see?"></textarea>
+          <div data-photo-slot="report"></div>
+          <p class="text-[11px] text-slate-600">An admin case is opened and the vehicle is held until it is reviewed. The owner is not told it was blocked.</p>
+          <div class="flex justify-end gap-2">
+            <button type="button" data-act="report-cancel" class="px-3 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer">Back</button>
+            <button type="button" data-act="report-confirm" class="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer">Send report</button>
+          </div></div>` : ''}`;
     }
 
     box.innerHTML = `
@@ -303,9 +399,14 @@
         <div class="mt-1.5 text-xl font-extrabold tracking-tight">${esc(r.accepted ? (r.severity === 'ok' ? 'CLEAR TO ' + (r.gateType === 'Ingress' ? 'ENTER' : 'EXIT') : 'CHECK BEFORE ' + (r.gateType === 'Ingress' ? 'ENTRY' : 'EXIT')) : 'ACCESS DENIED')}</div>
         <div class="text-sm font-semibold mt-0.5">${esc(r.message)}${r.reason ? ' &mdash; ' + esc(r.reason) : ''}</div>
       </div>
+      ${noticeStrip(r)}
       ${warnings ? `<ul class="px-5 py-3 space-y-1 text-xs text-amber-950 bg-ncst-goldLight border-b border-ncst-gold/30">${warnings}</ul>` : ''}
       ${subject}
       ${actions}`;
+    photoSlot(box, 'approve', 'Add photo (optional)');
+    photoSlot(box, 'deny', 'Add photo');
+    photoSlot(box, 'report', 'Add photo');
+    box.querySelectorAll('[data-open-case]').forEach(b => b.addEventListener('click', () => window.SPCases && SPCases.open(b.dataset.openCase)));
 
     box.querySelectorAll('[data-driver-id]').forEach(card => {
       card.addEventListener('click', () => {
@@ -354,6 +455,12 @@
     });
     const denyConfirm = box.querySelector('[data-act="deny-confirm"]');
     if (denyConfirm) denyConfirm.addEventListener('click', () => deny($('gateDenyReason').value, $('gateDenyNotes').value.trim()));
+    const reportBtn = box.querySelector('[data-act="report"]');
+    if (reportBtn) reportBtn.addEventListener('click', () => { $('gateReportPanel').classList.remove('hidden'); reportBtn.classList.add('hidden'); $('gateReportReason').focus(); });
+    const reportCancel = box.querySelector('[data-act="report-cancel"]');
+    if (reportCancel) reportCancel.addEventListener('click', () => { $('gateReportPanel').classList.add('hidden'); reportBtn.classList.remove('hidden'); });
+    const reportConfirm = box.querySelector('[data-act="report-confirm"]');
+    if (reportConfirm) reportConfirm.addEventListener('click', () => report($('gateReportReason').value, $('gateReportNotes').value.trim()));
   }
 
   function vehicleBlock(v, r) {
@@ -460,28 +567,29 @@
     return gate.decisionRef;
   }
 
+  /** Saves the passage the server cleared. The ticket from the check makes a second press (or a resend) harmless. */
   async function approve() {
     const r = gate.result;
     if (!r || gate.busy) return;
+    if (!r.movement) { renderDecisionError('This check cannot be saved. Scan the pass again.'); return; }
     const plate = r.vehicle ? r.vehicle.plateNumber : r.visitor.plateNumber;
-    const action = r.gateType === 'Ingress' ? 'Entry Recorded' : 'Exit Approved';
-    const payload = { plate, action, gate_type: r.gateType, checkpoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint, qr_code: gate.input.startsWith('{') ? gate.input : undefined, client_ref: `${decisionRef()}:approve` };
-    if (r.vehicle) { if (gate.driverId) payload.driver_id = gate.driverId; }
-    else if (r.visitor) {
-      payload.visitor_pass_id = r.visitor.id;
-      if ((r.visitor.items || []).length) payload.items_verified = gate.itemsChecked;
-    }
-    if ((r.warnings || []).length) payload.notes = `Verified (${r.result}) with alerts: ${r.warnings.join(' | ')}`;
-    else payload.notes = `Verified (${r.result})`;
+    const payload = { ticket: r.movement.ticket };
+    if (r.vehicle && gate.driverId) payload.driver_id = gate.driverId;
+    if (r.visitor && (r.visitor.items || []).length) payload.items_verified = gate.itemsChecked;
 
     gate.busy = true;
     try {
-      const log = await ApiClient.createLog(payload);
+      const log = await ApiClient.confirmMovement(payload);
       ApiClient.flushNotices(); // the owner's "is this you?" e-mail goes out now, in its own request
-      SP.showToast(`${action.toUpperCase()}: ${log.plateNumber || plate} — ${log.driverName || selectedDriver()?.fullName || 'verified driver'}.`);
-      await afterDecision().catch(() => SP.showToast('Entry was recorded, but the latest gate list could not load. It will refresh when the connection recovers.', 'warning'));
+      const exit = log.action === 'OUT';
+      const photoProblem = await SPPhoto.send(exit ? 'exit' : 'entry', plate, photoOf('approve'), { gateLogId: log.id });
+      SP.showToast(`${exit ? 'EXIT APPROVED' : 'ENTRY RECORDED'}: ${log.plateNumber || plate} — ${selectedDriver()?.fullName || (r.visitor && r.visitor.visitorName) || (r.vehicle && r.vehicle.ownerName) || 'verified driver'}.`);
+      if (photoProblem) SP.showToast(`The passage is saved, but the photo was not sent: ${photoProblem}`, 'warning');
+      if (window.SPFeedback) SPFeedback.play('ok');
+      await afterDecision().catch(() => SP.showToast('The passage was recorded, but the latest gate list could not load. It will refresh when the connection recovers.', 'warning'));
     } catch (err) {
       renderDecisionError(`${err.message || 'Could not confirm the decision.'} Check gate records before trying again.`);
+      if (window.SPFeedback) SPFeedback.play('deny');
     } finally {
       gate.busy = false;
     }
@@ -498,7 +606,7 @@
     gate.busy = true;
     let denialRecorded = false;
     try {
-      await ApiClient.createLog({
+      const log = await ApiClient.createLog({
         plate, action, gate_type: r.gateType, checkpoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint,
         client_ref: `${decisionRef()}:log`,
         driverName: drv ? drv.fullName : (r.visitor ? r.visitor.visitorName : 'Unverified'),
@@ -518,7 +626,10 @@
         gatePoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint,
         notes: `${action} at gate verification. ${notes}`.trim()
       });
+      const photoProblem = await SPPhoto.send('incident', plate, photoOf('deny'), { incidentId: incident.id, gateLogId: log && log.id });
       SP.showToast(`${action.toUpperCase()}: ${plate} flagged (${incident.caseNumber}).`);
+      if (photoProblem) SP.showToast(`The case is saved, but the photo was not sent: ${photoProblem}`, 'warning');
+      if (window.SPFeedback) SPFeedback.play('deny');
       await afterDecision().catch(() => SP.showToast('Denial and case were saved, but the latest gate list could not load.', 'warning'));
     } catch (err) {
       if (denialRecorded) {
@@ -526,6 +637,37 @@
       } else {
         renderDecisionError(`${err.message || 'Could not confirm the denial.'} Check gate records before trying again.`);
       }
+    } finally {
+      gate.busy = false;
+    }
+  }
+
+  /** After an anti-passback refusal: the record looks wrong. Opens an admin case; no passage is refused and the owner is not told. */
+  async function report(reason, notes) {
+    const r = gate.result;
+    if (!r || gate.busy) return;
+    const plate = r.vehicle ? r.vehicle.plateNumber : r.visitor.plateNumber;
+    gate.busy = true;
+    try {
+      const incident = await ApiClient.createIncident({
+        client_ref: `${decisionRef()}:report`,
+        plateNumber: plate,
+        reason,
+        vehicleType: r.vehicle ? r.vehicle.vehicleType : 'Visitor Vehicle',
+        ownerName: r.vehicle ? r.vehicle.ownerName : r.visitor.visitorName,
+        ownerRole: r.vehicle ? r.vehicle.ownerRole : 'Visitor',
+        driverName: 'Unverified',
+        driverRelationship: 'Unverified',
+        gatePoint: r.gatePolicy?.checkpoint || gate.policy.checkpoint,
+        notes: `Record check after "${RESULT_LABELS[r.result] || r.result}" at the ${r.gateType === 'Ingress' ? 'entry' : 'exit'} lane. ${notes}`.trim(),
+        report: true
+      });
+      const photoProblem = await SPPhoto.send('incident', plate, photoOf('report'), { incidentId: incident.id });
+      SP.showToast(`Reported: ${plate} is held under case ${incident.caseNumber} until an admin reviews it.`);
+      if (photoProblem) SP.showToast(`The report is saved, but the photo was not sent: ${photoProblem}`, 'warning');
+      await afterDecision().catch(() => SP.showToast('The report was saved, but the latest gate list could not load.', 'warning'));
+    } catch (err) {
+      renderDecisionError(`${err.message || 'Could not send the report.'}`);
     } finally {
       gate.busy = false;
     }
@@ -582,6 +724,12 @@
     el.classList.toggle('hidden', !message);
   }
 
+  function cameraButtons(torchSupported) {
+    const flip = $('gateFlipBtn'), torch = $('gateTorchBtn');
+    if (flip) flip.classList.toggle('hidden', !(gate.cameraOn && gate.cameras.length > 1));
+    if (torch) torch.classList.toggle('hidden', !(gate.cameraOn && torchSupported));
+  }
+
   async function startCamera() {
     cameraError('');
     if (!window.isSecureContext) {
@@ -593,13 +741,17 @@
       $('gateCameraBox').classList.remove('hidden');
       gate.scanner = gate.scanner || new Html5Qrcode('gateCameraReader');
       await gate.scanner.start(
-        { facingMode: 'environment' },
+        gate.cameras[gate.cameraIndex] ? { deviceId: { exact: gate.cameras[gate.cameraIndex].id } } : { facingMode: 'environment' },
         { fps: 10, qrbox: { width: 220, height: 220 } },
-        (text) => { if (!gate.result && !gate.busy) verify(text); },
+        (text) => { if (!gate.result && !gate.busy) verify(text, 'qr'); },
         () => {}
       );
       gate.cameraOn = true;
       $('gateCameraBtn').textContent = 'Stop Scanning';
+      if (!gate.cameras.length) { try { gate.cameras = await Html5Qrcode.getCameras(); } catch (_) { gate.cameras = []; } }
+      let torchSupported = false;
+      try { torchSupported = !!gate.scanner.getRunningTrackCameraCapabilities().torchFeature().isSupported(); } catch (_) {}
+      cameraButtons(torchSupported);
     } catch (err) {
       $('gateCameraBox').classList.add('hidden');
       cameraError(err && err.message ? err.message : 'Camera unavailable. Check browser permissions.');
@@ -611,6 +763,7 @@
       try { await gate.scanner.stop(); } catch (_) {}
     }
     gate.cameraOn = false;
+    cameraButtons(false);
     if ($('gateCameraBox')) $('gateCameraBox').classList.add('hidden');
     if ($('gateCameraBtn')) $('gateCameraBtn').textContent = 'Scan with Camera';
   }
@@ -657,9 +810,22 @@
     window.addEventListener('online', refreshPolicy);
     $('gateManualForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      verify($('gateManualInput').value);
+      verify($('gateManualInput').value);   // typed, or pasted by a USB / Bluetooth scanner: verify() tells them apart
     });
     $('gateCameraBtn').addEventListener('click', () => (gate.cameraOn ? stopCamera() : startCamera()));
+    if ($('gateFlipBtn')) $('gateFlipBtn').addEventListener('click', async () => {
+      if (gate.cameras.length < 2) return;
+      gate.cameraIndex = (gate.cameraIndex + 1) % gate.cameras.length;
+      await stopCamera();
+      await startCamera();
+    });
+    if ($('gateTorchBtn')) $('gateTorchBtn').addEventListener('click', async () => {
+      try {
+        const torch = gate.scanner.getRunningTrackCameraCapabilities().torchFeature();
+        await torch.apply(!torch.value());
+        $('gateTorchBtn').setAttribute('aria-pressed', String(torch.value()));
+      } catch (_) { cameraError('This camera has no flashlight.'); }
+    });
     document.addEventListener('sp:data-loaded', renderRecent);
 
     // Turn the camera off whenever the Gate Monitor is not on screen
@@ -667,6 +833,7 @@
       if (!$('gateView').classList.contains('active') && gate.cameraOn) stopCamera();
     }).observe($('gateView'), { attributes: true, attributeFilter: ['class'] });
   });
+  window.SPGate = { stopCamera };
   window.SPLive?.subscribe(async changed => {
     if (!gate.policy || changed.some(k => ['settings','session','staff'].includes(k))) await refreshPolicy();
     if (!gate.result || gate.busy || !changed.some(k => ['vehicles','visitors','cases','movements','settings'].includes(k))) return;

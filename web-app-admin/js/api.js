@@ -294,6 +294,14 @@ const ApiClient = (function() {
     getSettings: async () => (await request('settings.php?scope=all')).data,
     saveSettings: async (values) => (await request('settings.php', { method: 'PUT', body: values })).data,
     getShifts: async () => (await request('shifts.php')).data,
+    // Guard duty: go on duty at a gate (returns the previous guard's handover note) / end the shift with a handover note
+    startShift: async (gate) => (await request('shifts.php', { method: 'POST', body: { action: 'start', gate } })).data,
+    endShift: async (notes = '') => (await request('shifts.php', { method: 'POST', body: { action: 'end', notes } })).data,
+    // Evidence photo for a record: { kind: entry|exit|violation|incident, plate, image (data URL), gateLogId?, violationId?, incidentId? }
+    uploadEvidence: async (payload) => (await request('evidence.php', { method: 'POST', body: payload })).data,
+    // Automatic-direction gate movement, the same two steps the phone uses: prepare (verify, nothing saved) then confirm (saved once)
+    prepareMovement: async (payload) => (await request('movements.php', { method: 'POST', body: { action: 'prepare', ...payload } })).data,
+    confirmMovement: async (payload) => (await request('movements.php', { method: 'POST', body: { action: 'confirm', ...payload } })).data,
     getShiftTimeline: async (from = '', to = '') => (await request(`shifts.php?scope=timeline${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
     getShiftDetail: async (id) => (await request(`shifts.php?scope=shift&id=${encodeURIComponent(id)}`)).data,
     getShiftReport: async (from = '', to = '') => (await request(`shifts.php?scope=report${from ? '&from=' + from : ''}${to ? '&to=' + to : ''}`)).data,
@@ -302,11 +310,6 @@ const ApiClient = (function() {
     // Sends the owner e-mails that are waiting (entry / exit). Fire and forget: the gate screen never waits for it.
     flushNotices: () => request('notices_send.php', { method: 'POST', body: {} }).catch(() => null),
 
-    // Sends one test e-mail through the server's SMTP account (admin). Resolves with the server's message, rejects with the reason.
-    sendTestMail: async (to) => {
-      const res = await request('mail_test.php', { method: 'POST', body: { to } });
-      return { ...res.data, message: res.message };
-    },
     runMaintenance: async () => { try { return (await request('maintenance.php', { method: 'POST', body: {} })).data; } catch (_) { return null; } },
 
     // Staff Accounts (admin only)
